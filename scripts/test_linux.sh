@@ -330,6 +330,71 @@ wait $SEC_SRV_PID 2>/dev/null
 print_result "security audit daemon teardown" 0
 
 # ---------------------------------------------------------------------
+# SECTION 8: MULTIPLEXED END-TO-END OFFLINE TRAFFIC ROUTING
+# ---------------------------------------------------------------------
+
+# Only run if python3 and curl are present locally
+if command -v python3 >/dev/null 2>&1 && command -v curl >/dev/null 2>&1; then
+    HTTP_PORT=49230
+    ROUTE_SRV_PORT=49231
+    ROUTE_CLI_SOCKS=49232
+
+    # 1. Instantiate an isolated HTTP endpoint inside our sandbox
+    python3 -m http.server $HTTP_PORT --bind 127.0.0.1 > http_dest.log 2>&1 &
+    HTTP_PID=$!
+    
+    # 2. Provision and pair Client & Server configs
+    ROUTE_KEY=$("$OSTP_BIN" -g)
+    "$OSTP_BIN" --init server --config config_srv_rt.json > /dev/null 2>&1
+    sed -i "s/\"listen\": \".*\"/\"listen\": \"127.0.0.1:$ROUTE_SRV_PORT\"/g" config_srv_rt.json
+    sed -i "s/\"[0-9a-f]\{32\}\"/\"$ROUTE_KEY\"/g" config_srv_rt.json
+
+    "$OSTP_BIN" --init client --config config_cli_rt.json > /dev/null 2>&1
+    sed -i "s/\"socks5_bind\": \".*\"/\"socks5_bind\": \"127.0.0.1:$ROUTE_CLI_SOCKS\"/g" config_cli_rt.json
+    sed -i "s/\"server\": \".*\"/\"server\": \"127.0.0.1:$ROUTE_SRV_PORT\"/g" config_cli_rt.json
+    sed -i "s/\"[0-9a-f]\{32\}\"/\"$ROUTE_KEY\"/g" config_cli_rt.json
+
+    # 3. Launch Tunnel Backbone
+    "$OSTP_BIN" --config config_srv_rt.json > srv_rt.log 2>&1 &
+    TUN_SRV_PID=$!
+    sleep 1
+    "$OSTP_BIN" --config config_cli_rt.json > cli_rt.log 2>&1 &
+    TUN_CLI_PID=$!
+    
+    # Await cryptographic synchronization
+    sleep 3 
+    
+    # 4. EXECUTE SIMULTANEOUS MULTIPLEXED FETCHES
+    # Launches 3 independent, parallel cURL fetches targeting the SOCKS5 bridge
+    curl -s -m 5 --socks5-hostname 127.0.0.1:$ROUTE_CLI_SOCKS http://127.0.0.1:$HTTP_PORT > fetch1.out &
+    F1_PID=$!
+    curl -s -m 5 --socks5-hostname 127.0.0.1:$ROUTE_CLI_SOCKS http://127.0.0.1:$HTTP_PORT > fetch2.out &
+    F2_PID=$!
+    curl -s -m 5 --socks5-hostname 127.0.0.1:$ROUTE_CLI_SOCKS http://127.0.0.1:$HTTP_PORT > fetch3.out &
+    F3_PID=$!
+    
+    # Await parallel processing completion
+    wait $F1_PID $F2_PID $F3_PID
+    
+    # 5. Analyze the output integrity across the demux pipeline
+    ROUTING_SUCCESS=1
+    if [ -s fetch1.out ] && [ -s fetch2.out ] && [ -s fetch3.out ]; then
+        # Verify HTTP payload signature delivered through the encrypted matrix
+        grep -q "Directory listing" fetch1.out
+        ROUTING_SUCCESS=$?
+    fi
+    
+    print_result "multiplexed end-to-end local traffic routing" $ROUTING_SUCCESS "Decrypted pipeline failure or concurrency hang!"
+    
+    # 6. Clean up components
+    kill $HTTP_PID $TUN_CLI_PID $TUN_SRV_PID 2>/dev/null
+    wait $HTTP_PID $TUN_CLI_PID $TUN_SRV_PID 2>/dev/null
+    print_result "traffic routing verification daemon teardown" 0
+else
+    echo -e "${CYAN}Testing multiplexed end-to-end local traffic routing ...${NC} ${CYAN}SKIPPED (Requires python3 and curl)${NC}"
+fi
+
+# ---------------------------------------------------------------------
 # FINAL CLEANUP
 # ---------------------------------------------------------------------
 cd "$SCRIPT_DIR"
