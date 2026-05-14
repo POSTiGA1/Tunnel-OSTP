@@ -2,6 +2,7 @@
 
 [target.mipsel-unknown-linux-musl]
 image = "ghcr.io/cross-rs/mipsel-unknown-linux-musl:edge"
+build-std = ["core", "std", "alloc", "proc_macro"]
 
 [target.riscv64gc-unknown-linux-gnu]
 image = "ghcr.io/cross-rs/riscv64gc-unknown-linux-gnu:edge"
