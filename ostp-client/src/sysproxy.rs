@@ -32,7 +32,7 @@ pub fn enable_windows_proxy(proxy_addr: &str) {
         ])
         .output();
         
-    let proxy_str = format!("http={};https={}", proxy_addr, proxy_addr);
+    let proxy_str = proxy_addr.to_string();
     let _ = Command::new("reg")
         .args([
             "add",

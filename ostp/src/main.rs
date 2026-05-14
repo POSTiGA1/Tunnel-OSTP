@@ -170,8 +170,8 @@ async fn main() -> Result<()> {
                     socks5_bind: Some("127.0.0.1:1088".to_string()),
                     tun: Some(TunConfig {
                         enable: false,
-                        wintun_path: None,
-                        ipv4_address: None,
+                        wintun_path: Some("./wintun.dll".to_string()),
+                        ipv4_address: Some("10.1.0.2/24".to_string()),
                     }),
                     turn: None,
                     debug: Some(false),
