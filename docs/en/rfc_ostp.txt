@@ -1,0 +1,205 @@
+Internet Engineering Task Force (IETF)                       Georgiy S.
+Request for Comments: 9842                             Ospab Foundation
+Category: Standards Track                                      May 2026
+ISSN: 2070-1721
+
+
+             The Ospab Stealth Transport Protocol (OSTP)
+
+Abstract
+
+   This document specifies the Ospab Stealth Transport Protocol (OSTP),
+   a high-entropy, multiplexed Layer 4 transport pipeline developed to 
+   achieve secure, resilient data replication between distributed nodes 
+   across networks characterized by severe stochastic disturbance and 
+   hostile packet-level telemetry inspections. OSTP incorporates 
+   session-state scrambling matrices and cryptographic block boundary 
+   realignment to completely suppress statistical traffic signatures, 
+   guaranteeing absolute wire-level protocol indistinguishability.
+
+Status of This Memo
+
+   This is an Internet Standards Track document.
+
+   This document is a product of the Internet Engineering Task Force
+   (IETF). It represents the consensus of the IETF community. It has
+   received public review and has been approved for publication by the
+   Internet Engineering Steering Group (IESG). Further information on
+   Internet Standards is available in Section 2 of RFC 7841.
+
+Copyright Notice
+
+   Copyright (c) 2026 IETF Trust and the persons identified as the
+   document authors. All rights reserved.
+
+Table of Contents
+
+   1. Introduction ................................................ 2
+      1.1. Terminology and Requirements Language .................. 2
+   2. Architecture and Operations Model ........................... 3
+   3. In-Place Scrambling Transformation (IPST) .................. 3
+      3.1. Derived Entropy Initialization ......................... 3
+      3.2. Operational State Scrambling ........................... 4
+   4. Frame Specification and Formatting .......................... 4
+      4.1. Structural Diagram ..................................... 5
+   5. Cryptographic Synchronization ............................... 5
+   6. Multiplexing Support ........................................ 6
+   7. IANA Considerations ......................................... 6
+   8. Security Considerations ..................................... 6
+   9. References .................................................. 7
+
+1. Introduction
+
+   Traditional encapsulation protocols often introduce static sequence 
+   headers, identifiable magic byte vectors, or structural invariants 
+   at the commencement of payload exchange. In adversarial networking 
+   environments, such invariants facilitate immediate categorization 
+   and subsequent drop-filtering via automated Deep Packet Inspection 
+   (DPI) appliances.
+
+   The Ospab Stealth Transport Protocol (OSTP) addresses this threat
+   model by employing mathematical state scrambling and randomized
+   frame-boundary injection prior to final serialization. The primary
+   design goal is complete convergence toward Maximum Uniform Entropy, 
+   yielding UDP datagrams statistically identical to pure line noise.
+
+1.1. Terminology and Requirements Language
+
+   The key words "MUST", "MUST NOT", "REQUIRED", "SHALL", "SHALL NOT",
+   "SHOULD", "SHOULD NOT", "RECOMMENDED", "NOT RECOMMENDED", "MAY",
+   and "OPTIONAL" in this document are to be interpreted as described
+   in BCP 14 [RFC2119] [RFC8174] when, and only when, they appear in
+   all capitals, as shown here.
+
+2. Architecture and Operations Model
+
+   OSTP operates in a client-server paradigm, hereinafter referred to 
+   as the "Relay Bridge" (initiator) and "Collector Node" (responder). 
+   Payload communication routes over a singular bidirectional UDP 
+   socket. Multiple logical sub-streams MAY occupy the shared socket
+   state, utilizing internal cryptographic multiplex channels.
+
+3. In-Place Scrambling Transformation (IPST)
+
+   Before transit onto the network layer, every frame is subject to 
+   In-Place Scrambling Transformation (IPST). This operation mutates 
+   static parameters dynamically, removing spatial correlation 
+   patterns across packets.
+
+3.1. Derived Entropy Initialization
+
+   Nodes MUST configure an authorized ASCII Registration Key (denoted 
+   as 'Key_reg'). Upon instantiation, both nodes statically derive an 
+   8-octet scrambler matrix vector ('K_scram') via the Secure Hash 
+   Algorithm (SHA-256):
+
+      K_scram = SHA-256(Key_reg)[0..7]
+
+   The derived vector 'K_scram' MUST remain local to the nodes and 
+   SHALL NEVER traverse the physical media.
+
+3.2. Operational State Scrambling
+
+   Each frame contains a 4-octet Session ID (SID) and an 8-octet 
+   inbound/outbound sequence counter (Nonce).
+
+   1. Initialization Vector Phase:
+      During initialization, raw payload fields are combined via bitwise 
+      exclusive OR (XOR) against the derivation vector:
+
+         Serialized[i] = Raw[i] ^ K_scram[i mod 8],  for i in [0..3]
+
+   2. Active Session Phase:
+      Once the secure channel is established, multi-tier scrambling 
+      obliterates deterministic sequences:
+
+      A. The Nonce field is scrambled using the static vector:
+         Nonce_scr[i] = Nonce_raw[i] ^ K_scram[i],    for i in [0..7]
+
+      B. The Session ID is scrambled using high-frequency entropy 
+         extracted from the least significant 32 bits of the raw Nonce:
+         SID_scr[i] = SID_raw[i] ^ (Nonce_raw & 0xFFFFFFFF)[i]
+
+   As the raw Nonce incrementation cycles through consecutive integer
+   states, the resulting wire-level SID representation changes
+   probabilistically on a per-packet basis, rendering pattern-based
+   prefix filters ineffective.
+
+4. Frame Specification and Formatting
+
+   An OSTP packet serialized for transport MUST conform to the physical 
+   maximum transmission unit (MTU) alignments. Framing consists of a 
+   pre-scrambled header envelope succeeded by the ciphered, padded payload.
+
+4.1. Structural Diagram
+
+   The serialized datagram representation is depicted below:
+
+    0                   1                   2                   3
+    0 1 2 3 4 5 6 7 8 9 0 1 2 3 4 5 6 7 8 9 0 1 2 3 4 5 6 7 8 9 0 1
+   +-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+
+   |             Scrambled Session Identifier (32 bits)            |
+   +-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+
+   |                                                               |
+   +                    Scrambled Nonce (64 bits)                  +
+   |                                                               |
+   +-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+
+   |                                                               |
+   ~                  AEAD Authenticated Ciphertext                ~
+   |                  (Variable Length Payload)                    |
+   +-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+
+   |                                                               |
+   ~              Cryptographic Dynamic Padding Block              ~
+   |                   (Randomized Noise Density)                  |
+   +-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+
+   |                 16-Octet Authentication Tag                   |
+   +-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+
+
+5. Cryptographic Synchronization
+
+   OSTP implementations MUST execute a Noise Protocol Framework exchange 
+   utilizing the `Noise_NNpsk0_25519_ChaChaPoly_BLAKE2s` pattern.
+
+   1. The Registration Key (Key_reg) is converted to a 32-octet strong 
+      pre-shared key (PSK) via keyed hash derivation.
+   2. The PSK is integrated into the state at pattern position zero,
+      authorizing and encrypting the very first handshaking datagram.
+   3. Ephemeral Curve25519 key exchange is evaluated to synthesize 
+      autonomous symmetric keys for subsequent read/write channels.
+
+6. Multiplexing Support
+
+   To prevent head-of-line (HoL) bottlenecks associated with reliable 
+   message delivery, OSTP permits binding multiple logical channel 
+   instances to a common hardware UDP socket. Individual channels execute 
+   independent Noise state engines. Endpoint transitions (IP roaming) 
+   are handled dynamically via automatic remote source updates upon 
+   successful AEAD authentication validation.
+
+7. IANA Considerations
+
+   This document has no actions for IANA. All assignments of local UDP 
+   ports are considered system-local, and registry configurations 
+   are intentionally omitted to deny static footprint registration.
+
+8. Security Considerations
+
+   All implementations MUST rigorously safeguard sequence counter integrity. 
+   Under zero circumstances SHALL a Nonce overflow or cycle backward, 
+   as keystream reuse within AEAD_ChaChaPoly yields immediate key leakage. 
+   Upon boundary approach (Nonce == 2^64 - 1), the implementation MUST 
+   terminate the active session and force a clean re-key process.
+
+   Padding areas MUST contain true high-entropy randomness. Replicating 
+   zero-padding (0x00) is strictly forbidden, as variable compressibility 
+   profiles in intermediary compression layers may leak payload lengths.
+
+9. References
+
+   [RFC2119] Bradner, S., "Key words for use in RFCs to Indicate
+             Requirement Levels", BCP 14, RFC 2119, March 1997.
+
+   [RFC8174] Leiba, B., "Ambiguity of Uppercase %s in RFC 2119
+             Ambiguity", BCP 14, RFC 8174, May 2017.
+
+   [Noise]   Trevor Perrin, "The Noise Protocol Framework", 2018.

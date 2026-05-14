@@ -1,0 +1,19 @@
+[package]
+name = "ostp-jni"
+version = "0.1.0"
+edition = "2021"
+
+[lib]
+name = "ostp_jni"
+crate-type = ["cdylib"]
+
+[dependencies]
+jni = "0.21"
+tokio = { workspace = true }
+anyhow = { workspace = true }
+bytes = { workspace = true }
+ostp-core = { path = "../ostp-core" }
+ostp-client = { path = "../ostp-client" }
+serde = { version = "1.0", features = ["derive"] }
+serde_json = "1.0"
+lazy_static = "1.4"

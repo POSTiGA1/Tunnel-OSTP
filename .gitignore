@@ -1,0 +1,16 @@
+/target/
+/target_build/
+/dist/
+**/*.rs.bk
+.idea/
+.vscode/
+*.exe
+*.dll
+*.so
+*.dylib
+*.pdb
+config.json
+wintun.dll
+*.log
+.ai-rules.md
+turn-harvesting-idea.md

@@ -1,0 +1,74 @@
+Business Source License 1.1
+
+Parameters
+
+Licensor:                     Ospab Foundation (represented by Syralev Georgiy)
+Licensed Work:                The Ospab Stealth Transport Protocol (OSTP) and all
+                              associated workspace crates, utilities, and documents.
+Additional Use Grant:         The Licensor hereby grants you the right to copy,
+                              modify, create derivative works, redistribute, and
+                              make non-production and non-commercial use of the
+                              Licensed Work. You are also permitted to use the
+                              Licensed Work in production for personal, private
+                              utility and non-profit organizations.
+Change Date:                  May 14, 2030
+Change License:               MIT License (as defined below)
+
+-----------------------------------------------------------------------------------
+
+Terms
+
+1. The Licensor hereby grants you the right to copy, modify, create derivative works, 
+   redistribute, and make use of the Licensed Work only as permitted by the 
+   Additional Use Grant.
+
+2. The Licensor hereby grants you the right to copy, modify, create derivative works, 
+   redistribute, and make use of the Licensed Work under the terms of the Change 
+   License on and after the Change Date.
+
+3. To the extent that any term of this License (including the Additional Use Grant 
+   and the Change License) is in conflict with the Terms of this License, these 
+   Terms shall take precedence.
+
+4. Every copy of the Licensed Work and any derivative work must include this 
+   License and all other copyright, trademark, and proprietary notices included 
+   with the Licensed Work.
+
+5. Any use of the Licensed Work that is not permitted by this License is a breach 
+   of this License and may terminate your rights under this License.
+
+6. DISCLAIMER OF WARRANTY. TO THE EXTENT PERMITTED BY APPLICABLE LAW, THE LICENSED 
+   WORK IS PROVIDED ON AN "AS IS" BASIS. THE LICENSOR MAKES NO REPRESENTATIONS OR 
+   WARRANTIES OF ANY KIND CONCERNING THE LICENSED WORK, EXPRESS OR IMPLIED, STATUTORY 
+   OR OTHERWISE, INCLUDING, WITHOUT LIMITATION, WARRANTIES OF TITLE, 
+   MERCHANTABILITY, FITNESS FOR A PARTICULAR PURPOSE, OR NONINFRINGEMENT.
+
+7. LIMITATION OF LIABILITY. TO THE EXTENT PERMITTED BY APPLICABLE LAW, IN NO EVENT 
+   WILL THE LICENSOR BE LIABLE TO YOU ON ANY LEGAL THEORY FOR ANY SPECIAL, INCIDENTAL, 
+   CONSEQUENTIAL, PUNITIVE, OR EXEMPLARY DAMAGES ARISING OUT OF THIS LICENSE OR THE 
+   USE OF THE LICENSED WORK, EVEN IF THE LICENSOR HAS BEEN ADVISED OF THE 
+   POSSIBILITY OF SUCH DAMAGES.
+
+-----------------------------------------------------------------------------------
+
+Change License Text (MIT License)
+
+Copyright (c) 2026 Syralev Georgiy (Ospab Foundation)
+
+Permission is hereby granted, free of charge, to any person obtaining a copy
+of this software and associated documentation files (the "Software"), to deal
+in the Software without restriction, including without limitation the rights
+to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+copies of the Software, and to permit persons to whom the Software is
+furnished to do so, subject to the following conditions:
+
+The above copyright notice and this permission notice shall be included in all
+copies or substantial portions of the Software.
+
+THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+SOFTWARE.
