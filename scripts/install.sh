@@ -18,22 +18,54 @@ fi
 # Создание директории
 mkdir -p "$INSTALL_DIR"
 
-# Скачивание исполняемого файла (выполняется первым, так как binary нужен для генерации)
+# ---------------------------------------------------------
+# Определение архитектуры системы
+# ---------------------------------------------------------
+ARCH=$(uname -m)
+case "$ARCH" in
+    x86_64) ARCH="amd64" ;;
+    aarch64|arm64) ARCH="arm64" ;;
+    i386|i686) ARCH="386" ;;
+    armv7l) ARCH="armv7" ;;
+    *) 
+        echo "[Предупреждение] Неизвестная архитектура $ARCH, пробуем amd64 по умолчанию."
+        ARCH="amd64"
+        ;;
+esac
+
+# Скачивание исполняемого файла
 echo "Получение актуальной стабильной версии из репозитория..."
 LATEST_RELEASE=$(curl -s "https://api.github.com/repos/${GITHUB_REPO}/releases/latest" | grep '"tag_name":' | sed -E 's/.*"([^"]+)".*/\1/')
 
 if [ -z "$LATEST_RELEASE" ] || [[ "$LATEST_RELEASE" == *"null"* ]]; then
    echo "[Уведомление] Не удалось автоматически получить тег репозитория ${GITHUB_REPO}."
-   echo "Введите прямую ссылку (URL) на скомпилированный бинарный файл linux-musl"
+   echo "Введите прямую ссылку (URL) на скомпилированный архив .tar.gz"
    echo "или нажмите Enter, если файл уже находится в $INSTALL_DIR/ostp."
    read -p "URL: " DIRECT_URL
    if [ -n "$DIRECT_URL" ]; then
-      curl -L "$DIRECT_URL" -o "$INSTALL_DIR/ostp"
+      TEMP_TAR="/tmp/ostp_temp.tar.gz"
+      curl -L "$DIRECT_URL" -o "$TEMP_TAR"
+      tar -xzf "$TEMP_TAR" -C "$INSTALL_DIR" ostp
+      rm "$TEMP_TAR"
    fi
 else
-   DOWNLOAD_URL="https://github.com/${GITHUB_REPO}/releases/download/${LATEST_RELEASE}/ostp"
-   echo "Скачивание бинарного файла: $DOWNLOAD_URL ..."
-   curl -L "$DOWNLOAD_URL" -o "$INSTALL_DIR/ostp"
+   ARCHIVE_NAME="ostp-linux-${ARCH}.tar.gz"
+   DOWNLOAD_URL="https://github.com/${GITHUB_REPO}/releases/download/${LATEST_RELEASE}/${ARCHIVE_NAME}"
+   echo "Скачивание архива для архитектуры linux-$ARCH: $DOWNLOAD_URL ..."
+   
+   TEMP_TAR="/tmp/ostp_temp.tar.gz"
+   # Скачиваем архив с обработкой ошибок
+   HTTP_CODE=$(curl -sL -w "%{http_code}" "$DOWNLOAD_URL" -o "$TEMP_TAR")
+   
+   if [ "$HTTP_CODE" -eq 200 ]; then
+      tar -xzf "$TEMP_TAR" -C "$INSTALL_DIR" ostp
+      rm -f "$TEMP_TAR"
+   else
+      echo "[Ошибка] Не удалось скачать файл (HTTP код $HTTP_CODE)."
+      echo "Убедитесь, что версия $LATEST_RELEASE уже опубликована и собрана на GitHub."
+      rm -f "$TEMP_TAR"
+      exit 1
+   fi
 fi
 
 if [ -f "$INSTALL_DIR/ostp" ]; then
