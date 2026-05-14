@@ -214,14 +214,16 @@ SHARED_KEY=$("$OSTP_BIN" -g)
 "$OSTP_BIN" --init server --config config_srv_conn.json > /dev/null 2>&1
 "$OSTP_BIN" --init client --config config_cli_conn.json > /dev/null 2>&1
 
-# Apply custom port and shared key to Server config
+# Apply custom port to Server config
 sed -i "s/\"listen\": \".*\"/\"listen\": \"127.0.0.1:$CONN_PORT\"/g" config_srv_conn.json
-sed -i "s/\"access_keys\": \[.*\]/\"access_keys\": [\"$SHARED_KEY\"]/g" config_srv_conn.json
+# Inject shared key into server config by universally replacing the 32-char hex key
+sed -i "s/\"[0-9a-f]\{32\}\"/\"$SHARED_KEY\"/g" config_srv_conn.json
 
-# Apply custom target, proxy port, and shared key to Client config
+# Apply custom target and proxy port to Client config
 sed -i "s/\"socks5_bind\": \".*\"/\"socks5_bind\": \"127.0.0.1:$CLI_CONN_SOCKS\"/g" config_cli_conn.json
 sed -i "s/\"server\": \".*\"/\"server\": \"127.0.0.1:$CONN_PORT\"/g" config_cli_conn.json
-sed -i "s/\"access_key\": \".*\"/\"access_key\": \"$SHARED_KEY\"/g" config_cli_conn.json
+# Inject shared key into client config universally
+sed -i "s/\"[0-9a-f]\{32\}\"/\"$SHARED_KEY\"/g" config_cli_conn.json
 
 # 2. Start Server Daemon
 "$OSTP_BIN" --config config_srv_conn.json > server_conn.log 2>&1 &
