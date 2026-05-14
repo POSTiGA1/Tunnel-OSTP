@@ -15,9 +15,9 @@ $LinuxDist = Join-Path $DistDir "linux"
 New-Item -ItemType Directory -Force -Path $WinDist | Out-Null
 New-Item -ItemType Directory -Force -Path $LinuxDist | Out-Null
 
-# Clear old binaries to prevent false positive checks if copy fails
-Remove-Item -Path (Join-Path $WinDist "ostp.exe") -ErrorAction SilentlyContinue | Out-Null
-Remove-Item -Path (Join-Path $LinuxDist "ostp") -ErrorAction SilentlyContinue | Out-Null
+# Strictly purge old distribution binaries to prevent caching false positives
+Remove-Item -Path (Join-Path $WinDist "ostp.exe") -Force -ErrorAction SilentlyContinue | Out-Null
+Remove-Item -Path (Join-Path $LinuxDist "ostp") -Force -ErrorAction SilentlyContinue | Out-Null
 
 Write-Output "Building Windows Binary natively"
 $TempTarget = Join-Path $env:TEMP "ostp_target_build"
@@ -46,8 +46,16 @@ Remove-Item Env:\CARGO_TARGET_DIR -ErrorAction SilentlyContinue | Out-Null
 
 Write-Output "Building Linux binary via WSL"
 if (Get-Command wsl -ErrorAction SilentlyContinue) {
+    # Anchor build target inside host workspace to persist artifacts across WSL session life-cycles
+    $LinuxBuildDir = Join-Path $ProjectRoot "target_linux"
+    New-Item -ItemType Directory -Force -Path $LinuxBuildDir | Out-Null
+    
+    $LinuxBuildUnix = $LinuxBuildDir.Replace("\", "/")
+    $WslBuildDir = & wsl wslpath -u $LinuxBuildUnix
+    
     & wsl rustup target add x86_64-unknown-linux-musl
-    & wsl env CC_x86_64_unknown_linux_musl=gcc CARGO_TARGET_DIR=/tmp/ostp_linux_build cargo build --release --target x86_64-unknown-linux-musl --bin ostp
+    # Build directly into the host-mapped target_linux directory
+    & wsl env CC_x86_64_unknown_linux_musl=gcc CARGO_TARGET_DIR=$WslBuildDir cargo build --release --target x86_64-unknown-linux-musl --bin ostp
     
     if ($LASTEXITCODE -ne 0) {
         Write-Output "❌ Linux build failed"
@@ -55,18 +63,14 @@ if (Get-Command wsl -ErrorAction SilentlyContinue) {
         exit 1
     }
     
-    # Fix Windows backslashes for WSL path translator passing
-    $LinuxDistUnix = $LinuxDist.Replace("\", "/")
-    # Determine WSL translation of the destination folder
-    $WslLinuxDist = & wsl wslpath -u $LinuxDistUnix
-    # Copy from WSL temp directory into the actual host mapped linux dist
-    & wsl cp /tmp/ostp_linux_build/x86_64-unknown-linux-musl/release/ostp $WslLinuxDist/ostp
+    # Native copy of the artifact entirely on host side (completely avoids wsl cp pitfalls)
+    $LinuxTargetBin = Join-Path $LinuxBuildDir "x86_64-unknown-linux-musl\release\ostp"
     
-    $LinuxBin = Join-Path $LinuxDist "ostp"
-    if (Test-Path $LinuxBin) {
+    if (Test-Path $LinuxTargetBin) {
+        Copy-Item -Path $LinuxTargetBin -Destination $LinuxDist -Force
         Write-Output "✔ Linux binary successfully copied to dist/linux/ostp"
     } else {
-        Write-Output "❌ Linux binary copy failed"
+        Write-Output "❌ Compiled Linux binary was not found at target: $LinuxTargetBin"
         Pop-Location
         exit 1
     }
