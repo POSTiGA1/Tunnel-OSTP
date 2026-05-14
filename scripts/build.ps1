@@ -85,7 +85,7 @@ foreach ($item in $WindowsTargets) {
             if ($Flatten) {
                 $RawReleaseDir = Join-Path $DistDir "release"
                 New-Item -ItemType Directory -Force -Path $RawReleaseDir | Out-Null
-                $FlatName = "ostp-$arch.exe"
+                $FlatName = "ostp-windows-$arch.exe"
                 Copy-Item -Path $compiledBin -Destination (Join-Path $RawReleaseDir $FlatName) -Force
                 Write-Output "   -> Flat copied: dist/release/$FlatName"
             }
@@ -115,7 +115,8 @@ if (Get-Command wsl -ErrorAction SilentlyContinue) {
         @{ Target = "x86_64-unknown-linux-musl"; Arch = "x64"; BinaryName = "ostp" },
         @{ Target = "i686-unknown-linux-musl"; Arch = "x86"; BinaryName = "ostp" },
         @{ Target = "aarch64-unknown-linux-musl"; Arch = "arm64"; BinaryName = "ostp" },
-        @{ Target = "armv7-unknown-linux-musleabihf"; Arch = "armv7"; BinaryName = "ostp" }
+        @{ Target = "armv7-unknown-linux-musleabihf"; Arch = "armv7"; BinaryName = "ostp" },
+        @{ Target = "x86_64-unknown-freebsd"; Arch = "x64"; BinaryName = "ostp" }
     )
 
     foreach ($item in $LinuxTargets) {
@@ -123,7 +124,10 @@ if (Get-Command wsl -ErrorAction SilentlyContinue) {
         $arch = $item.Arch
         $bin = $item.BinaryName
         
-        Write-Output "--> Compiling target: Linux $arch [$target] via rust-lld..."
+        $osPrefix = "linux"
+        if ($target -match "freebsd") { $osPrefix = "freebsd" }
+        
+        Write-Output "--> Compiling target: $osPrefix $arch [$target] via rust-lld..."
         
         & wsl rustup target add $target 2>&1 | Out-Null
         
@@ -133,8 +137,8 @@ if (Get-Command wsl -ErrorAction SilentlyContinue) {
         if ($LASTEXITCODE -eq 0) {
             $compiledBin = Join-Path $LinuxBuildDir "$target\release\$bin"
             if (Test-Path $compiledBin) {
-                $archiveName = "ostp-v$Version-linux-$arch.tar.gz"
-                $targetStaging = Join-Path $StagingDir "linux-$arch"
+                $archiveName = "ostp-v$Version-$osPrefix-$arch.tar.gz"
+                $targetStaging = Join-Path $StagingDir "$osPrefix-$arch"
                 New-Item -ItemType Directory -Force -Path $targetStaging | Out-Null
                 
                 Copy-Item -Path $compiledBin -Destination $targetStaging -Force
@@ -152,7 +156,7 @@ if (Get-Command wsl -ErrorAction SilentlyContinue) {
                 if ($Flatten) {
                     $RawReleaseDir = Join-Path $DistDir "release"
                     New-Item -ItemType Directory -Force -Path $RawReleaseDir | Out-Null
-                    $FlatName = "ostp-$arch"
+                    $FlatName = "ostp-$osPrefix-$arch"
                     Copy-Item -Path $compiledBin -Destination (Join-Path $RawReleaseDir $FlatName) -Force
                     Write-Output "   -> Flat copied: dist/release/$FlatName"
                 }
