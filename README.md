@@ -26,15 +26,25 @@ The pipeline utilizes a highly optimized modular framework:
 
 ## Provisioning and Configuration
 
-### Automated Linux Server Deployment (Recommended)
+### Automated Linux Host Deployment
 
-For rapid, interactive provisioning on standard Linux host environments, execute the unified installer via a single terminal command:
+For rapid, interactive provisioning on standard Linux host environments (x64/ARM), execute the unified installer via a single command:
 
 ```bash
 bash <(curl -Ls https://raw.githubusercontent.com/ospab/ostp/master/scripts/install.sh)
 ```
 
-*This routine autonomously fetches correct binary releases, registers a resilient system daemon, and interactively initializes configuration templates utilizing the binary's native compiler.*
+*This routine autonomously fetches the correct stable release, registers a resilient systemd daemon, protects active user credentials during upgrades, and provides an interactive node setup.*
+
+### Automated Windows Host Deployment
+
+To perform quick installations, automated hot-swap updates, and set up global environment routes on Windows (x64/ARM64), run the following one-liner from an **elevated PowerShell console** (Run as Administrator):
+
+```powershell
+irm https://raw.githubusercontent.com/ospab/ostp/master/scripts/install.ps1 | iex
+```
+
+*This native script deploys the runtime directly to `C:\opt\ostp`, performs dynamic JSON template integrations, transparently handles active binary locks, and maps the node to the system environment PATH.*
 
 ### Manual Node Initialization
 
