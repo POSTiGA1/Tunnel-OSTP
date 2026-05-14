@@ -45,12 +45,29 @@ fn is_admin() -> bool {
 #[cfg(target_os = "windows")]
 fn relaunch_as_admin() -> Result<()> {
     let current_exe = std::env::current_exe()?;
-    let exe_str = current_exe.to_string_lossy();
+    let exe_str = current_exe.to_string_lossy().replace('\'', "''");
+    
+    let current_dir = std::env::current_dir()?;
+    let dir_str = current_dir.to_string_lossy().replace('\'', "''");
+
+    let mut arg_parts = Vec::new();
+    for arg in std::env::args().skip(1) {
+        arg_parts.push(format!("'{}'", arg.replace('\'', "''")));
+    }
+
+    let arg_list_str = if !arg_parts.is_empty() {
+        format!("-ArgumentList {}", arg_parts.join(","))
+    } else {
+        String::new()
+    };
+
+    let ps_script = format!(
+        "Start-Process -FilePath '{}' {} -WorkingDirectory '{}' -Verb RunAs",
+        exe_str, arg_list_str, dir_str
+    );
+
     let _ = std::process::Command::new("powershell")
-        .args([
-            "-Command",
-            &format!("Start-Process -FilePath '{}' -Verb RunAs", exe_str),
-        ])
+        .args(["-Command", &ps_script])
         .spawn()?;
     std::process::exit(0);
 }

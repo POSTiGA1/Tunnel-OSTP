@@ -20,7 +20,7 @@ pub fn download_wintun_dll(debug: bool) -> Result<()> {
         let dll_dest = dll_path.to_string_lossy().replace('\\', "/");
 
         let ps_script = format!(
-            "Invoke-WebRequest -Uri 'https://www.wintun.net/builds/wintun-0.14.1.zip' -OutFile '{}' -ErrorAction Stop; \
+            "Invoke-WebRequest -Uri 'https://www.wintun.net/builds/wintun-0.14.1.zip' -OutFile '{}' -UseBasicParsing -ErrorAction Stop; \
              Expand-Archive -Path '{}' -DestinationPath '{}' -Force; \
              Get-ChildItem -Path '{}' -Filter 'wintun.dll' -Recurse | Copy-Item -Destination '{}' -Force; \
              Remove-Item '{}', '{}' -Recurse -Force",
@@ -66,7 +66,7 @@ pub fn download_tun2socks(debug: bool) -> Result<()> {
         let url = "https://github.com/xjasonlyu/tun2socks/releases/download/v2.5.2/tun2socks-windows-amd64.zip";
 
         let ps_script = format!(
-            "Invoke-WebRequest -Uri '{}' -OutFile '{}' -ErrorAction Stop; \
+            "Invoke-WebRequest -Uri '{}' -OutFile '{}' -UseBasicParsing -ErrorAction Stop; \
              Expand-Archive -Path '{}' -DestinationPath '{}' -Force; \
              Get-ChildItem -Path '{}' -Filter '*.exe' -Recurse | Copy-Item -Destination '{}' -Force; \
              Remove-Item '{}', '{}' -Recurse -Force",
