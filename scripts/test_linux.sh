@@ -47,6 +47,84 @@ echo -e "\n=====================================================================
 echo -e " OSTP (Ospab Stealth Transport Protocol) LINUX TEST PIPELINE"
 echo -e "=====================================================================\n"
 
+EXT_SERVER=$1
+EXT_KEY=$2
+
+if [ ! -z "$EXT_SERVER" ]; then
+    echo -e "${CYAN}Mode:${NC} REMOTE LIVE DIAGNOSTICS"
+    echo -e "${CYAN}Target Server:${NC} $EXT_SERVER"
+    echo -e "Skipping local unit/integration tests...\n"
+    
+    if [ -z "$EXT_KEY" ]; then
+        echo -e "${RED}Error:${NC} Access key must be provided as the second argument."
+        exit 1
+    fi
+    
+    SOCKS_PORT=49555
+    HTTP_TEST_URL="http://1.1.1.1/"
+    SPEED_TEST_URL="https://speed.cloudflare.com/__down?bytes=15000000"
+    
+    echo -e "1. Initializing Client Bridge (SOCKS5: $SOCKS_PORT)..."
+    "$OSTP_BIN" --init client --config cli.json > /dev/null 2>&1
+    sed -i "s/\"socks5_bind\": \".*\"/\"socks5_bind\": \"127.0.0.1:$SOCKS_PORT\"/g" cli.json
+    sed -i "s/\"server\": \".*\"/\"server\": \"$EXT_SERVER\"/g" cli.json
+    sed -i "s/\"[0-9a-f]\{32\}\"/\"$EXT_KEY\"/g" cli.json
+
+    "$OSTP_BIN" --config cli.json > cli.log 2>&1 &
+    CLI_PID=$!
+
+    echo -e "2. Awaiting Cryptographic Handshake (Noise_NNpsk0)..."
+    HANDSHAKE_OK=0
+    for i in {1..10}; do
+        if grep -q "Bridge connection established" cli.log; then
+            HANDSHAKE_OK=1
+            break
+        fi
+        sleep 0.5
+    done
+
+    if [ $HANDSHAKE_OK -eq 0 ]; then
+        echo -e "\n${RED}HANDSHAKE FAILED!${NC} The client could not securely connect to the server."
+        cat cli.log
+        kill $CLI_PID 2>/dev/null
+        rm -rf "$SANDBOX"
+        exit 1
+    fi
+
+    RTT=$(grep "rtt_ms=" cli.log | tail -n 1 | awk -F'rtt_ms=' '{print $2}' | awk '{print $1}')
+    echo -e "${GREEN}✓ Handshake Successful!${NC} Estimated Tunnel RTT: \033[0;33m${RTT}ms${NC}\n"
+
+    echo -e "3. Executing End-to-End HTTP Proxy Ping..."
+    PING_OUTPUT=$(curl -s -o /dev/null -w "DNS: %{time_namelookup}s | Connect: %{time_connect}s | TTFB: %{time_starttransfer}s | Total: %{time_total}s" -x socks5h://127.0.0.1:$SOCKS_PORT -I $HTTP_TEST_URL)
+    
+    if [ $? -eq 0 ]; then
+        echo -e "${GREEN}✓ HTTP Ping OK!${NC}"
+        echo -e "  $PING_OUTPUT\n"
+    else
+        echo -e "${RED}✗ HTTP Ping Failed!${NC} Ensure the server has internet access.\n"
+    fi
+
+    echo -e "4. Executing Throughput & Multiplexing Test (~15MB payload)..."
+    curl -x socks5h://127.0.0.1:$SOCKS_PORT \
+         -w "\n${CYAN}Transfer Summary:${NC}\n  Speed: %{speed_download} Bytes/sec\n  Time:  %{time_total} sec\n  Size:  %{size_download} Bytes\n" \
+         -o /dev/null \
+         -s \
+         $SPEED_TEST_URL
+
+    if [ $? -eq 0 ]; then
+        echo -e "\n${GREEN}✓ Pipeline Throughput Test Completed Successfully!${NC}"
+    else
+        echo -e "\n${RED}✗ Pipeline Throughput Test Failed!${NC}"
+    fi
+
+    kill $CLI_PID 2>/dev/null
+    wait $CLI_PID 2>/dev/null
+    
+    cd "$SCRIPT_DIR"
+    rm -rf "$SANDBOX"
+    exit 0
+fi
+
 # ---------------------------------------------------------------------
 # SECTION 1: BINARY & ENVIRONMENT VERIFICATION
 # ---------------------------------------------------------------------
