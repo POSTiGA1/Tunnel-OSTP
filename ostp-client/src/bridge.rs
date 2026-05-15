@@ -277,32 +277,43 @@ impl Bridge {
                 }
                 _ = retransmit_tick.tick() => {
                     if self.running {
+                        let mut fatal_err = None;
                         if let Some(sessions) = sessions_opt.as_mut() {
                             for session in sessions.iter_mut() {
-                                let action = match session.machine.on_event(OstpEvent::Tick) {
-                                    Ok(a) => a,
-                                    Err(e) => {
-                                        let _ = tx.send(UiEvent::Log(format!("Protocol tick error: {e}"))).await;
-                                        continue;
-                                    }
-                                };
-
-                                let mut queue = vec![action];
-                                while let Some(current_action) = queue.pop() {
-                                    match current_action {
-                                        ProtocolAction::Multiple(nested) => {
-                                            for a in nested {
-                                                queue.push(a);
+                                match session.machine.on_event(OstpEvent::Tick) {
+                                    Ok(action) => {
+                                        let mut queue = vec![action];
+                                        while let Some(current_action) = queue.pop() {
+                                            match current_action {
+                                                ProtocolAction::Multiple(nested) => {
+                                                    for a in nested {
+                                                        queue.push(a);
+                                                    }
+                                                }
+                                                ProtocolAction::SendDatagram(frame) => {
+                                                    let _ = send_datagram(&session.socket, &frame, self.turn_enabled).await;
+                                                    self.metrics.bytes_sent.fetch_add(frame.len() as u64, Ordering::Relaxed);
+                                                }
+                                                _ => {}
                                             }
                                         }
-                                        ProtocolAction::SendDatagram(frame) => {
-                                            let _ = send_datagram(&session.socket, &frame, self.turn_enabled).await;
-                                            self.metrics.bytes_sent.fetch_add(frame.len() as u64, Ordering::Relaxed);
-                                        }
-                                        _ => {}
+                                    }
+                                    Err(e) => {
+                                        fatal_err = Some(e);
+                                        break;
                                     }
                                 }
                             }
+                        }
+
+                        if let Some(e) = fatal_err {
+                            let _ = tx.send(UiEvent::Log(format!("Protocol tick fatal error: {e}"))).await;
+                            self.running = false;
+                            _proxy_guard = None;
+                            sessions_opt = None;
+                            udp_rx_opt = None;
+                            stream_map.clear();
+                            let _ = tx.send(UiEvent::TunnelStopped).await;
                         }
                     }
                 }

@@ -106,12 +106,6 @@ pub async fn run_client(config: crate::config::ClientConfig) -> Result<()> {
         hide_console();
     }
 
-    #[cfg(target_os = "windows")]
-    if config.mode == "tun" && !is_admin() {
-        println!("[ostp-client] TUN mode requires Administrator privileges. Relaunching as Admin...");
-        relaunch_as_admin()?;
-    }
-
     let metrics = Arc::new(BridgeMetrics {
         bytes_sent: portable_atomic::AtomicU64::new(0),
         bytes_recv: portable_atomic::AtomicU64::new(0),
@@ -133,6 +127,12 @@ pub async fn run_client_core(
     metrics: Arc<BridgeMetrics>,
     mut shutdown_rx_ext: watch::Receiver<bool>,
 ) -> Result<()> {
+    #[cfg(target_os = "windows")]
+    if config.mode == "tun" && !is_admin() {
+        println!("[ostp-client] TUN mode requires Administrator privileges. Relaunching executable as Admin...");
+        relaunch_as_admin()?;
+    }
+
     if config.mode == "tun" && !config.exclusions.processes.is_empty() {
         println!("[ostp-client] WARNING: process exclusions are not supported in the current TUN implementation");
     }
