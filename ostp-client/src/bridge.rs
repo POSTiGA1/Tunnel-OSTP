@@ -28,6 +28,7 @@ struct SessionState {
 
 pub struct Bridge {
     running: bool,
+    pub debug: bool,
     profile: TrafficProfile,
     server_addr: String,
     local_bind_addr: String,
@@ -56,6 +57,7 @@ impl Bridge {
     pub fn new(config: &ClientConfig, metrics: Arc<BridgeMetrics>) -> Result<Self> {
         Ok(Self {
             running: false,
+            debug: config.debug,
             profile: TrafficProfile::JsonRpc,
             server_addr: config.ostp.server_addr.clone(),
             local_bind_addr: config.ostp.local_bind_addr.clone(),
@@ -305,10 +307,12 @@ impl Bridge {
                                 Ok(ProtocolAction::SendDatagram(frame)) => {
                                     if session.socket.send(&frame).await.is_ok() {
                                         self.metrics.bytes_sent.fetch_add(frame.len() as u64, Ordering::Relaxed);
-                                        let _ = tx.send(UiEvent::Log(format!(
-                                            "Outbound datagram sent stream_id={stream_id} bytes={}",
-                                            frame.len()
-                                        ))).await;
+                                        if self.debug {
+                                            let _ = tx.send(UiEvent::Log(format!(
+                                                "Outbound datagram sent stream_id={stream_id} bytes={}",
+                                                frame.len()
+                                            ))).await;
+                                        }
                                     }
                                 }
                                 Ok(ProtocolAction::Multiple(list)) => {
@@ -321,19 +325,25 @@ impl Bridge {
                                             }
                                         }
                                     }
-                                    let _ = tx.send(UiEvent::Log(format!(
-                                        "Outbound datagram batch stream_id={stream_id} sent={sent}"
-                                    ))).await;
+                                    if self.debug {
+                                        let _ = tx.send(UiEvent::Log(format!(
+                                            "Outbound datagram batch stream_id={stream_id} sent={sent}"
+                                        ))).await;
+                                    }
                                 }
                                 Ok(ProtocolAction::Noop) => {
-                                    let _ = tx.send(UiEvent::Log(format!(
-                                        "Outbound datagram noop stream_id={stream_id}"
-                                    ))).await;
+                                    if self.debug {
+                                        let _ = tx.send(UiEvent::Log(format!(
+                                            "Outbound datagram noop stream_id={stream_id}"
+                                        ))).await;
+                                    }
                                 }
                                 Ok(_) => {
-                                    let _ = tx.send(UiEvent::Log(format!(
-                                        "Outbound datagram unexpected action stream_id={stream_id}"
-                                    ))).await;
+                                    if self.debug {
+                                        let _ = tx.send(UiEvent::Log(format!(
+                                            "Outbound datagram unexpected action stream_id={stream_id}"
+                                        ))).await;
+                                    }
                                 }
                                 Err(e) => {
                                     let _ = tx.send(UiEvent::Log(format!("Protocol error packing TCP: {e}"))).await;
@@ -491,8 +501,8 @@ impl Bridge {
             obfuscation_key: obf_key,
             max_reorder: 262144,
             max_reorder_buffer: 8192,
-            ack_delay_ms: 20,
-            rto_ms: 200,
+            ack_delay_ms: 5,   // Reduced from 20ms to 5ms for rapid ACK unblocking and throughput acceleration
+            rto_ms: 100,       // Reduced from 200ms to 100ms for faster recovery on packet loss
             max_retries: 8,
             max_sent_history: 16384,
         })?;

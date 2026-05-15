@@ -49,8 +49,17 @@ pub async fn run_wintun_tunnel(
          $route = Get-NetRoute -DestinationPrefix '0.0.0.0/0' | Where-Object {{ $_.InterfaceAlias -notmatch 'tun' -and $_.InterfaceAlias -notmatch 'wintun' }} | Sort-Object RouteMetric | Select-Object -First 1\n\
          $gw = $route.NextHop\n\
          $ifIndex = $route.InterfaceIndex\n\
+         # 1. Bypass route for the proxy server itself\n\
          New-NetRoute -DestinationPrefix \"$remote_ip/32\" -NextHop $gw -InterfaceIndex $ifIndex -RouteMetric 1 -ErrorAction SilentlyContinue\n\
+         # 2. Bypass routes for all current Physical DNS servers to avoid UDP associate deadlocks\n\
+         $dns_ips = Get-DnsClientServerAddress -InterfaceIndex $ifIndex | Select-Object -ExpandProperty ServerAddresses\n\
+         foreach ($dns in $dns_ips) {{\n\
+             if ($dns -match '^\\d+\\.\\d+\\.\\d+\\.\\d+$') {{\n\
+                 New-NetRoute -DestinationPrefix \"$dns/32\" -NextHop $gw -InterfaceIndex $ifIndex -RouteMetric 1 -ErrorAction SilentlyContinue\n\
+             }}\n\
+         }}\n\
          New-NetRoute -DestinationPrefix \"1.1.1.1/32\" -NextHop $gw -InterfaceIndex $ifIndex -RouteMetric 1 -ErrorAction SilentlyContinue\n\
+         # 3. Windows Firewall Rules\n\
          New-NetFirewallRule -DisplayName 'OSTP Tunnel In' -Direction Inbound -Program $exe_path -Action Allow -Enabled True -ErrorAction SilentlyContinue\n\
          New-NetFirewallRule -DisplayName 'OSTP Tunnel Out' -Direction Outbound -Program $exe_path -Action Allow -Enabled True -ErrorAction SilentlyContinue\n",
         server_ip_str, current_exe
@@ -65,7 +74,9 @@ pub async fn run_wintun_tunnel(
     }
 
     // 4. Prepare and launch tun2socks.exe in the background
-    let proxy_url = format!("socks5://{}", config.local_proxy.bind_addr);
+    // Switch from SOCKS5 to HTTP protocol. This natively forces tun2socks NOT to attempt UDP Associate,
+    // preventing SOCKS5 command 3 unsupported errors while still tunneling 100% of global TCP traffic!
+    let proxy_url = format!("http://{}", config.local_proxy.bind_addr);
     
     if debug {
         println!("[ostp-client] Spawning tun2socks daemon pointing to {}", proxy_url);
@@ -78,22 +89,23 @@ pub async fn run_wintun_tunnel(
             "-loglevel", if debug { "debug" } else { "error" }
         ])
         .current_dir(dir)
-        .stdout(Stdio::piped())
-        .stderr(Stdio::piped())
+        .stdout(if debug { Stdio::piped() } else { Stdio::null() })
+        .stderr(if debug { Stdio::piped() } else { Stdio::null() })
         .spawn()
         .map_err(|e| anyhow!("Failed to launch tun2socks.exe background process: {}", e))?;
 
-    // 5. Once tun2socks creates the interface, apply network settings (IP, metric, DNS)
+    // 5. Once tun2socks creates the interface, apply network settings (IP, metric)
     tokio::time::sleep(tokio::time::Duration::from_secs(2)).await;
 
     if debug {
         println!("[ostp-client] Applying network configurations onto 'ostp_tun' interface...");
     }
 
+    // We omit setting dnsservers on the TUN interface entirely. This allows Windows to natively fallback
+    // to the physical interface DNS servers, which are physically routed and work flawlessly.
     let net_setup = "\
         netsh interface ipv4 set address name=\"ostp_tun\" static 10.1.0.2 255.255.255.0 10.1.0.1\n\
-        netsh interface ipv4 set interface name=\"ostp_tun\" metric=5\n\
-        netsh interface ipv4 set dnsservers name=\"ostp_tun\" static 1.1.1.1 primary\n";
+        netsh interface ipv4 set interface name=\"ostp_tun\" metric=5\n";
     
     let _ = Command::new("powershell")
         .args(["-Command", net_setup])

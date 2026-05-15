@@ -64,10 +64,11 @@ pub async fn run_local_socks5_proxy(
                         matcher_clone,
                     ).await {
                         let msg = err.to_string();
-                        // Suppress routine disconnects from spam logs
+                        // Suppress routine disconnects and unsupported SOCKS5 command attempts (like UDP) from spam logs
                         if !msg.contains("UnexpectedEof")
                             && !msg.contains("Connection reset")
                             && !msg.contains("Broken pipe")
+                            && !msg.contains("unsupported SOCKS5 command")
                         {
                             if debug {
                                 eprintln!("[ostp-client] proxy client error: {err}");

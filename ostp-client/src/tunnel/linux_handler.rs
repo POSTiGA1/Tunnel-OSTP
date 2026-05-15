@@ -106,7 +106,9 @@ pub async fn run_linux_tunnel(
     }
 
     // 5. Prepare and launch tun2socks
-    let proxy_url = format!("socks5://{}", config.local_proxy.bind_addr);
+    // Using HTTP Proxy natively avoids any UDP Associate requests,
+    // providing clean TCP proxying with maximum reliability.
+    let proxy_url = format!("http://{}", config.local_proxy.bind_addr);
     
     if debug {
         println!("[ostp-client] Spawning {} -device ostp_tun -proxy {}", tun2socks_exe.display(), proxy_url);
