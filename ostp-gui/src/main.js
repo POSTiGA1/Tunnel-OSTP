@@ -59,6 +59,7 @@ function formatTime(seconds) {
 
 // State Updates
 function setUIState(state) {
+  if (appState === state) return;
   appState = state;
   
   // Clean up classes
@@ -84,15 +85,16 @@ function setUIState(state) {
     statusText.classList.add('status-connecting');
     uptimeText.textContent = 'Establishing secure tunnel';
 
+    clearInterval(elapsedTimer);
+    elapsedTimer = null;
+    elapsedSeconds = 0;
+
   } else if (state === 'connected') {
     btnConnect.classList.add('connected');
     powerContainer.classList.add('connected');
     statusText.textContent = 'Protected';
     statusText.classList.add('status-connected');
     
-    if (!pollInterval) {
-      pollInterval = setInterval(fetchMetrics, 1000);
-    }
     if (!elapsedTimer) {
       elapsedSeconds = 0;
       elapsedTimer = setInterval(() => {
@@ -110,7 +112,7 @@ async function handleToggleConnect() {
     try {
       const success = await invoke('start_tunnel');
       if (success) {
-        monitorTunnelState();
+        startGlobalPolling();
       } else {
         alert('Failed to start tunnel process.');
         setUIState('disconnected');
@@ -129,45 +131,34 @@ async function handleToggleConnect() {
   }
 }
 
-async function monitorTunnelState() {
-  let attempts = 0;
-  const check = async () => {
-    try {
-      const isAlive = await invoke('get_tunnel_status');
-      if (isAlive) {
-        setUIState('connected');
-        return true;
-      }
-    } catch (e) {}
-    
-    attempts++;
-    if (attempts < 5 && appState === 'connecting') {
-      setTimeout(check, 1000);
-    } else if (appState === 'connecting') {
-      alert('Tunnel failed to stay alive. Check log files or Admin rights.');
-      setUIState('disconnected');
-    }
-  };
-  setTimeout(check, 1500);
+function startGlobalPolling() {
+  if (pollInterval) clearInterval(pollInterval);
+  pollInterval = setInterval(uiSyncTick, 1000);
+  uiSyncTick(); 
 }
 
-async function fetchMetrics() {
+async function uiSyncTick() {
   try {
+    const statusCode = await invoke('get_tunnel_status');
+    
+    if (statusCode === 0) {
+      setUIState('disconnected');
+      return;
+    } else if (statusCode === 1) {
+      setUIState('connecting');
+    } else if (statusCode === 2) {
+      setUIState('connected');
+    }
+    
     const stats = await invoke('get_metrics'); 
     if (stats) {
       metricDown.textContent = formatBytes(stats.bytes_recv);
       metricUp.textContent = formatBytes(stats.bytes_sent);
     }
   } catch (e) {
-    console.error('Failed to fetch metrics', e);
+    console.error('Sync error', e);
+    setUIState('disconnected');
   }
-  
-  try {
-    const isAlive = await invoke('get_tunnel_status');
-    if (!isAlive && appState === 'connected') {
-      setUIState('disconnected');
-    }
-  } catch (e) {}
 }
 
 function switchScreen(target) {
@@ -320,9 +311,9 @@ window.addEventListener('DOMContentLoaded', async () => {
   });
 
   try {
-    const isAlive = await invoke('get_tunnel_status');
-    if (isAlive) {
-      setUIState('connected');
+    const statusCode = await invoke('get_tunnel_status');
+    if (statusCode > 0) {
+      startGlobalPolling();
     } else {
       setUIState('disconnected');
     }

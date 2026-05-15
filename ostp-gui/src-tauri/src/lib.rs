@@ -134,12 +134,18 @@ async fn save_config(json_content: String) -> Result<bool, String> {
 }
 
 #[tauri::command]
-async fn get_tunnel_status(state: tauri::State<'_, AppState>) -> Result<bool, String> {
+async fn get_tunnel_status(state: tauri::State<'_, AppState>) -> Result<u8, String> {
     let guard = state.0.lock().await;
     if let Some(ref handle) = guard.handle {
-        Ok(!handle.is_finished())
+        if handle.is_finished() {
+            return Ok(0);
+        }
+        if let Some(ref metrics) = guard.metrics {
+            return Ok(metrics.connection_state.load(Ordering::Relaxed));
+        }
+        Ok(0)
     } else {
-        Ok(false)
+        Ok(0)
     }
 }
 
@@ -231,6 +237,7 @@ async fn start_tunnel(state: tauri::State<'_, AppState>) -> Result<bool, String>
     let metrics = Arc::new(BridgeMetrics {
         bytes_sent: portable_atomic::AtomicU64::new(0),
         bytes_recv: portable_atomic::AtomicU64::new(0),
+        connection_state: portable_atomic::AtomicU8::new(0),
     });
     
     let (shutdown_tx, shutdown_rx) = watch::channel(false);

@@ -1,6 +1,6 @@
 use std::time::{Duration, SystemTime};
 use std::sync::atomic::Ordering;
-use portable_atomic::AtomicU64;
+use portable_atomic::{AtomicU64, AtomicU8};
 use std::sync::Arc;
 
 use anyhow::{Context, Result};
@@ -19,6 +19,7 @@ use crate::tunnel::{ProxyEvent, ProxyToClientMsg};
 pub struct BridgeMetrics {
     pub bytes_sent: AtomicU64,
     pub bytes_recv: AtomicU64,
+    pub connection_state: AtomicU8,
 }
 
 async fn send_datagram(socket: &UdpSocket, frame: &Bytes, turn_enabled: bool) -> std::io::Result<usize> {
@@ -123,6 +124,7 @@ impl Bridge {
                 _ = shutdown.changed() => {
                     if *shutdown.borrow() {
                         self.running = false;
+                        self.metrics.connection_state.store(0, Ordering::Relaxed);
                         _proxy_guard = None;
                         break;
                     }
@@ -132,6 +134,7 @@ impl Bridge {
                         Some(BridgeCommand::ToggleTunnel) => {
                             if self.running {
                                 self.running = false;
+                                self.metrics.connection_state.store(0, Ordering::Relaxed);
                                 _proxy_guard = None;
                                 sessions_opt = None;
                                 udp_rx_opt = None;
@@ -142,6 +145,7 @@ impl Bridge {
                             } else {
                                 tx.send(UiEvent::Log("Handshaking started".to_string())).await.ok();
                                 tx.send(UiEvent::Metrics { status: ConnectionStatus::Handshaking, rtt_ms: 0.0, throughput_bps: 0 }).await.ok();
+                                self.metrics.connection_state.store(1, Ordering::Relaxed);
                                 
                                 let session_count = if self.mux_enabled { self.mux_sessions.max(1) } else { 1 };
                                 let (udp_tx, udp_rx) = mpsc::channel(10000);
@@ -195,6 +199,7 @@ impl Bridge {
                                     _proxy_guard = None;
                                     tx.send(UiEvent::Log(format!("Handshake failed: {err}"))).await.ok();
                                     tx.send(UiEvent::TunnelStopped).await.ok();
+                                 self.metrics.connection_state.store(0, Ordering::Relaxed);
                                     continue;
                                 }
 
@@ -212,7 +217,7 @@ impl Bridge {
                                     rtt_ms: self.last_rtt_ms,
                                     throughput_bps: 0,
                                 }).await.ok();
-                                let start_msg = if self.mode == "tun" { "TUN Tunnel established" } else { "Bridge connection established" };
+                                self.metrics.connection_state.store(2, Ordering::Relaxed); let start_msg = if self.mode == "tun" { "TUN Tunnel established" } else { "Bridge connection established" };
                                 tx.send(UiEvent::Log(start_msg.to_string())).await.ok();
                             }
                         }
@@ -228,6 +233,8 @@ impl Bridge {
                                     tx.send(UiEvent::Log("Runtime config reloaded".to_string())).await.ok();
                                     if self.running {
                                         self.running = false;
+                                 self.metrics.connection_state.store(0, Ordering::Relaxed);
+                                 self.metrics.connection_state.store(0, Ordering::Relaxed);
                                         _proxy_guard = None;
                                         sessions_opt = None;
                                         stream_map.clear();
@@ -261,6 +268,7 @@ impl Bridge {
                             sessions_opt = None;
                             stream_map.clear();
                             let _ = tx.send(UiEvent::TunnelStopped).await;
+                            self.metrics.connection_state.store(0, Ordering::Relaxed);
                             continue;
                         }
                         if let Some(sessions) = sessions_opt.as_mut() {
@@ -314,6 +322,7 @@ impl Bridge {
                             udp_rx_opt = None;
                             stream_map.clear();
                             let _ = tx.send(UiEvent::TunnelStopped).await;
+                            self.metrics.connection_state.store(0, Ordering::Relaxed);
                         }
                     }
                 }
