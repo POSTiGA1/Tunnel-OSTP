@@ -1,16 +1,33 @@
 /target/
 /target_build/
+/target_linux/
 /dist/
 **/*.rs.bk
 .idea/
 .vscode/
+
+# Binaries & libraries
 *.exe
 *.dll
 *.so
 *.dylib
 *.pdb
+
+# Archives & temp extraction folders
+*.zip
+*_temp/
+*_new/
+
+# Local scripts & test artifacts
+test_route.ps1
+
+# Config & secrets
 config.json
 wintun.dll
+
+# Logs
 *.log
+
+# Dev notes (not for repo)
 .ai-rules.md
 turn-harvesting-idea.md
