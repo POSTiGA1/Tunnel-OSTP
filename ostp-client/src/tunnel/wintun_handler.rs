@@ -8,6 +8,7 @@ pub async fn run_wintun_tunnel(
 ) -> Result<()> {
     use std::net::ToSocketAddrs;
     use std::process::{Command, Stdio, Child};
+    use std::os::windows::process::CommandExt;
 
     struct WintunGuard {
         server_ip_str: String,
@@ -26,7 +27,10 @@ pub async fn run_wintun_tunnel(
                  Remove-NetFirewallRule -DisplayName 'OSTP Tunnel*' -ErrorAction SilentlyContinue\n",
                 self.server_ip_str
             );
-            let _ = Command::new("powershell").args(["-Command", &cleanup_script]).output();
+            let _ = Command::new("powershell")
+                .creation_flags(0x08000000)
+                .args(["-Command", &cleanup_script])
+                .output();
         }
     }
 
@@ -93,6 +97,7 @@ pub async fn run_wintun_tunnel(
     );
 
     let out = Command::new("powershell")
+        .creation_flags(0x08000000)
         .args(["-Command", &setup_script])
         .output()?;
     
@@ -109,7 +114,11 @@ pub async fn run_wintun_tunnel(
         println!("[ostp-client] Spawning tun2socks daemon pointing to {}", proxy_url);
     }
 
+    // Spawning buffer to allow local proxy listener to finish binding to local address
+    tokio::time::sleep(std::time::Duration::from_millis(300)).await;
+
     let mut child = Command::new(&tun2socks_exe)
+        .creation_flags(0x08000000)
         .args([
             "-device", "ostp_tun",
             "-proxy", &proxy_url,
@@ -148,6 +157,7 @@ pub async fn run_wintun_tunnel(
     }
     
     let _ = Command::new("powershell")
+        .creation_flags(0x08000000)
         .args(["-Command", &net_setup])
         .output()?;
 
