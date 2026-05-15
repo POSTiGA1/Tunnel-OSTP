@@ -116,10 +116,6 @@ pub async fn run_client(config: crate::config::ClientConfig) -> Result<()> {
         println!("[ostp-client] WARNING: process exclusions are not supported in the current TUN implementation");
     }
 
-    if config.mode == "tun" {
-        tunnel::download_wintun_dll(config.debug)?;
-        tunnel::download_tun2socks(config.debug)?;
-    }
 
     let (proxy_events_tx, proxy_events_rx) = mpsc::channel(10000);
     let (client_msgs_tx, client_msgs_rx) = mpsc::channel(10000);

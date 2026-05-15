@@ -1,10 +1,6 @@
 mod proxy;
-mod wintun_downloader;
 mod wintun_handler;
 mod linux_handler;
-
-pub use wintun_downloader::download_wintun_dll;
-pub use wintun_downloader::download_tun2socks;
 
 pub async fn run_tun_tunnel(
     config: crate::config::ClientConfig,
