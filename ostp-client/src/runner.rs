@@ -68,7 +68,7 @@ fn relaunch_as_admin() -> Result<()> {
 
     let _ = std::process::Command::new("powershell")
         .args(["-Command", &ps_script])
-        .spawn()?;
+        .status()?;
     std::process::exit(0);
 }
 
