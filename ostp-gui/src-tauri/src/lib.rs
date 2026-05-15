@@ -262,8 +262,23 @@ async fn start_tunnel(state: tauri::State<'_, AppState>) -> Result<bool, String>
     Ok(true)
 }
 
+#[cfg(target_os = "windows")]
+fn apply_webview_loopback_exemption() {
+    use std::os::windows::process::CommandExt;
+    if ostp_client::runner::is_admin() {
+        // Silently whitelist the standard WebView2 sandbox to communicate with elevated localhost/dev server
+        let _ = std::process::Command::new("CheckNetIsolation.exe")
+            .args(["LoopbackExempt", "-a", "-n=Microsoft.Win32WebView2Sandbox_cw5n1h2txyewy"])
+            .creation_flags(0x08000000)
+            .output();
+    }
+}
+
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
+    #[cfg(target_os = "windows")]
+    apply_webview_loopback_exemption();
+
     let state = AppState(Mutex::new(AppStateInner {
         shutdown_tx: None,
         metrics: None,
