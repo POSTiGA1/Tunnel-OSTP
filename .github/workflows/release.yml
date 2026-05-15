@@ -109,7 +109,7 @@ jobs:
             target: aarch64-linux-android
             artifact_name: ostp
             release_name: ostp-android-arm64.tar.gz
-            tun2socks_arch: android-arm64
+            tun2socks_arch: linux-arm64
             use_cross: true
 
     steps:
@@ -145,7 +145,7 @@ jobs:
         if: ${{ !matrix.use_cross && matrix.os != 'windows-latest' }}
         shell: bash
         run: |
-          rustup run ${{ matrix.toolchain || 'stable' }} cargo build --release --target ${{ matrix.target }} --bin ostp
+          cargo build --release --target ${{ matrix.target }} --bin ostp
 
       - name: Execute Specialized Cross-Compilation
         if: ${{ matrix.use_cross }}
