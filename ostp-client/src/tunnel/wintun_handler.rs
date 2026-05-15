@@ -15,13 +15,16 @@ pub async fn run_wintun_tunnel(
         println!("[ostp-client] Initializing high-performance TUN tunnel via tun2socks...");
     }
 
-    // 1. Get executable directory to locate tun2socks.exe and wintun.dll
+    // 1. Automatically ensure Wintun and tun2socks dependencies are downloaded and present
+    super::download_wintun_dll(debug)?;
+    super::download_tun2socks(debug)?;
+
     let exe = std::env::current_exe()?;
     let dir = exe.parent().ok_or_else(|| anyhow!("failed to get binary directory"))?;
     let tun2socks_exe = dir.join("tun2socks.exe");
 
     if !tun2socks_exe.exists() {
-        return Err(anyhow!("tun2socks.exe not found! Please ensure initialization downloaded it successfully."));
+        return Err(anyhow!("tun2socks.exe not found! Even after download attempt, binary remains missing."));
     }
 
     // 2. Resolve Server IP for routing table exclusion

@@ -18,7 +18,9 @@ pub async fn run_linux_tunnel(
         println!("[ostp-client] Starting Linux TUN handler initialization...");
     }
 
-    // 1. Locate tun2socks binary
+    // 1. Automatically ensure tun2socks binary is downloaded and present
+    super::download_tun2socks(debug)?;
+
     let exe = std::env::current_exe()?;
     let dir = exe.parent().ok_or_else(|| anyhow!("failed to get binary directory"))?;
     
