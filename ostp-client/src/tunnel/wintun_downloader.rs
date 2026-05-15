@@ -33,7 +33,8 @@ pub fn download_wintun_dll(debug: bool) -> Result<()> {
         // Explicitly filter via Where-Object to select ONLY the single architecture matching dll.
         // This guarantees we never overwrite the correct x64 dll with x86/ARM formats during Expand-Archive recursions.
         let ps_script = format!(
-            "Invoke-WebRequest -Uri 'https://www.wintun.net/builds/wintun-0.14.1.zip' -OutFile '{}' -UseBasicParsing -ErrorAction Stop; \
+            "$ProgressPreference = 'SilentlyContinue'; \
+             Invoke-WebRequest -Uri 'https://www.wintun.net/builds/wintun-0.14.1.zip' -OutFile '{}' -UseBasicParsing -ErrorAction Stop; \
              Expand-Archive -Path '{}' -DestinationPath '{}' -Force; \
              Get-ChildItem -Path '{}' -Filter 'wintun.dll' -Recurse | Where-Object {{ $_.FullName -match 'bin[\\\\/]{}[\\\\/]' }} | Copy-Item -Destination '{}' -Force; \
              Remove-Item '{}', '{}' -Recurse -Force",
@@ -89,7 +90,8 @@ pub fn download_tun2socks(debug: bool) -> Result<()> {
         let url = format!("https://github.com/xjasonlyu/tun2socks/releases/download/v2.6.0/tun2socks-windows-{}.zip", arch);
 
         let ps_script = format!(
-            "Invoke-WebRequest -Uri '{}' -OutFile '{}' -UseBasicParsing -ErrorAction Stop; \
+            "$ProgressPreference = 'SilentlyContinue'; \
+             Invoke-WebRequest -Uri '{}' -OutFile '{}' -UseBasicParsing -ErrorAction Stop; \
              Expand-Archive -Path '{}' -DestinationPath '{}' -Force; \
              Get-ChildItem -Path '{}' -Filter '*.exe' -Recurse | Copy-Item -Destination '{}' -Force; \
              Remove-Item '{}', '{}' -Recurse -Force",
