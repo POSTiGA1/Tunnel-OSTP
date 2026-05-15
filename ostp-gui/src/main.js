@@ -1,10 +1,11 @@
 const { invoke } = window.__TAURI__.core;
 
 // State management
-let appState = 'disconnected'; // 'disconnected', 'connecting', 'connected'
+let appState = 'disconnected'; 
 let pollInterval = null;
 let elapsedSeconds = 0;
 let elapsedTimer = null;
+let rawConfigObj = null; // Cache original config object to preserve extra keys
 
 // DOM Elements
 const btnConnect = document.getElementById('btn-connect');
@@ -19,8 +20,16 @@ const settingsScreen = document.getElementById('settings-screen');
 const btnGoSettings = document.getElementById('btn-go-settings');
 const btnBack = document.getElementById('btn-back');
 const btnSaveConfig = document.getElementById('btn-save-config');
-const configEditor = document.getElementById('config-editor');
 const configToast = document.getElementById('config-toast');
+
+// Input Form Elements
+const inImportUrl = document.getElementById('in-import-url');
+const btnImportUrl = document.getElementById('btn-import-url');
+const inServer = document.getElementById('in-server');
+const inKey = document.getElementById('in-key');
+const inSocks = document.getElementById('in-socks');
+const inTunMode = document.getElementById('in-tun-mode');
+const inDebug = document.getElementById('in-debug');
 
 // Utils
 function formatBytes(bytes) {
@@ -75,11 +84,9 @@ function setUIState(state) {
     statusText.textContent = 'Protected';
     statusText.classList.add('status-connected');
     
-    // Start poll timer
     if (!pollInterval) {
       pollInterval = setInterval(fetchMetrics, 1000);
     }
-    // Start uptime timer
     if (!elapsedTimer) {
       elapsedSeconds = 0;
       elapsedTimer = setInterval(() => {
@@ -97,15 +104,15 @@ async function handleToggleConnect() {
     try {
       const success = await invoke('start_tunnel');
       if (success) {
-        // The start_tunnel call waits briefly or returns if spawn worked
-        // Backend will periodically check status. Let's monitor it.
         monitorTunnelState();
       } else {
-        alert('Failed to start tunnel process. Check config.json');
+        alert('Failed to start tunnel process.');
         setUIState('disconnected');
       }
     } catch (err) {
-      alert('Error launching tunnel: ' + err);
+      // If the error tells that app exited (due to Admin elevation relaunching), don't show an alert.
+      // Elevation relaunching closes current app instance silently.
+      console.error(err);
       setUIState('disconnected');
     }
   } else {
@@ -119,7 +126,6 @@ async function handleToggleConnect() {
 }
 
 async function monitorTunnelState() {
-  // Check status for up to 5 seconds to confirm it connects
   let attempts = 0;
   const check = async () => {
     try {
@@ -134,16 +140,16 @@ async function monitorTunnelState() {
     if (attempts < 5 && appState === 'connecting') {
       setTimeout(check, 1000);
     } else if (appState === 'connecting') {
-      alert('Tunnel failed to stay alive. Make sure you run with Admin privileges if using TUN mode.');
+      alert('Tunnel failed to stay alive. Check log files or Admin rights.');
       setUIState('disconnected');
     }
   };
-  setTimeout(check, 1500); // Delay initial check to give it time to boot
+  setTimeout(check, 1500);
 }
 
 async function fetchMetrics() {
   try {
-    const stats = await invoke('get_metrics'); // Expected format: { bytes_sent: u64, bytes_recv: u64 }
+    const stats = await invoke('get_metrics'); 
     if (stats) {
       metricDown.textContent = formatBytes(stats.bytes_recv);
       metricUp.textContent = formatBytes(stats.bytes_sent);
@@ -152,7 +158,6 @@ async function fetchMetrics() {
     console.error('Failed to fetch metrics', e);
   }
   
-  // Also verify process is still alive
   try {
     const isAlive = await invoke('get_tunnel_status');
     if (!isAlive && appState === 'connected') {
@@ -163,7 +168,7 @@ async function fetchMetrics() {
 
 function switchScreen(target) {
   if (target === 'settings') {
-    loadConfigText();
+    loadConfigIntoFields();
     homeScreen.classList.remove('active');
     settingsScreen.classList.add('active');
   } else {
@@ -172,27 +177,108 @@ function switchScreen(target) {
   }
 }
 
-async function loadConfigText() {
-  configEditor.value = 'Loading configuration...';
+// Config Management
+async function loadConfigIntoFields() {
   try {
-    const rawConfig = await invoke('get_config');
-    configEditor.value = rawConfig;
+    const rawStr = await invoke('get_config');
+    rawConfigObj = JSON.parse(rawStr);
+    
+    // Determine if Server mode or Client mode is active
+    const isClient = rawConfigObj.mode === 'client';
+    const clientConf = isClient ? rawConfigObj : null;
+
+    if (clientConf) {
+      inServer.value = clientConf.server || '';
+      inKey.value = clientConf.access_key || '';
+      inSocks.value = clientConf.socks5_bind || '127.0.0.1:1088';
+      
+      const tunEnabled = clientConf.tun && clientConf.tun.enable;
+      inTunMode.checked = !!tunEnabled;
+      
+      inDebug.checked = !!clientConf.debug;
+    } else {
+      alert('Loaded configuration is for OSTP Server. Please adjust manually.');
+    }
   } catch (err) {
-    configEditor.value = '// Error loading configuration: ' + err;
+    console.error('Error loading config', err);
   }
 }
 
 async function handleSaveConfig() {
+  if (!rawConfigObj) rawConfigObj = { mode: 'client', log_level: 'info' };
+  
+  // Enforce client settings format
+  rawConfigObj.mode = 'client';
+  rawConfigObj.server = inServer.value.trim();
+  rawConfigObj.access_key = inKey.value.trim();
+  rawConfigObj.socks5_bind = inSocks.value.trim() || null;
+  
+  if (!rawConfigObj.tun) {
+    rawConfigObj.tun = {
+      wintun_path: "./wintun.dll",
+      ipv4_address: "10.1.0.2/24"
+    };
+  }
+  rawConfigObj.tun.enable = inTunMode.checked;
+  rawConfigObj.debug = inDebug.checked;
+
+  // Validation
+  if (!rawConfigObj.server) {
+    alert('Server Address is required!');
+    return;
+  }
+  if (!rawConfigObj.access_key) {
+    alert('Access Key is required!');
+    return;
+  }
+
   try {
-    const val = configEditor.value;
-    JSON.parse(val); // Validate JSON format first
-    const success = await invoke('save_config', { jsonContent: val });
+    const finalJson = JSON.stringify(rawConfigObj, null, 2);
+    const success = await invoke('save_config', { jsonContent: finalJson });
     if (success) {
       showToast();
       setTimeout(() => switchScreen('home'), 800);
     }
   } catch (err) {
-    alert('Invalid JSON or saving failed: ' + err.message);
+    alert('Saving failed: ' + err);
+  }
+}
+
+// OSTP URI Sharing Parser
+function handleImportUrl() {
+  const urlStr = inImportUrl.value.trim();
+  if (!urlStr) return;
+
+  try {
+    if (!urlStr.startsWith('ostp://')) {
+      throw new Error('Link must start with ostp://');
+    }
+    // Standard URL parsing
+    const url = new URL(urlStr);
+    
+    const accessKey = decodeURIComponent(url.username);
+    const serverHost = url.host; // Includes hostname:port
+    const useTun = url.searchParams.get('tun') === '1' || url.searchParams.get('tun') === 'true';
+    const socks5 = url.searchParams.get('socks5');
+
+    if (!accessKey || !serverHost) {
+      throw new Error('Incomplete parameters: missing key or server address.');
+    }
+
+    // Update fields
+    inServer.value = serverHost;
+    inKey.value = accessKey;
+    inTunMode.checked = useTun;
+    if (socks5) inSocks.value = socks5;
+
+    inImportUrl.value = ''; // Clear import input
+    
+    // Small animation or visual confirm
+    inImportUrl.placeholder = 'Import successful!';
+    setTimeout(() => { inImportUrl.placeholder = 'Paste ostp:// share link here...'; }, 2000);
+
+  } catch (err) {
+    alert('Failed to parse ostp:// share link: ' + err.message);
   }
 }
 
@@ -207,8 +293,13 @@ window.addEventListener('DOMContentLoaded', async () => {
   btnGoSettings.addEventListener('click', () => switchScreen('settings'));
   btnBack.addEventListener('click', () => switchScreen('home'));
   btnSaveConfig.addEventListener('click', handleSaveConfig);
+  
+  btnImportUrl.addEventListener('click', handleImportUrl);
+  inImportUrl.addEventListener('keydown', (e) => {
+    if (e.key === 'Enter') handleImportUrl();
+  });
 
-  // Check current status on startup (reconnect UI if process already active)
+  // Check current status on startup
   try {
     const isAlive = await invoke('get_tunnel_status');
     if (isAlive) {

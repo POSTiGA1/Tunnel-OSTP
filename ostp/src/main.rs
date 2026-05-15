@@ -26,6 +26,54 @@ struct Args {
     /// Number of keys to generate
     #[arg(short = 'c', long, default_value_t = 1)]
     count: usize,
+
+    /// Optional client connection share link (ostp://ACCESS_KEY@HOST:PORT/?tun=1) to run instantly
+    url: Option<String>,
+}
+
+fn parse_ostp_link(link: &str) -> Result<ClientConfig> {
+    let parsed = url::Url::parse(link)
+        .map_err(|e| anyhow!("Failed to parse share link URL: {e}"))?;
+
+    if parsed.scheme() != "ostp" {
+        anyhow::bail!("Unsupported URL scheme '{}', expected 'ostp://'", parsed.scheme());
+    }
+
+    let access_key = parsed.username().to_string();
+    if access_key.is_empty() {
+        anyhow::bail!("Missing access key (userinfo segment) in share link");
+    }
+
+    let host = parsed.host_str().ok_or_else(|| anyhow!("Missing host in share link"))?;
+    let port = parsed.port().ok_or_else(|| anyhow!("Missing port in share link"))?;
+    let server = format!("{host}:{port}");
+
+    let mut use_tun = false;
+    let mut socks5 = None;
+
+    for (k, v) in parsed.query_pairs() {
+        if k == "tun" && (v == "1" || v.eq_ignore_ascii_case("true")) {
+            use_tun = true;
+        }
+        if k == "socks5" {
+            socks5 = Some(v.to_string());
+        }
+    }
+
+    Ok(ClientConfig {
+        server,
+        access_key,
+        socks5_bind: socks5,
+        tun: Some(TunConfig {
+            enable: use_tun,
+            wintun_path: Some("./wintun.dll".to_string()),
+            ipv4_address: Some("10.1.0.2/24".to_string()),
+        }),
+        turn: None,
+        debug: Some(false),
+        exclude: None,
+        mux: None,
+    })
 }
 
 fn generate_secure_key(format_type: &str) -> String {
@@ -159,6 +207,13 @@ async fn run_app() -> Result<()> {
         return Ok(());
     }
 
+    if let Some(url) = args.url {
+        println!("[OSTP Core] Booting direct client connection via share link...");
+        let client_cfg = parse_ostp_link(&url)
+            .map_err(|e| anyhow!("Share Link Error: {e}"))?;
+        return run_client_directly(client_cfg).await;
+    }
+
     // Handle explicit configuration initialization
     if let Some(ref mode_str) = args.init {
         let is_server = mode_str == "server";
@@ -208,6 +263,15 @@ async fn run_app() -> Result<()> {
         };
         fs::write(&args.config, serde_json::to_string_pretty(&dummy)?)?;
         println!("Successfully initialized configuration at {:?}", args.config);
+        
+        if is_server {
+            if let AppMode::Server(s) = dummy.mode {
+                let key = &s.access_keys[0];
+                println!("\n>>> Handy Client Share Links for your users:");
+                println!("  TUN mode:   ostp://{}@<YOUR_SERVER_PUBLIC_IP>:50000/?tun=1", key);
+                println!("  PROXY mode: ostp://{}@<YOUR_SERVER_PUBLIC_IP>:50000/?tun=0", key);
+            }
+        }
         return Ok(());
     }
 
@@ -256,54 +320,58 @@ async fn run_app() -> Result<()> {
             ostp_server::run_server(server_cfg.listen, server_cfg.access_keys, outbound, debug).await?;
         }
         AppMode::Client(client_cfg) => {
-            println!("[OSTP Core] Starting in CLIENT mode connecting to {}", client_cfg.server);
-            if let Some(ref tun) = client_cfg.tun {
-                if tun.enable {
-                    println!("[OSTP Core] TUN mode enabled.");
-                    if let Some(ref path) = tun.wintun_path {
-                        println!("[OSTP Core] Using custom wintun path: {}", path);
-                        // Wiring of custom wintun path to Wintun logic happens here
-                    }
-                }
-            }
-            println!("[OSTP Core] Client logic loaded.");
-            let is_tun_enabled = client_cfg.tun.as_ref().map(|t| t.enable).unwrap_or(false);
-            let turn_cfg = client_cfg.turn.as_ref();
-            let client_conf = ostp_client::config::ClientConfig {
-                mode: if is_tun_enabled { "tun".to_string() } else { "proxy".to_string() },
-                debug: client_cfg.debug.unwrap_or(false),
-                ostp: ostp_client::config::OstpConfig {
-                    server_addr: client_cfg.server.clone(),
-                    local_bind_addr: "0.0.0.0:0".to_string(),
-                    access_key: client_cfg.access_key.clone(),
-                    handshake_timeout_ms: 5000,
-                    io_timeout_ms: 5000,
-                },
-                local_proxy: ostp_client::config::LocalProxyConfig {
-                    bind_addr: client_cfg.socks5_bind.clone().unwrap_or_else(|| "127.0.0.1:1088".to_string()),
-                    connect_timeout_ms: 5000,
-                },
-                turn: ostp_client::config::TurnConfig {
-                    enabled: turn_cfg.map(|t| t.enabled).unwrap_or(false),
-                    server_addr: turn_cfg.and_then(|t| Some(t.server_addr.clone())).unwrap_or_default(),
-                    username: turn_cfg.and_then(|t| t.username.clone()).unwrap_or_default(),
-                    access_key: turn_cfg.and_then(|t| t.access_key.clone()).unwrap_or_default(),
-                },
-                exclusions: ostp_client::config::ExclusionConfig {
-                    domains: client_cfg.exclude.as_ref().and_then(|e| e.domains.clone()).unwrap_or_default(),
-                    ips: client_cfg.exclude.as_ref().and_then(|e| e.ips.clone()).unwrap_or_default(),
-                    processes: client_cfg.exclude.as_ref().and_then(|e| e.processes.clone()).unwrap_or_default(),
-                },
-                multiplex: ostp_client::config::MultiplexConfig {
-                    enabled: client_cfg.mux.as_ref().and_then(|m| m.enabled).unwrap_or(false),
-                    sessions: client_cfg.mux.as_ref().and_then(|m| m.sessions).unwrap_or(1),
-                },
-            };
-            // Run the client implementation
-            ostp_client::runner::run_client(client_conf).await?;
+            run_client_directly(client_cfg).await?;
         }
 
     }
 
+    Ok(())
+}
+
+async fn run_client_directly(client_cfg: ClientConfig) -> Result<()> {
+    println!("[OSTP Core] Starting in CLIENT mode connecting to {}", client_cfg.server);
+    if let Some(ref tun) = client_cfg.tun {
+        if tun.enable {
+            println!("[OSTP Core] TUN mode enabled.");
+            if let Some(ref path) = tun.wintun_path {
+                println!("[OSTP Core] Using custom wintun path: {}", path);
+            }
+        }
+    }
+    println!("[OSTP Core] Client logic loaded.");
+    let is_tun_enabled = client_cfg.tun.as_ref().map(|t| t.enable).unwrap_or(false);
+    let turn_cfg = client_cfg.turn.as_ref();
+    let client_conf = ostp_client::config::ClientConfig {
+        mode: if is_tun_enabled { "tun".to_string() } else { "proxy".to_string() },
+        debug: client_cfg.debug.unwrap_or(false),
+        ostp: ostp_client::config::OstpConfig {
+            server_addr: client_cfg.server.clone(),
+            local_bind_addr: "0.0.0.0:0".to_string(),
+            access_key: client_cfg.access_key.clone(),
+            handshake_timeout_ms: 5000,
+            io_timeout_ms: 5000,
+        },
+        local_proxy: ostp_client::config::LocalProxyConfig {
+            bind_addr: client_cfg.socks5_bind.clone().unwrap_or_else(|| "127.0.0.1:1088".to_string()),
+            connect_timeout_ms: 5000,
+        },
+        turn: ostp_client::config::TurnConfig {
+            enabled: turn_cfg.map(|t| t.enabled).unwrap_or(false),
+            server_addr: turn_cfg.and_then(|t| Some(t.server_addr.clone())).unwrap_or_default(),
+            username: turn_cfg.and_then(|t| t.username.clone()).unwrap_or_default(),
+            access_key: turn_cfg.and_then(|t| t.access_key.clone()).unwrap_or_default(),
+        },
+        exclusions: ostp_client::config::ExclusionConfig {
+            domains: client_cfg.exclude.as_ref().and_then(|e| e.domains.clone()).unwrap_or_default(),
+            ips: client_cfg.exclude.as_ref().and_then(|e| e.ips.clone()).unwrap_or_default(),
+            processes: client_cfg.exclude.as_ref().and_then(|e| e.processes.clone()).unwrap_or_default(),
+        },
+        multiplex: ostp_client::config::MultiplexConfig {
+            enabled: client_cfg.mux.as_ref().and_then(|m| m.enabled).unwrap_or(false),
+            sessions: client_cfg.mux.as_ref().and_then(|m| m.sessions).unwrap_or(1),
+        },
+    };
+    // Run the client implementation
+    ostp_client::runner::run_client(client_conf).await?;
     Ok(())
 }
