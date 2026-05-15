@@ -7,8 +7,29 @@ pub async fn run_wintun_tunnel(
     mut shutdown: watch::Receiver<bool>,
 ) -> Result<()> {
     use std::net::ToSocketAddrs;
-    use std::process::{Command, Stdio};
+    use std::process::{Command, Stdio, Child};
+
+    struct WintunGuard {
+        server_ip_str: String,
+        child: Option<Child>,
+    }
     
+    impl Drop for WintunGuard {
+        fn drop(&mut self) {
+            if let Some(mut child) = self.child.take() {
+                let _ = child.kill();
+            }
+            let cleanup_script = format!(
+                "$remote_ip = '{}'\n\
+                 Remove-NetRoute -DestinationPrefix \"$remote_ip/32\" -Confirm:$false -ErrorAction SilentlyContinue\n\
+                 Remove-NetRoute -DestinationPrefix \"1.1.1.1/32\" -Confirm:$false -ErrorAction SilentlyContinue\n\
+                 Remove-NetFirewallRule -DisplayName 'OSTP Tunnel*' -ErrorAction SilentlyContinue\n",
+                self.server_ip_str
+            );
+            let _ = Command::new("powershell").args(["-Command", &cleanup_script]).output();
+        }
+    }
+
     let debug = config.debug;
 
     if debug {
@@ -94,6 +115,11 @@ pub async fn run_wintun_tunnel(
         .spawn()
         .map_err(|e| anyhow!("Failed to launch tun2socks.exe background process: {}", e))?;
 
+    let mut _guard = WintunGuard {
+        server_ip_str: server_ip_str.clone(),
+        child: None, // Will set below
+    };
+
     // 5. Once tun2socks creates the interface, apply network settings (IP, metric)
     tokio::time::sleep(tokio::time::Duration::from_secs(2)).await;
 
@@ -116,6 +142,8 @@ pub async fn run_wintun_tunnel(
     // 6. Spawn thread to keep logging tun2socks output if in debug mode
     let mut stdout = child.stdout.take();
     let mut stderr = child.stderr.take();
+    _guard.child = Some(child);
+
     if debug {
         std::thread::spawn(move || {
             use std::io::{BufRead, BufReader};
@@ -142,21 +170,8 @@ pub async fn run_wintun_tunnel(
 
     println!("[client] Deactivating TUN tunnel and restoring system network topology...");
 
-    // 8. Terminate tun2socks
-    let _ = child.kill();
-
-    // 9. Run cleanup routing script
-    let cleanup_script = format!(
-        "$remote_ip = '{}'\n\
-         Remove-NetRoute -DestinationPrefix \"$remote_ip/32\" -Confirm:$false -ErrorAction SilentlyContinue\n\
-         Remove-NetRoute -DestinationPrefix \"1.1.1.1/32\" -Confirm:$false -ErrorAction SilentlyContinue\n\
-         Remove-NetFirewallRule -DisplayName 'OSTP Tunnel*' -ErrorAction SilentlyContinue\n",
-        server_ip_str
-    );
-
-    let _ = Command::new("powershell")
-        .args(["-Command", &cleanup_script])
-        .output()?;
+    // Drop guard runs cleanup automatically
+    drop(_guard);
 
     println!("[client] TUN Tunnel stopped.");
     

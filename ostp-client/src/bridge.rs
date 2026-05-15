@@ -104,6 +104,7 @@ impl Bridge {
         let mut sessions_opt: Option<Vec<SessionState>> = None;
         let mut udp_rx_opt: Option<mpsc::Receiver<(usize, Bytes)>> = None;
         let mut _proxy_guard: Option<crate::sysproxy::WindowsProxyGuard> = None;
+        let mut stream_map: std::collections::HashMap<u16, usize> = std::collections::HashMap::new();
 
         loop {
             tokio::select! {
@@ -122,6 +123,7 @@ impl Bridge {
                                 _proxy_guard = None;
                                 sessions_opt = None;
                                 udp_rx_opt = None;
+                                stream_map.clear();
                                 tx.send(UiEvent::TunnelStopped).await.ok();
                                 let stop_msg = if self.mode == "tun" { "TUN Tunnel stopped" } else { "Bridge stopped" };
                                 tx.send(UiEvent::Log(stop_msg.to_string())).await.ok();
@@ -206,6 +208,7 @@ impl Bridge {
                                         self.running = false;
                                         _proxy_guard = None;
                                         sessions_opt = None;
+                                        stream_map.clear();
                                         // User logic handles UI restart
                                         let _ = tx.send(UiEvent::TunnelStopped).await;
                                     }
@@ -234,6 +237,7 @@ impl Bridge {
                             self.running = false;
                             _proxy_guard = None;
                             sessions_opt = None;
+                            stream_map.clear();
                             let _ = tx.send(UiEvent::TunnelStopped).await;
                             continue;
                         }
@@ -280,7 +284,10 @@ impl Bridge {
                         }
                     }
                 }
-                proxy_ev = proxy_rx.recv(), if self.running => {
+                proxy_ev = proxy_rx.recv(), if self.running && sessions_opt.as_ref().map(|s| {
+                    // §3 FIX: Apply backpressure. Suspend pulling from local proxy if ARQ buffers exceed 1024 unacked frames
+                    s.iter().all(|ses| ses.machine.in_flight_count() < 1024)
+                }).unwrap_or(true) => {
                     if let Some(ev) = proxy_ev {
                         if let Some(sessions) = sessions_opt.as_mut() {
                             if sessions.is_empty() {
@@ -289,18 +296,25 @@ impl Bridge {
                                 }
                                 continue;
                             }
-                            let (stream_id, relay_msg) = match ev {
+                            let (stream_id, relay_msg, is_close) = match ev {
                                 ProxyEvent::NewStream { stream_id, target } => {
                                     let _ = tx.send(UiEvent::Log(format!("Proxy CONNECT stream_id={stream_id} target={target}"))).await;
-                                    (stream_id, RelayMessage::Connect(target))
+                                    (stream_id, RelayMessage::Connect(target), false)
                                 }
-                                ProxyEvent::Data { stream_id, payload } => (stream_id, RelayMessage::Data(payload.to_vec())),
+                                ProxyEvent::Data { stream_id, payload } => (stream_id, RelayMessage::Data(payload.to_vec()), false),
                                 ProxyEvent::Close { stream_id } => {
                                     let _ = tx.send(UiEvent::Log(format!("Proxy CLOSE stream_id={stream_id}"))).await;
-                                    (stream_id, RelayMessage::Close)
+                                    (stream_id, RelayMessage::Close, true)
                                 }
                             };
-                            let session_index = (stream_id as usize) % sessions.len();
+                            let len = sessions.len();
+                            let session_index = *stream_map.entry(stream_id).or_insert_with(|| {
+                                // §8 FIX: Load balance multiplexed streams randomly across available connection sockets
+                                rand::thread_rng().gen_range(0..len)
+                            });
+                            if is_close {
+                                stream_map.remove(&stream_id);
+                            }
                             let session = &mut sessions[session_index];
                             let out_payload = Bytes::from(relay_msg.encode());
                             match session.machine.on_event(OstpEvent::Outbound(stream_id, out_payload)) {
@@ -436,6 +450,7 @@ impl Bridge {
                             crate::sysproxy::disable_windows_proxy();
                             sessions_opt = None;
                             udp_rx_opt = None;
+                            stream_map.clear();
                             let _ = tx.send(UiEvent::TunnelStopped).await;
                         }
                     }
@@ -496,7 +511,7 @@ impl Bridge {
             psk,
             session_id,
             handshake_payload,
-            max_padding: 256,
+            max_padding: 1400, // §7 FIX: Allow padding up to full MTU size to break traffic analysis fingerprints
             padding_strategy: PaddingStrategy::Profile(self.profile),
             obfuscation_key: obf_key,
             max_reorder: 262144,

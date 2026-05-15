@@ -53,24 +53,6 @@ pub enum ProxyToClientMsg {
     Error(String),
 }
 
-#[allow(dead_code)]
-pub struct TunnelConfig {
-    pub local_bind: String,
-    pub remote_addr: String,
-}
-
-impl Default for TunnelConfig {
-    fn default() -> Self {
-        Self {
-            local_bind: "127.0.0.1:1080".to_string(),
-            remote_addr: "127.0.0.1:443".to_string(),
-        }
-    }
-}
-
-pub async fn cleanup() -> anyhow::Result<()> {
-    Ok(())
-}
 
 pub async fn run_local_proxy(
     cfg: LocalProxyConfig,

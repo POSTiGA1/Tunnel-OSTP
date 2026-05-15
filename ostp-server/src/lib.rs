@@ -145,11 +145,15 @@ pub async fn run_server(
         while let Some(ev) = ui_event_rx.recv().await {
             match ev {
                 UiEvent::Log(msg) => {
-                    if debug || msg.starts_with("Peer ") || msg.starts_with("Listening on ") {
+                    if debug || msg.starts_with("Listening on ") || msg.starts_with("Hot-reloaded ") {
                         println!("[ostp-server] {msg}");
                     }
                 }
-                UiEvent::KeyCreated { key } => println!("[ostp-server] New access key created: {key}"),
+                UiEvent::KeyCreated { key } => {
+                    if debug {
+                        println!("[ostp-server] New access key created: {key}");
+                    }
+                }
                 UiEvent::UnauthorizedProbe { peer, bytes } => {
                     if debug {
                         println!("[ostp-server] WARNING: unauthorized probe from {peer} ({bytes} bytes)");

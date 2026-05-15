@@ -216,7 +216,6 @@ pub async fn run_client(config: crate::config::ClientConfig) -> Result<()> {
     if let Some(task) = wintun_task {
         let _ = task.await?;
     }
-    tunnel::cleanup().await?;
 
     Ok(())
 }

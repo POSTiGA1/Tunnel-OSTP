@@ -4,9 +4,37 @@ use tokio::sync::watch;
 #[cfg(target_os = "linux")]
 use std::net::ToSocketAddrs;
 #[cfg(target_os = "linux")]
-use std::process::{Command, Stdio};
+use std::process::{Command, Stdio, Child};
 #[cfg(target_os = "linux")]
 use std::io::{BufRead, BufReader};
+
+#[cfg(target_os = "linux")]
+struct LinuxRouteGuard {
+    server_ip_str: String,
+    default_gw: String,
+    default_if: String,
+    child: Option<Child>,
+}
+
+#[cfg(target_os = "linux")]
+impl Drop for LinuxRouteGuard {
+    fn drop(&mut self) {
+        if let Some(mut child) = self.child.take() {
+            let _ = child.kill();
+        }
+        let cleanup_script = format!(
+            "ip route del 0.0.0.0/1 dev ostp_tun || true; \
+             ip route del 128.0.0.0/1 dev ostp_tun || true; \
+             ip route del {} via {} dev {} || true; \
+             ip route del 1.1.1.1 via {} dev {} || true; \
+             ip link set dev ostp_tun down || true; \
+             ip tuntap del name ostp_tun mode tun || true",
+            self.server_ip_str, self.default_gw, self.default_if,
+            self.default_gw, self.default_if
+        );
+        let _ = Command::new("sh").args(["-c", &cleanup_script]).output();
+    }
+}
 
 #[cfg(target_os = "linux")]
 pub async fn run_linux_tunnel(
@@ -124,6 +152,13 @@ pub async fn run_linux_tunnel(
         .spawn()
         .map_err(|e| anyhow!("Failed to spawn tun2socks process: {}", e))?;
 
+    let mut _guard = LinuxRouteGuard {
+        server_ip_str: server_ip_str.clone(),
+        default_gw: default_gw.clone(),
+        default_if: default_if.clone(),
+        child: None,
+    };
+
     println!("[client] TUN Tunnel established, Linux traffic is now routing through OSTP.");
 
     if debug {
@@ -145,29 +180,15 @@ pub async fn run_linux_tunnel(
         });
     }
 
+    _guard.child = Some(child);
+
     // 6. Wait for shutdown signal
     let _ = shutdown.changed().await;
 
     println!("[client] Deactivating TUN tunnel and restoring Linux network topology...");
 
-    // 7. Terminate process
-    let _ = child.kill();
-
-    // 8. Cleanup routing and virtual interface
-    let cleanup_script = format!(
-        "ip route del 0.0.0.0/1 dev ostp_tun || true; \
-         ip route del 128.0.0.0/1 dev ostp_tun || true; \
-         ip route del {} via {} dev {} || true; \
-         ip route del 1.1.1.1 via {} dev {} || true; \
-         ip link set dev ostp_tun down || true; \
-         ip tuntap del name ostp_tun mode tun || true",
-        server_ip_str, default_gw, default_if,
-        default_gw, default_if
-    );
-
-    let _ = Command::new("sh")
-        .args(["-c", &cleanup_script])
-        .output()?;
+    // Drop guard runs cleanup automatically
+    drop(_guard);
 
     println!("[client] Linux TUN Tunnel stopped.");
     

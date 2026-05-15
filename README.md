@@ -109,6 +109,12 @@ Configuration parameters are defined within `config.json` aligned adjacent to th
 }
 ```
 
+> [!IMPORTANT]
+> **TUN Mode & Privileges**
+> To route all global operating system traffic through OSTP, change `"enable": false` to `true` in the `tun` object.
+> - **Windows**: Requires running `ostp` as Administrator. The pre-packaged `tun2socks.exe` dependency must be located next to the `ostp` binary.
+> - **Linux**: Requires running `ostp` as root. The `tun2socks` and `iproute2` packages must be available in the system PATH or alongside the binary.
+
 ### Execution Parameters
 
 Initiate telemetry processing by assigning the active configuration target:

@@ -123,6 +123,10 @@ impl ProtocolMachine {
         })
     }
 
+    pub fn in_flight_count(&self) -> usize {
+        self.sent_history.len()
+    }
+
     pub fn state(&self) -> OstpState {
         self.state
     }
