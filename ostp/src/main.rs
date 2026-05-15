@@ -191,6 +191,79 @@ async fn main() -> Result<()> {
     Ok(())
 }
 
+#[allow(dead_code)]
+fn is_private_ip(ip: &str) -> bool {
+    ip.starts_with("10.") 
+    || ip.starts_with("192.168.") 
+    || ip.starts_with("127.")
+    || (ip.starts_with("172.") && {
+        let parts: Vec<&str> = ip.split('.').collect();
+        if parts.len() >= 2 {
+            if let Ok(second) = parts[1].parse::<u8>() {
+                (16..=31).contains(&second)
+            } else { false }
+        } else { false }
+    })
+}
+
+fn detect_local_public_ip() -> Option<String> {
+    #[cfg(not(target_os = "windows"))]
+    {
+        let out = std::process::Command::new("ip")
+            .args(["-4", "addr", "show", "scope", "global"])
+            .output()
+            .ok()?;
+        
+        let text = String::from_utf8_lossy(&out.stdout);
+        for line in text.lines() {
+            if let Some(idx) = line.find("inet ") {
+                let substr = &line[idx + 5..];
+                let ip = substr.split(|c: char| c == '/' || c.is_whitespace()).next().unwrap_or("");
+                if !ip.is_empty() && !is_private_ip(ip) {
+                    return Some(ip.to_string());
+                }
+            }
+        }
+    }
+    None
+}
+
+fn get_or_ask_public_ip(config_path: &std::path::Path) -> String {
+    let config_dir = config_path.parent().unwrap_or_else(|| std::path::Path::new("."));
+    let cache_path = config_dir.join(".ostp_public_ip");
+
+    if cache_path.exists() {
+        if let Ok(cached) = std::fs::read_to_string(&cache_path) {
+            let ip = cached.trim().to_string();
+            if !ip.is_empty() {
+                return ip;
+            }
+        }
+    }
+
+    if let Some(detected) = detect_local_public_ip() {
+        println!("[OSTP Core] Auto-detected public network IP: {}", detected);
+        let _ = std::fs::write(&cache_path, &detected);
+        return detected;
+    }
+
+    print!("\n[OSTP Core] Could not automatically detect your Server's Public IP.\n");
+    print!(">>> Please enter your Public IP or Domain Name for user links: ");
+    use std::io::Write;
+    let _ = std::io::stdout().flush();
+
+    let mut input = String::new();
+    if std::io::stdin().read_line(&mut input).is_ok() {
+        let ip = input.trim().to_string();
+        if !ip.is_empty() {
+            let _ = std::fs::write(&cache_path, &ip);
+            return ip;
+        }
+    }
+
+    "<YOUR_SERVER_PUBLIC_IP>".to_string()
+}
+
 async fn run_app() -> Result<()> {
     let args = Args::parse();
     
@@ -262,8 +335,9 @@ async fn run_app() -> Result<()> {
         if is_server {
             if let AppMode::Server(s) = dummy.mode {
                 let key = &s.access_keys[0];
+                let host = get_or_ask_public_ip(&args.config);
                 println!("\n>>> Handy Client Share Link for your users:");
-                println!("  ostp://{}@<YOUR_SERVER_PUBLIC_IP>:50000", key);
+                println!("  ostp://{}@{}:50000", key, host);
             }
         }
         return Ok(());
@@ -293,7 +367,11 @@ async fn run_app() -> Result<()> {
                 let listen = server_cfg.listen.clone();
                 let parts: Vec<&str> = listen.split(':').collect();
                 let port = parts.get(1).unwrap_or(&"50000");
-                let host = if parts[0] == "0.0.0.0" { "<YOUR_SERVER_PUBLIC_IP>" } else { parts[0] };
+                let host = if parts[0] == "0.0.0.0" { 
+                    get_or_ask_public_ip(&args.config) 
+                } else { 
+                    parts[0].to_string() 
+                };
                 
                 println!("\n>>> Ready-to-use OSTP client share links from {:?}:", args.config);
                 for (idx, key) in server_cfg.access_keys.iter().enumerate() {
