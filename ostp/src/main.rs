@@ -27,7 +27,11 @@ struct Args {
     #[arg(short = 'c', long, default_value_t = 1)]
     count: usize,
 
-    /// Optional client connection share link (ostp://ACCESS_KEY@HOST:PORT/?tun=1) to run instantly
+    /// Output ready-to-use client sharing links (ostp://...) from the server configuration
+    #[arg(long)]
+    links: bool,
+
+    /// Optional client connection share link (ostp://ACCESS_KEY@HOST:PORT) to run instantly
     url: Option<String>,
 }
 
@@ -48,26 +52,15 @@ fn parse_ostp_link(link: &str) -> Result<ClientConfig> {
     let port = parsed.port().ok_or_else(|| anyhow!("Missing port in share link"))?;
     let server = format!("{host}:{port}");
 
-    let mut use_tun = false;
-    let mut socks5 = None;
-
-    for (k, v) in parsed.query_pairs() {
-        if k == "tun" && (v == "1" || v.eq_ignore_ascii_case("true")) {
-            use_tun = true;
-        }
-        if k == "socks5" {
-            socks5 = Some(v.to_string());
-        }
-    }
-
     Ok(ClientConfig {
         server,
         access_key,
-        socks5_bind: socks5,
+        socks5_bind: Some("127.0.0.1:1088".to_string()), // Fallback to standard SOCKS5 port
         tun: Some(TunConfig {
-            enable: use_tun,
+            enable: false, // Default to proxy, configurable via settings GUI
             wintun_path: Some("./wintun.dll".to_string()),
             ipv4_address: Some("10.1.0.2/24".to_string()),
+            dns: None,
         }),
         turn: None,
         debug: Some(false),
@@ -131,11 +124,12 @@ struct ClientConfig {
     mux: Option<MuxConfig>,
 }
 
-#[derive(Debug, Deserialize, Serialize)]
+#[derive(Debug, Deserialize, Serialize, Clone)]
 struct TunConfig {
     enable: bool,
     wintun_path: Option<String>,
     ipv4_address: Option<String>,
+    dns: Option<String>,
 }
 
 #[derive(Debug, Deserialize, Serialize)]
@@ -246,6 +240,7 @@ async fn run_app() -> Result<()> {
                         enable: false,
                         wintun_path: Some("./wintun.dll".to_string()),
                         ipv4_address: Some("10.1.0.2/24".to_string()),
+                        dns: None,
                     }),
                     turn: None,
                     debug: Some(false),
@@ -267,9 +262,8 @@ async fn run_app() -> Result<()> {
         if is_server {
             if let AppMode::Server(s) = dummy.mode {
                 let key = &s.access_keys[0];
-                println!("\n>>> Handy Client Share Links for your users:");
-                println!("  TUN mode:   ostp://{}@<YOUR_SERVER_PUBLIC_IP>:50000/?tun=1", key);
-                println!("  PROXY mode: ostp://{}@<YOUR_SERVER_PUBLIC_IP>:50000/?tun=0", key);
+                println!("\n>>> Handy Client Share Link for your users:");
+                println!("  ostp://{}@<YOUR_SERVER_PUBLIC_IP>:50000", key);
             }
         }
         return Ok(());
@@ -292,6 +286,26 @@ async fn run_app() -> Result<()> {
     let config_content = fs::read_to_string(&args.config)?;
     let config: UnifiedConfig = serde_json::from_str(&config_content)
         .map_err(|e| anyhow!("Failed to parse config: {}", e))?;
+
+    if args.links {
+        match config.mode {
+            AppMode::Server(server_cfg) => {
+                let listen = server_cfg.listen.clone();
+                let parts: Vec<&str> = listen.split(':').collect();
+                let port = parts.get(1).unwrap_or(&"50000");
+                let host = if parts[0] == "0.0.0.0" { "<YOUR_SERVER_PUBLIC_IP>" } else { parts[0] };
+                
+                println!("\n>>> Ready-to-use OSTP client share links from {:?}:", args.config);
+                for (idx, key) in server_cfg.access_keys.iter().enumerate() {
+                    println!("  [{}] ostp://{}@{}:{}", idx + 1, key, host, port);
+                }
+                return Ok(());
+            }
+            AppMode::Client(_) => {
+                anyhow::bail!("The configuration file is in Client mode. The --links flag can only extract keys from a Server configuration.");
+            }
+        }
+    }
 
     match config.mode {
         AppMode::Server(server_cfg) => {
@@ -370,6 +384,7 @@ async fn run_client_directly(client_cfg: ClientConfig) -> Result<()> {
             enabled: client_cfg.mux.as_ref().and_then(|m| m.enabled).unwrap_or(false),
             sessions: client_cfg.mux.as_ref().and_then(|m| m.sessions).unwrap_or(1),
         },
+        dns_server: client_cfg.tun.as_ref().and_then(|t| t.dns.clone()),
     };
     // Run the client implementation
     ostp_client::runner::run_client(client_conf).await?;

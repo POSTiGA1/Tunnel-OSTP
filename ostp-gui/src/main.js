@@ -28,8 +28,14 @@ const btnImportUrl = document.getElementById('btn-import-url');
 const inServer = document.getElementById('in-server');
 const inKey = document.getElementById('in-key');
 const inSocks = document.getElementById('in-socks');
+const inDns = document.getElementById('in-dns');
 const inTunMode = document.getElementById('in-tun-mode');
 const inDebug = document.getElementById('in-debug');
+
+// Exclusions Textareas
+const inExDomains = document.getElementById('in-ex-domains');
+const inExIps = document.getElementById('in-ex-ips');
+const inExProcesses = document.getElementById('in-ex-processes');
 
 // Utils
 function formatBytes(bytes) {
@@ -110,8 +116,6 @@ async function handleToggleConnect() {
         setUIState('disconnected');
       }
     } catch (err) {
-      // If the error tells that app exited (due to Admin elevation relaunching), don't show an alert.
-      // Elevation relaunching closes current app instance silently.
       console.error(err);
       setUIState('disconnected');
     }
@@ -183,7 +187,6 @@ async function loadConfigIntoFields() {
     const rawStr = await invoke('get_config');
     rawConfigObj = JSON.parse(rawStr);
     
-    // Determine if Server mode or Client mode is active
     const isClient = rawConfigObj.mode === 'client';
     const clientConf = isClient ? rawConfigObj : null;
 
@@ -195,7 +198,14 @@ async function loadConfigIntoFields() {
       const tunEnabled = clientConf.tun && clientConf.tun.enable;
       inTunMode.checked = !!tunEnabled;
       
+      inDns.value = (clientConf.tun && clientConf.tun.dns) || '';
       inDebug.checked = !!clientConf.debug;
+
+      // Load exclusions (arrays to multiline string)
+      const exc = clientConf.exclude || {};
+      inExDomains.value = (exc.domains || []).join('\n');
+      inExIps.value = (exc.ips || []).join('\n');
+      inExProcesses.value = (exc.processes || []).join('\n');
     } else {
       alert('Loaded configuration is for OSTP Server. Please adjust manually.');
     }
@@ -204,10 +214,15 @@ async function loadConfigIntoFields() {
   }
 }
 
+function parseTextAreaToArray(val) {
+  return val.split('\n')
+    .map(line => line.trim())
+    .filter(line => line.length > 0);
+}
+
 async function handleSaveConfig() {
   if (!rawConfigObj) rawConfigObj = { mode: 'client', log_level: 'info' };
   
-  // Enforce client settings format
   rawConfigObj.mode = 'client';
   rawConfigObj.server = inServer.value.trim();
   rawConfigObj.access_key = inKey.value.trim();
@@ -220,7 +235,18 @@ async function handleSaveConfig() {
     };
   }
   rawConfigObj.tun.enable = inTunMode.checked;
+  
+  const dnsVal = inDns.value.trim();
+  rawConfigObj.tun.dns = dnsVal ? dnsVal : null;
+
   rawConfigObj.debug = inDebug.checked;
+
+  // Save Exclusions
+  rawConfigObj.exclude = {
+    domains: parseTextAreaToArray(inExDomains.value),
+    ips: parseTextAreaToArray(inExIps.value),
+    processes: parseTextAreaToArray(inExProcesses.value)
+  };
 
   // Validation
   if (!rawConfigObj.server) {
@@ -244,7 +270,7 @@ async function handleSaveConfig() {
   }
 }
 
-// OSTP URI Sharing Parser
+// OSTP URI Sharing Parser (Simplified: only extract HOST & KEY)
 function handleImportUrl() {
   const urlStr = inImportUrl.value.trim();
   if (!urlStr) return;
@@ -253,27 +279,21 @@ function handleImportUrl() {
     if (!urlStr.startsWith('ostp://')) {
       throw new Error('Link must start with ostp://');
     }
-    // Standard URL parsing
     const url = new URL(urlStr);
     
     const accessKey = decodeURIComponent(url.username);
-    const serverHost = url.host; // Includes hostname:port
-    const useTun = url.searchParams.get('tun') === '1' || url.searchParams.get('tun') === 'true';
-    const socks5 = url.searchParams.get('socks5');
+    const serverHost = url.host; 
 
     if (!accessKey || !serverHost) {
       throw new Error('Incomplete parameters: missing key or server address.');
     }
 
-    // Update fields
+    // Update primary connection fields
     inServer.value = serverHost;
     inKey.value = accessKey;
-    inTunMode.checked = useTun;
-    if (socks5) inSocks.value = socks5;
 
-    inImportUrl.value = ''; // Clear import input
+    inImportUrl.value = ''; 
     
-    // Small animation or visual confirm
     inImportUrl.placeholder = 'Import successful!';
     setTimeout(() => { inImportUrl.placeholder = 'Paste ostp:// share link here...'; }, 2000);
 
@@ -299,7 +319,6 @@ window.addEventListener('DOMContentLoaded', async () => {
     if (e.key === 'Enter') handleImportUrl();
   });
 
-  // Check current status on startup
   try {
     const isAlive = await invoke('get_tunnel_status');
     if (isAlive) {

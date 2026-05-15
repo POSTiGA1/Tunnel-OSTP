@@ -474,7 +474,8 @@ h2 {
 }
 
 .form-group input[type="text"],
-.form-group input[type="password"] {
+.form-group input[type="password"],
+.form-group textarea {
   width: 100%;
   background: rgba(0, 0, 0, 0.15);
   border: 1px solid var(--glass-border);
@@ -484,11 +485,41 @@ h2 {
   font-size: 0.9rem;
   transition: all 0.3s;
   outline: none;
+  font-family: inherit;
 }
 
-.form-group input:focus {
+.form-group textarea {
+  resize: vertical;
+  min-height: 56px;
+  max-height: 120px;
+  font-family: 'JetBrains Mono', 'Courier New', monospace;
+  font-size: 0.8rem;
+  line-height: 1.4;
+}
+
+.form-group input:focus,
+.form-group textarea:focus {
   border-color: var(--accent-primary);
   background: rgba(0, 0, 0, 0.25);
+}
+
+.section-divider {
+  margin-top: 8px;
+  padding-top: 15px;
+  border-top: 1px solid rgba(255, 255, 255, 0.1);
+  font-size: 0.85rem;
+  font-weight: 600;
+  letter-spacing: 0.3px;
+  color: var(--text-primary);
+  display: flex;
+  justify-content: space-between;
+  align-items: baseline;
+}
+
+.divider-hint {
+  font-size: 0.65rem;
+  color: var(--text-secondary);
+  font-weight: 400;
 }
 
 .label-stack {

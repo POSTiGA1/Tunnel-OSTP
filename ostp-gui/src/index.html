@@ -98,6 +98,11 @@
             <input type="text" id="in-socks" placeholder="127.0.0.1:1088" />
           </div>
 
+          <div class="form-group">
+            <label for="in-dns">Custom DNS Server</label>
+            <input type="text" id="in-dns" placeholder="8.8.8.8 (Optional)" />
+          </div>
+
           <div class="form-group row-align">
             <div class="label-stack">
               <span class="toggle-label">TUN Tunnel Mode</span>
@@ -118,6 +123,24 @@
               <input type="checkbox" id="in-debug">
               <span class="slider round"></span>
             </label>
+          </div>
+
+          <!-- Exclusions Section Divider -->
+          <div class="section-divider">Exclusions <span class="divider-hint">(one per line)</span></div>
+
+          <div class="form-group">
+            <label for="in-ex-domains">Bypass Domains</label>
+            <textarea id="in-ex-domains" placeholder="example.com" rows="2"></textarea>
+          </div>
+
+          <div class="form-group">
+            <label for="in-ex-ips">Bypass IP Ranges</label>
+            <textarea id="in-ex-ips" placeholder="192.168.1.0/24" rows="2"></textarea>
+          </div>
+
+          <div class="form-group">
+            <label for="in-ex-processes">Bypass Processes (Proxy Mode)</label>
+            <textarea id="in-ex-processes" placeholder="chrome.exe" rows="2"></textarea>
           </div>
         </div>
         

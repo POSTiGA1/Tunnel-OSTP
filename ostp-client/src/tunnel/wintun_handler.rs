@@ -126,22 +126,29 @@ pub async fn run_wintun_tunnel(
         child: None, // Will set below
     };
 
-    // 5. Once tun2socks creates the interface, apply network settings (IP, metric)
+    // 5. Once tun2socks creates the interface, apply network settings (IP, metric, MTU)
     tokio::time::sleep(tokio::time::Duration::from_secs(2)).await;
 
     if debug {
         println!("[ostp-client] Applying network configurations onto 'ostp_tun' interface...");
     }
 
-    // We omit setting dnsservers on the TUN interface entirely. This allows Windows to natively fallback
-    // to the physical interface DNS servers, which are physically routed and work flawlessly.
-    let net_setup = "\
+    let mut net_setup = String::from("\
         netsh interface ipv4 set address name=\"ostp_tun\" static 10.1.0.2 255.255.255.0 10.1.0.1\n\
         netsh interface ipv4 set subinterface \"ostp_tun\" mtu=1300 store=persistent\n\
-        netsh interface ipv4 set interface name=\"ostp_tun\" metric=5\n";
+        netsh interface ipv4 set interface name=\"ostp_tun\" metric=5\n");
+    
+    if let Some(ref dns) = config.dns_server {
+        if !dns.is_empty() {
+            if debug {
+                println!("[ostp-client] Applying custom DNS server: {}", dns);
+            }
+            net_setup.push_str(&format!("netsh interface ipv4 set dnsservers name=\"ostp_tun\" static {} primary\n", dns));
+        }
+    }
     
     let _ = Command::new("powershell")
-        .args(["-Command", net_setup])
+        .args(["-Command", &net_setup])
         .output()?;
 
     println!("[client] TUN Tunnel established, internet traffic is now routing through OSTP.");

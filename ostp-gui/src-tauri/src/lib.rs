@@ -39,6 +39,7 @@ struct TunConfig {
     enable: bool,
     wintun_path: Option<String>,
     ipv4_address: Option<String>,
+    dns: Option<String>,
 }
 
 #[derive(Debug, Deserialize, Serialize, Clone)]
@@ -224,6 +225,7 @@ async fn start_tunnel(state: tauri::State<'_, AppState>) -> Result<bool, String>
             enabled: client_cfg.mux.as_ref().and_then(|m| m.enabled).unwrap_or(false),
             sessions: client_cfg.mux.as_ref().and_then(|m| m.sessions).unwrap_or(1),
         },
+        dns_server: client_cfg.tun.as_ref().and_then(|t| t.dns.clone()),
     };
 
     let metrics = Arc::new(BridgeMetrics {

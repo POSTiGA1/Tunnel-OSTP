@@ -17,6 +17,7 @@ pub struct ClientConfig {
     pub exclusions: ExclusionConfig,
     #[serde(default)]
     pub multiplex: MultiplexConfig,
+    pub dns_server: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
@@ -101,6 +102,7 @@ impl Default for ClientConfig {
             turn: TurnConfig::default(),
             exclusions: ExclusionConfig::default(),
             multiplex: MultiplexConfig::default(),
+            dns_server: None,
         }
     }
 }
@@ -132,6 +134,7 @@ struct RawUnifiedConfig {
 #[derive(Debug, Deserialize)]
 struct RawTunSection {
     enable: Option<bool>,
+    dns: Option<String>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -198,6 +201,7 @@ impl ClientConfig {
                 enabled: mux.enabled.unwrap_or(false),
                 sessions: mux.sessions.unwrap_or(1),
             },
+            dns_server: raw.tun.as_ref().and_then(|t| t.dns.clone()),
         })
     }
 }
