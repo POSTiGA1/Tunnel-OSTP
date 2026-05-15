@@ -131,6 +131,25 @@ struct MuxConfig {
 
 #[tokio::main]
 async fn main() -> Result<()> {
+    let res = run_app().await;
+    if let Err(e) = res {
+        eprintln!("\n====================================================");
+        eprintln!("[FATAL ERROR] Program terminated unexpectedly:");
+        eprintln!("  {}", e);
+        eprintln!("====================================================");
+        
+        #[cfg(target_os = "windows")]
+        {
+            println!("\nPress ENTER key to close this window...");
+            let mut dummy = String::new();
+            let _ = std::io::stdin().read_line(&mut dummy);
+        }
+        std::process::exit(1);
+    }
+    Ok(())
+}
+
+async fn run_app() -> Result<()> {
     let args = Args::parse();
     
     if args.generate_key {
