@@ -153,7 +153,7 @@ pub async fn run_client_core(
         println!("[ostp-client] WARNING: process exclusions are not supported in the current TUN implementation");
     }
 
-    let (proxy_events_tx, proxy_events_rx) = mpsc::channel(10000);
+    let (proxy_events_tx, proxy_events_rx) = mpsc::channel(256);
     let (client_msgs_tx, client_msgs_rx) = mpsc::unbounded_channel();
 
     let bridge = Bridge::new(&config, metrics)?;

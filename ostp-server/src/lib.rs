@@ -126,11 +126,11 @@ pub async fn run_server(
         padding_strategy: PaddingStrategy::Adaptive,
         obfuscation_key: [0u8; 8],
         max_reorder: 262144,
-        max_reorder_buffer: 8192,
+        max_reorder_buffer: 32768,
         ack_delay_ms: 5,   // Reduced to 5ms for drastically faster ACK loopback throughput
         rto_ms: 100,       // Reduced to 100ms for aggressive, low-latency packet recovery
         max_retries: 8,
-        max_sent_history: 16384,
+        max_sent_history: 65536,
     };
 
     let dispatcher = Dispatcher::new(protocol_config, shared_keys.clone());
