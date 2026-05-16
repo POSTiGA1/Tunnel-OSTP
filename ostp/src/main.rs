@@ -374,6 +374,14 @@ async fn run_app() -> Result<()> {
     "processes": []
   }},
   
+  // STUN/TURN server settings to bypass UDP blocks by mimicking WebRTC call traffic
+  "turn": {{
+    "enabled": false,
+    "server_addr": "127.0.0.1:3478",
+    "username": "ostpuser",
+    "access_key": "ostppassword"
+  }},
+  
   "mux": {{
     "enabled": false,
     "sessions": 1
