@@ -25,9 +25,21 @@ pub async fn wait_for_shutdown_signal() -> Result<()> {
         let mut c_break = ctrl_break()?;
 
         tokio::select! {
-            _ = c_c.recv() => {}
-            _ = c_close.recv() => {}
-            _ = c_break.recv() => {}
+            res = c_c.recv() => {
+                if res.is_none() {
+                    std::future::pending::<()>().await;
+                }
+            }
+            res = c_close.recv() => {
+                if res.is_none() {
+                    std::future::pending::<()>().await;
+                }
+            }
+            res = c_break.recv() => {
+                if res.is_none() {
+                    std::future::pending::<()>().await;
+                }
+            }
         }
     }
     #[cfg(not(target_os = "windows"))]
