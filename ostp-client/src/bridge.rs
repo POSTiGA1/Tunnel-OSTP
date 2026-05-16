@@ -261,6 +261,7 @@ impl Bridge {
                 }
                 _ = keepalive_tick.tick() => {
                     if self.running {
+                        // 1. Connection Liveness Check
                         if self.last_valid_recv.elapsed().as_secs() > 15 {
                             let _ = tx.send(UiEvent::Log("Connection timeout (no UDP packets received). Dropping connection.".into())).await;
                             self.running = false;
@@ -271,12 +272,22 @@ impl Bridge {
                             self.metrics.connection_state.store(0, Ordering::Relaxed);
                             continue;
                         }
+
+                        // 2. Active Keep-Alive / Heartbeat
                         if let Some(sessions) = sessions_opt.as_mut() {
                             for session in sessions.iter_mut() {
+                                // Send Ping (Internal Metric)
                                 let ts = SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_millis() as u64;
-                                let payload = Bytes::from(RelayMessage::Ping(ts).encode());
-                                if let Ok(ProtocolAction::SendDatagram(frame)) = session.machine.on_event(OstpEvent::Outbound(0, payload)) {
+                                let ping_payload = Bytes::from(RelayMessage::Ping(ts).encode());
+                                if let Ok(ProtocolAction::SendDatagram(frame)) = session.machine.on_event(OstpEvent::Outbound(0, ping_payload)) {
                                     let _ = session.socket.send(&frame).await;
+                                    self.metrics.bytes_sent.fetch_add(frame.len() as u64, Ordering::Relaxed);
+                                }
+
+                                // Send Relay KeepAlive (Force NAT/Server Persistence)
+                                let ka_payload = Bytes::from(RelayMessage::KeepAlive.encode());
+                                if let Ok(ProtocolAction::SendDatagram(frame)) = session.machine.on_event(OstpEvent::Outbound(0, ka_payload)) {
+                                    let _ = send_datagram(&session.socket, &frame, self.turn_enabled).await;
                                     self.metrics.bytes_sent.fetch_add(frame.len() as u64, Ordering::Relaxed);
                                 }
                             }
@@ -413,18 +424,7 @@ impl Bridge {
                         }
                     }
                 }
-                _ = keepalive_tick.tick(), if self.running => {
-                    if let Some(sessions) = sessions_opt.as_mut() {
-                        for session in sessions.iter_mut() {
-                            let payload = Bytes::from(RelayMessage::KeepAlive.encode());
-                            // stream_id 0 is reserved for control messages
-                            if let Ok(ProtocolAction::SendDatagram(frame)) = session.machine.on_event(OstpEvent::Outbound(0, payload)) {
-                                let _ = send_datagram(&session.socket, &frame, self.turn_enabled).await;
-                                self.metrics.bytes_sent.fetch_add(frame.len() as u64, Ordering::Relaxed);
-                            }
-                        }
-                    }
-                }
+
                 udp_msg = async {
                     match udp_rx_opt.as_mut() {
                         Some(rx) => rx.recv().await,

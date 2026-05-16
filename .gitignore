@@ -1,6 +1,7 @@
 /target/
 /target_build/
 /target_linux/
+/ostp-gui/
 /dist/
 **/*.rs.bk
 .idea/

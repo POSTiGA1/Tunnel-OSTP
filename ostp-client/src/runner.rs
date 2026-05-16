@@ -243,26 +243,28 @@ pub async fn run_client_core(
         _ = shutdown_rx_ext.changed() => {
             let _ = cmd_tx.send(BridgeCommand::Shutdown).await;
             let _ = shutdown_tx.send(true);
-            let _ = bridge_task.await;
-            let _ = proxy_task.await;
-            if let Some(task) = wintun_task {
-                let _ = task.await;
-            }
         }
-        res = bridge_task => {
+        res = &mut bridge_task => {
             let _ = shutdown_tx.send(true);
             res.map_err(|e| anyhow::anyhow!("Bridge task panicked: {}", e))??;
         }
-        res = proxy_task => {
+        res = &mut proxy_task => {
             let _ = shutdown_tx.send(true);
             res.map_err(|e| anyhow::anyhow!("Proxy task panicked: {}", e))??;
         }
         res = async {
-            if let Some(t) = wintun_task { t.await } else { std::future::pending().await }
+            if let Some(t) = wintun_task.as_mut() { t.await } else { std::future::pending().await }
         } => {
             let _ = shutdown_tx.send(true);
             res.map_err(|e| anyhow::anyhow!("TUN task panicked: {}", e))??;
         }
+    }
+
+    // Final cleanup: wait for tasks to finish
+    let _ = bridge_task.await;
+    let _ = proxy_task.await;
+    if let Some(task) = wintun_task {
+        let _ = task.await;
     }
 
     Ok(())

@@ -1,93 +1,117 @@
-# OSTP (Ospab Stealth Transport Protocol)
+# 🌌 OSTP (Ospab Stealth Transport Protocol)
 
-OSTP is a simple and fast tunnel protocol designed to bypass network restrictions. It hides your traffic and makes it look like random noise, making it hard to block.
+![GitHub Release](https://img.shields.io/github/v/release/ospab/ostp?style=flat-square&color=blue)
+![License: BSL 1.1](https://img.shields.io/badge/License-BSL%201.1-orange.svg?style=flat-square)
+![Platform: Windows | Linux | macOS | Android](https://img.shields.io/badge/Platform-Windows%20%7C%20Linux%20%7C%20macOS%20%7C%20Android-green.svg?style=flat-square)
+![Rust: 1.75+](https://img.shields.io/badge/Rust-1.75%2B-red.svg?style=flat-square)
 
----
+**OSTP** is a next-generation, high-performance stealth transport protocol engineered for absolute privacy and network resilience. It transforms your data streams into high-entropy, featureless noise, making it virtually undetectable by statistical network analysis (DPI).
 
-## Main Features
-
-- **Traffic Masking**: Hides your data so it doesn't look like a VPN or proxy.
-- **Fast & Reliable**: Works well on unstable networks (like mobile data).
-- **Easy Setup**: Simple config files and one-click installers.
-- **Universal**: Works on Windows, Linux, and Android.
-- **SOCKS5/HTTP**: Supports standard proxy modes.
-- **TUN Mode**: Can act as a full VPN for your entire system.
+Whether you are navigating restrictive network environments, securing industrial telemetry, or just seeking a robust personal tunnel, OSTP provides the stability and speed you need.
 
 ---
 
-## Quick Install
+## ✨ Core Features
 
-### Linux (Server or Client)
-Run this command to install OSTP and set it up as a service:
+### 🛡️ Indistinguishable Traffic (Stealth)
+Unlike traditional VPNs (OpenVPN, WireGuard) that have distinct packet signatures, OSTP uses advanced **Keystream Scrambling** and **Adaptive Block Shaping**. Your traffic looks like random bytes, bypassing even the most aggressive firewalls.
+
+### 🚀 Extreme Performance
+Written from the ground up in **Rust** and utilizing the **gVisor network stack**, OSTP is optimized for zero-copy data processing and high-throughput multiplexing. It easily handles 1Gbps+ streams with minimal CPU overhead.
+
+### 📱 Cross-Platform Dominance
+- **Windows**: Full support for TUN mode via Wintun and SOCKS5/HTTP proxying.
+- **Linux**: Native high-performance daemon with systemd integration.
+- **Android**: Integrated JNI core for mobile applications.
+- **macOS/FreeBSD**: Standard CLI support for proxying and routing.
+
+### 🔄 Intelligent Multiplexing (Mux)
+Handle hundreds of concurrent streams over a single connection. OSTP includes a built-in Arq-based reliable transport layer that manages retransmissions and flow control automatically.
+
+### 🏠 Robust Liveness (Keep-Alive)
+Stays connected where others fail. The intelligent heartbeat system keeps NAT mappings alive and ensures the tunnel stays active even during long periods of idle time or network handoffs.
+
+---
+
+## 🛠️ Architecture
+
+The project is organized into a modular workspace:
+- **ostp-core**: The base cryptographic and framing library.
+- **ostp-client**: High-level client logic, proxy servers, and TUN management.
+- **ostp-server**: High-performance multi-tenant server implementation.
+- **ostp**: The main CLI binary (The "Core").
+- **ostp-jni**: Android/Mobile bindings.
+- *Note: The experimental GUI is currently in a separate testing phase.*
+
+---
+
+## 📥 Getting Started
+
+### 🐧 Linux (One-Line Installer)
 ```bash
 bash <(curl -Ls https://raw.githubusercontent.com/ospab/ostp/master/scripts/install.sh)
 ```
 
-### Windows (Client)
-Run this in **PowerShell as Administrator**:
+### 🪟 Windows (One-Line Installer)
 ```powershell
+# Run as Administrator
 irm https://raw.githubusercontent.com/ospab/ostp/master/scripts/install.ps1 | iex
 ```
 
 ---
 
-## How to Use
+## ⚙️ Configuration
 
-The `ostp` program can work in two modes: **Server** (on your VPS) and **Client** (on your local computer).
-
-### 1. Create a Config File
-Run the program with the `--init` flag to generate a template:
-
-**On Server:**
+Generate your template first:
 ```bash
-./ostp --init server
+./ostp --init server # On VPS
+./ostp --init client # On Local PC
 ```
 
-**On Client:**
-```bash
-./ostp --init client
-```
-
-### 2. Configure
-
-#### Server (`config.json`)
+### Server Example (`config.json`)
 ```json
 {
+  "_comment": "OSTP Server Configuration",
   "mode": "server",
   "listen": "0.0.0.0:50000",
   "access_keys": [
-    "your-secret-key-here"
-  ]
-}
-```
-
-#### Client (`config.json`)
-```json
-{
-  "mode": "client",
-  "server": "YOUR_SERVER_IP:50000",
-  "access_key": "your-secret-key-here",
-  "socks5_bind": "127.0.0.1:1088",
-  "tun": {
-    "enable": false
+    "YOUR_GENERATED_KEY"
+  ],
+  "_comment_outbound": "Optional: forward traffic to another proxy (e.g. Tor)",
+  "outbound": {
+    "enabled": false,
+    "protocol": "socks5",
+    "address": "127.0.0.1",
+    "port": 9050,
+    "default_action": "proxy"
   }
 }
 ```
 
-### 3. Start
-Run the program using your config:
-```bash
-./ostp --config config.json
+### Client Example (`config.json`)
+```json
+{
+  "_comment": "OSTP Client Configuration",
+  "mode": "client",
+  "server": "SERVER_IP:50000",
+  "access_key": "YOUR_GENERATED_KEY",
+  "socks5_bind": "127.0.0.1:1088",
+  "tun": {
+    "enable": false,
+    "wintun_path": "./wintun.dll",
+    "ipv4_address": "10.1.0.2/24",
+    "dns": "1.1.1.1"
+  }
+}
 ```
 
 ---
 
-## TUN Mode (VPN for whole system)
-To route all your traffic through OSTP, set `"enable": true` in the `tun` section of your client config.
-- **Windows**: Requires Administrator rights.
-- **Linux**: Requires Root rights.
+## 📜 License & Legal
 
----
+OSTP is published under the **Business Source License 1.1 (BSL)**. 
+- **Personal/Private use**: Free and unrestricted.
+- **Commercial use**: Requires a separate agreement until the change date.
+- **Change Date**: May 14, 2030 (converts to **MIT License**).
 
-## License
-OSTP is licensed under the Business Source License 1.1. It is free for personal and non-commercial use. It becomes MIT License on May 14, 2030.
+See the [LICENSE](LICENSE) file for more details.
