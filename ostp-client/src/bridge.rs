@@ -609,9 +609,14 @@ impl Bridge {
             max_sent_history: 65536, // Greatly expanded to guarantee that oldest unacked packets are not prematurely popped and lost
         })?;
 
-        let socket = UdpSocket::bind(&self.local_bind_addr)
-            .await
-            .with_context(|| format!("failed to bind local udp {}", self.local_bind_addr))?;
+        let addr = self.local_bind_addr.parse::<std::net::SocketAddr>().map_err(|e| anyhow::anyhow!("invalid bind addr: {}", e))?;
+        let domain = if addr.is_ipv6() { socket2::Domain::IPV6 } else { socket2::Domain::IPV4 };
+        let sock = socket2::Socket::new(domain, socket2::Type::DGRAM, Some(socket2::Protocol::UDP))?;
+        let _ = sock.set_recv_buffer_size(33554432); // 32MB
+        let _ = sock.set_send_buffer_size(33554432); // 32MB
+        sock.bind(&addr.into())?;
+        sock.set_nonblocking(true)?;
+        let socket = UdpSocket::from_std(sock.into())?;
 
         if self.turn_enabled {
             let turn_addr = if self.turn_server.contains(':') {

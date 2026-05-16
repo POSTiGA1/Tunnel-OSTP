@@ -116,7 +116,14 @@ pub async fn run_server(
         }
     });
 
-    let socket = UdpSocket::bind(&bind_addr).await?;
+    let addr = bind_addr.parse::<std::net::SocketAddr>().map_err(|e| anyhow::anyhow!("invalid bind addr: {}", e))?;
+    let domain = if addr.is_ipv6() { socket2::Domain::IPV6 } else { socket2::Domain::IPV4 };
+    let sock = socket2::Socket::new(domain, socket2::Type::DGRAM, Some(socket2::Protocol::UDP))?;
+    let _ = sock.set_recv_buffer_size(33554432); // 32MB
+    let _ = sock.set_send_buffer_size(33554432); // 32MB
+    sock.bind(&addr.into())?;
+    sock.set_nonblocking(true)?;
+    let socket = UdpSocket::from_std(sock.into())?;
     let protocol_config = ProtocolConfig {
         role: NoiseRole::Responder,
         psk: [0u8; 32],
