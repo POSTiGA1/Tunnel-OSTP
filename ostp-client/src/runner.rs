@@ -163,7 +163,6 @@ pub async fn run_client_core(
     let (shutdown_tx, shutdown_rx) = watch::channel(false);
     let proxy_shutdown_rx = shutdown_tx.subscribe();
 
-    let is_tun = config.mode == "tun";
 
     // Auto-connect on startup
     let _ = cmd_tx.send(BridgeCommand::ToggleTunnel).await;
@@ -196,11 +195,7 @@ pub async fn run_client_core(
                     }
                 }
                 crate::app::UiEvent::TunnelStopped => {
-                    if is_tun {
-                        println!("[client] tunnel=tun stopped, reconnecting in 5s");
-                    } else {
-                        println!("[client] tunnel=proxy stopped, reconnecting in 5s");
-                    }
+                    println!("[client] Connection lost or failed. Reconnecting in 5s...");
                     let cmd_tx_inner = cmd_tx_clone.clone();
                     tokio::spawn(async move {
                         tokio::time::sleep(tokio::time::Duration::from_secs(5)).await;

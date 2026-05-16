@@ -255,7 +255,7 @@ async fn run_server_loop(
                             peer_last_seen.insert(peer_ip, now);
                             if !peer_available.get(&peer_ip).copied().unwrap_or(false) {
                                 peer_available.insert(peer_ip, true);
-                                let _ = ui_event_tx.send(UiEvent::Log(format!("Peer {peer_ip} available")));
+                                let _ = ui_event_tx.send(UiEvent::Log(format!("Client {peer_ip} connected")));
                             }
 
                             if app_payloads.is_empty() && now.duration_since(last_empty_app_log) > Duration::from_secs(5) {
@@ -315,7 +315,7 @@ async fn run_server_loop(
                     let is_available = peer_available.get(peer_ip).copied().unwrap_or(false);
                     if is_available && now.duration_since(*last_seen) > peer_timeout {
                         peer_available.insert(*peer_ip, false);
-                        let _ = ui_event_tx.send(UiEvent::Log(format!("Peer {peer_ip} unavailable")));
+                        let _ = ui_event_tx.send(UiEvent::Log(format!("Client {peer_ip} disconnected (timeout)")));
                     }
                 }
                 let (frames, dropped_sessions) = dispatcher.on_tick();
