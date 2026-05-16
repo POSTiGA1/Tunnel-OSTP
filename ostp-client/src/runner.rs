@@ -211,12 +211,12 @@ pub async fn run_client_core(
         }
     });
 
-    let bridge_task = tokio::spawn(async move {
+    let mut bridge_task = tokio::spawn(async move {
         bridge.run(ui_tx, cmd_rx, shutdown_rx, proxy_events_rx, client_msgs_tx).await
     });
 
     let config_clone = config.clone();
-    let proxy_task = tokio::spawn(async move {
+    let mut proxy_task = tokio::spawn(async move {
         tunnel::run_local_proxy(
             config.local_proxy,
             config.ostp,
@@ -230,7 +230,7 @@ pub async fn run_client_core(
     });
 
     let wintun_shutdown_rx = shutdown_tx.subscribe();
-    let wintun_task = if config_clone.mode == "tun" {
+    let mut wintun_task = if config_clone.mode == "tun" {
         Some(tokio::spawn(async move {
             tunnel::run_tun_tunnel(config_clone, wintun_shutdown_rx).await
         }))

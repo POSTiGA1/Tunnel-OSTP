@@ -381,15 +381,18 @@ async fn run_app() -> Result<()> {
   "debug": false
 }}"#, key)
         };
-        fs::write(&args.config, content)?;
+        fs::write(&args.config, &content)?;
         println!("Successfully initialized configuration at {:?}", args.config);
         
         if is_server {
-            if let AppMode::Server(s) = dummy.mode {
-                let key = &s.access_keys[0];
-                let host = get_or_ask_public_ip(&args.config);
-                println!("\n>>> Handy Client Share Link for your users:");
-                println!("  ostp://{}@{}:50000", key, host);
+            let mut stripped = json_comments::StripComments::new(content.as_bytes());
+            if let Ok(config) = serde_json::from_reader::<_, UnifiedConfig>(&mut stripped) {
+                if let AppMode::Server(s) = config.mode {
+                    let key = &s.access_keys[0];
+                    let host = get_or_ask_public_ip(&args.config);
+                    println!("\n>>> Handy Client Share Link for your users:");
+                    println!("  ostp://{}@{}:50000", key, host);
+                }
             }
         }
         return Ok(());
