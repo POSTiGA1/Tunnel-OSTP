@@ -37,7 +37,7 @@ pub async fn run_wintun_tunnel(
     let debug = config.debug;
 
     if debug {
-        println!("[ostp-client] Initializing high-performance TUN tunnel via tun2socks...");
+        println!("[ostp] Initializing TUN tunnel...");
     }
 
     let exe = std::env::current_exe()?;
@@ -64,12 +64,12 @@ pub async fn run_wintun_tunnel(
     let server_ip_str = server_ip.to_string();
 
     if debug {
-        println!("[ostp-client] Resolved remote server IP: {}", server_ip_str);
+        println!("[ostp-client] Resolved server IP: {}", server_ip_str);
     }
 
     // 3. Run PowerShell script to configure system routes
     if debug {
-        println!("[ostp-client] Injecting system routing tables and excluding remote proxy...");
+        println!("[ostp-client] Configuring system routes...");
     }
 
     let current_exe = std::env::current_exe()?.to_string_lossy().into_owned();
@@ -111,7 +111,7 @@ pub async fn run_wintun_tunnel(
     let proxy_url = format!("http://{}", config.local_proxy.bind_addr);
     
     if debug {
-        println!("[ostp-client] Spawning tun2socks daemon pointing to {}", proxy_url);
+        println!("[ostp-client] Starting tun2socks (proxy={})", proxy_url);
     }
 
     // Spawning buffer to allow local proxy listener to finish binding to local address
@@ -139,7 +139,7 @@ pub async fn run_wintun_tunnel(
     tokio::time::sleep(tokio::time::Duration::from_secs(2)).await;
 
     if debug {
-        println!("[ostp-client] Applying network configurations onto 'ostp_tun' interface...");
+        println!("[ostp-client] Applying network configuration...");
     }
 
     let mut net_setup = String::from("\
@@ -150,7 +150,7 @@ pub async fn run_wintun_tunnel(
     if let Some(ref dns) = config.dns_server {
         if !dns.is_empty() {
             if debug {
-                println!("[ostp-client] Applying custom DNS server: {}", dns);
+                println!("[ostp-client] DNS server: {}", dns);
             }
             net_setup.push_str(&format!("netsh interface ipv4 set dnsservers name=\"ostp_tun\" static {} primary\n", dns));
         }
@@ -161,7 +161,7 @@ pub async fn run_wintun_tunnel(
         .args(["-Command", &net_setup])
         .output()?;
 
-    println!("[client] TUN Tunnel established, internet traffic is now routing through OSTP.");
+    println!("[ostp] TUN tunnel active. All traffic is routed through OSTP.");
 
     // 6. Spawn thread to keep logging tun2socks output if in debug mode
     let mut stdout = child.stdout.take();
@@ -192,12 +192,12 @@ pub async fn run_wintun_tunnel(
     // 7. Wait for shutdown signal
     let _ = shutdown.changed().await;
 
-    println!("[client] Deactivating TUN tunnel and restoring system network topology...");
+    println!("[ostp] Deactivating TUN tunnel...");
 
     // Drop guard runs cleanup automatically
     drop(_guard);
 
-    println!("[client] TUN Tunnel stopped.");
+    println!("[ostp] TUN tunnel stopped.");
     
     Ok(())
 }

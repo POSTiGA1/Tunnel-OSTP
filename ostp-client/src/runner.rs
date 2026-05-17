@@ -110,7 +110,7 @@ fn relaunch_as_admin() -> Result<()> {
 pub async fn run_client(config: crate::config::ClientConfig) -> Result<()> {
     #[cfg(target_os = "windows")]
     if config.mode == "tun" && !is_admin() {
-        println!("[ostp-client] TUN mode requires Administrator privileges. Relaunching executable as Admin...");
+        println!("[ostp] TUN mode requires administrator privileges. Relaunching...");
         relaunch_as_admin()?;
     }
 
@@ -150,7 +150,7 @@ pub async fn run_client_core(
     log_to_core_file(&format!("[core] Starting run_client_core in mode: {}", config.mode));
 
     if config.mode == "tun" && !config.exclusions.processes.is_empty() {
-        println!("[ostp-client] WARNING: process exclusions are not supported in the current TUN implementation");
+        println!("[ostp] Process exclusions are not supported in TUN mode");
     }
 
     let (proxy_events_tx, proxy_events_rx) = mpsc::channel(256);
@@ -177,25 +177,25 @@ pub async fn run_client_core(
             match msg {
                 crate::app::UiEvent::Log(text) => {
                     if debug_enabled || is_essential_log(&text) {
-                        log_to_core_file(&format!("[client] {text}"));
-                        println!("[client] {text}");
+                        log_to_core_file(&format!("[ostp] {text}"));
+                        println!("[ostp] {text}");
                     }
                 }
                 crate::app::UiEvent::Metrics { status, rtt_ms, .. } => {
                     let status_str = status.as_str().to_string();
                     if last_status != Some(status_str.clone()) {
                         last_status = Some(status_str.clone());
-                        println!("[client] status={status_str} rtt_ms={:.1}", rtt_ms);
+                        println!("[ostp] Status: {} (rtt={:.1}ms)", status_str, rtt_ms);
                     }
                 }
                 crate::app::UiEvent::Traffic { .. } => {}
                 crate::app::UiEvent::ProfileChanged(profile) => {
                     if debug_enabled {
-                        println!("[client] profile={profile:?}");
+                        println!("[ostp] Obfuscation profile: {profile:?}");
                     }
                 }
                 crate::app::UiEvent::TunnelStopped => {
-                    println!("[client] Connection lost or failed. Reconnecting in 5s...");
+                    println!("[ostp] Connection interrupted. Reconnecting in 5 seconds...");
                     let cmd_tx_inner = cmd_tx_clone.clone();
                     tokio::spawn(async move {
                         tokio::time::sleep(tokio::time::Duration::from_secs(5)).await;
@@ -280,14 +280,15 @@ fn is_essential_log(text: &str) -> bool {
     matches!(
         text,
         "Connection established"
-            | "TUN Tunnel established"
+            | "TUN tunnel established"
+            | "TUN tunnel stopped"
             | "Bridge stopped"
-            | "TUN Tunnel stopped"
             | "Runtime config reloaded"
             | "Connecting to remote server..."
-    ) || text.starts_with("Connected UDP directly to ")
-        || text.starts_with("TURN: Relay allocated")
+    ) || text.starts_with("Connected to ")
+        || text.starts_with("TURN relay allocated")
         || text.starts_with("TURN allocation failed")
+        || text.starts_with("Allocating TURN relay")
         || text.starts_with("Connection failed:")
         || text.starts_with("Connection lost")
         || text.starts_with("Protocol tick fatal error")

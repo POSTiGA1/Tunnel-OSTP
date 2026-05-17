@@ -203,10 +203,9 @@ struct MuxConfig {
 async fn main() -> Result<()> {
     let res = run_app().await;
     if let Err(e) = res {
-        eprintln!("\n====================================================");
-        eprintln!("[FATAL ERROR] Program terminated unexpectedly:");
-        eprintln!("  {}", e);
-        eprintln!("====================================================");
+        eprintln!();
+        eprintln!("[ostp] Fatal error: {}", e);
+        eprintln!();
         
         #[cfg(target_os = "windows")]
         {
@@ -270,13 +269,13 @@ fn get_or_ask_public_ip(config_path: &std::path::Path) -> String {
     }
 
     if let Some(detected) = detect_local_public_ip() {
-        println!("[OSTP Core] Auto-detected public network IP: {}", detected);
+        println!("[ostp] Detected public IP: {}", detected);
         let _ = std::fs::write(&cache_path, &detected);
         return detected;
     }
 
-    print!("\n[OSTP Core] Could not automatically detect your Server's Public IP.\n");
-    print!(">>> Please enter your Public IP or Domain Name for user links: ");
+    print!("\n[ostp] Could not detect the server public IP automatically.\n");
+    print!("  Enter your public IP or domain: ");
     use std::io::Write;
     let _ = std::io::stdout().flush();
 
@@ -303,7 +302,7 @@ async fn run_app() -> Result<()> {
     }
 
     if let Some(url) = args.url {
-        println!("[OSTP Core] Booting direct client connection via share link...");
+        println!("[ostp] Connecting via share link...");
         let client_cfg = parse_ostp_link(&url)
             .map_err(|e| anyhow!("Share Link Error: {e}"))?;
         return run_client_directly(client_cfg).await;
@@ -390,7 +389,7 @@ async fn run_app() -> Result<()> {
 }}"#, key)
         };
         fs::write(&args.config, &content)?;
-        println!("Successfully initialized configuration at {:?}", args.config);
+        println!("[ostp] Configuration written to {:?}", args.config);
         
         if is_server {
             let mut stripped = json_comments::StripComments::new(content.as_bytes());
@@ -398,7 +397,7 @@ async fn run_app() -> Result<()> {
                 if let AppMode::Server(s) = config.mode {
                     let key = &s.access_keys[0];
                     let host = get_or_ask_public_ip(&args.config);
-                    println!("\n>>> Handy Client Share Link for your users:");
+                    println!("\n  Share link for client distribution:");
                     println!("  ostp://{}@{}:50000", key, host);
                 }
             }
@@ -439,7 +438,7 @@ async fn run_app() -> Result<()> {
                     parts[0].to_string() 
                 };
                 
-                println!("\n>>> Ready-to-use OSTP client share links from {:?}:", args.config);
+                println!("\n  Client share links from {:?}:", args.config);
                 for (idx, key) in server_cfg.access_keys.iter().enumerate() {
                     println!("  [{}] ostp://{}@{}:{}", idx + 1, key, host, port);
                 }
@@ -453,9 +452,9 @@ async fn run_app() -> Result<()> {
 
     match config.mode {
         AppMode::Server(server_cfg) => {
-            println!("[OSTP Core] Starting in SERVER mode on {}", server_cfg.listen);
+            println!("[ostp] Starting server on {}", server_cfg.listen);
             if let Some(turn) = server_cfg.turn_server {
-                println!("[OSTP Core] TURN integration enabled: {}", turn);
+                println!("[ostp] TURN relay enabled: {}", turn);
             }
             // Temporarily pass control to the isolated server implementation
             let debug = server_cfg.debug.unwrap_or(false);
@@ -487,17 +486,9 @@ async fn run_app() -> Result<()> {
 }
 
 async fn run_client_directly(client_cfg: ClientConfig) -> Result<()> {
-    println!("[OSTP Core] Starting in CLIENT mode connecting to {}", client_cfg.server);
-    if let Some(ref tun) = client_cfg.tun {
-        if tun.enable {
-            println!("[OSTP Core] TUN mode enabled.");
-            if let Some(ref path) = tun.wintun_path {
-                println!("[OSTP Core] Using custom wintun path: {}", path);
-            }
-        }
-    }
-    println!("[OSTP Core] Client logic loaded.");
     let is_tun_enabled = client_cfg.tun.as_ref().map(|t| t.enable).unwrap_or(false);
+    let mode_str = if is_tun_enabled { "tun" } else { "proxy" };
+    println!("[ostp] Starting client (mode={}, server={})", mode_str, client_cfg.server);
     let turn_cfg = client_cfg.turn.as_ref();
     let client_conf = ostp_client::config::ClientConfig {
         mode: if is_tun_enabled { "tun".to_string() } else { "proxy".to_string() },

@@ -43,7 +43,7 @@ pub async fn run_linux_tunnel(
 ) -> Result<()> {
     let debug = config.debug;
     if debug {
-        println!("[ostp-client] Starting Linux TUN handler initialization...");
+        println!("[ostp] Initializing TUN tunnel...");
     }
 
     let exe = std::env::current_exe()?;
@@ -102,7 +102,7 @@ pub async fn run_linux_tunnel(
     let server_ip_str = server_ip.to_string();
 
     if debug {
-        println!("[ostp-client] Resolved remote server IP: {}", server_ip_str);
+        println!("[ostp-client] Resolved server IP: {}", server_ip_str);
     }
 
     // 3. Detect current default gateway and interface
@@ -132,7 +132,7 @@ pub async fn run_linux_tunnel(
     }
 
     if debug {
-        println!("[ostp-client] Physical route anchor: gateway={} interface={}", default_gw, default_if);
+        println!("[ostp-client] Default route: gateway={} interface={}", default_gw, default_if);
     }
 
     // 4. Setup commands (Using standard /1 routing trick for fail-proof overriding)
@@ -187,7 +187,7 @@ pub async fn run_linux_tunnel(
         child: None,
     };
 
-    println!("[client] TUN Tunnel established, Linux traffic is now routing through OSTP.");
+    println!("[ostp] TUN tunnel active. All traffic is routed through OSTP.");
 
     if debug {
         let stdout = child.stdout.take().unwrap();
@@ -213,12 +213,12 @@ pub async fn run_linux_tunnel(
     // 6. Wait for shutdown signal
     let _ = shutdown.changed().await;
 
-    println!("[client] Deactivating TUN tunnel and restoring Linux network topology...");
+    println!("[ostp] Deactivating TUN tunnel...");
 
     // Drop guard runs cleanup automatically
     drop(_guard);
 
-    println!("[client] Linux TUN Tunnel stopped.");
+    println!("[ostp] TUN tunnel stopped.");
     
     Ok(())
 }

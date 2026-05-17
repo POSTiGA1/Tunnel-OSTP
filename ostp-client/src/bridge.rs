@@ -108,9 +108,9 @@ impl Bridge {
         let mut keepalive_tick = tokio::time::interval(Duration::from_secs(5));
         let mut retransmit_tick = tokio::time::interval(Duration::from_millis(50));
         let init_msg = if self.mode == "tun" {
-            "Bridge & TUN Tunnel Manager initialized".to_string()
+            "Bridge initialized (TUN mode)".to_string()
         } else {
-            "Bridge & SOCKS5 Proxy initialized".to_string()
+            "Bridge initialized (proxy mode)".to_string()
         };
         tx.send(UiEvent::Log(init_msg)).await.ok();
 
@@ -203,7 +203,7 @@ impl Bridge {
                             }
                         }
                         None => {
-                            let _ = tx.send(UiEvent::Log("UDP reader channel closed".to_string())).await;
+                            let _ = tx.send(UiEvent::Log("UDP channel closed, resetting connection".to_string())).await;
                             self.running = false;
                             crate::sysproxy::disable_windows_proxy();
                             sessions_opt = None;
@@ -226,7 +226,7 @@ impl Bridge {
                                 stream_map.clear();
                                 self.reset_proxy_streams(&tx, &proxy_tx, "manual stop");
                                 tx.send(UiEvent::TunnelStopped).await.ok();
-                                let stop_msg = if self.mode == "tun" { "TUN Tunnel stopped" } else { "Bridge stopped" };
+                                let stop_msg = if self.mode == "tun" { "TUN tunnel stopped" } else { "Bridge stopped" };
                                 tx.send(UiEvent::Log(stop_msg.to_string())).await.ok();
                             } else {
                                  tx.send(UiEvent::Log("Connecting to remote server...".to_string())).await.ok();
@@ -263,12 +263,10 @@ impl Bridge {
                                                                 Bytes::copy_from_slice(&buf[..n])
                                                             };
                                                             if udp_tx_clone.send((idx, inbound)).await.is_err() {
-                                                                eprintln!("[bridge] UDP receiver task exiting: bridge channel full or closed");
                                                                 break;
                                                             }
                                                         }
-                                                        Err(e) => {
-                                                            eprintln!("[bridge] UDP socket recv error: {e}");
+                                                        Err(_) => {
                                                             break;
                                                         }
                                                     }
@@ -309,7 +307,7 @@ impl Bridge {
                                     throughput_bps: 0,
                                 }).await.ok();
                                 self.metrics.connection_state.store(2, Ordering::Relaxed);
-                                let start_msg = if self.mode == "tun" { "TUN Tunnel established" } else { "Connection established" };
+                                let start_msg = if self.mode == "tun" { "TUN tunnel established" } else { "Connection established" };
                                 tx.send(UiEvent::Log(start_msg.to_string())).await.ok();
                             }
                         }
@@ -626,11 +624,11 @@ impl Bridge {
             } else {
                 format!("{}:3478", self.turn_server)
             };
-            tx.send(UiEvent::Log(format!("TURN: Allocating relay via {}", turn_addr))).await.ok();
+            tx.send(UiEvent::Log(format!("Allocating TURN relay via {}", turn_addr))).await.ok();
 
             match perform_turn_allocation(&socket, &turn_addr, &self.turn_username, &self.turn_password, &self.server_addr).await {
                 Ok(relay_addr) => {
-                    tx.send(UiEvent::Log(format!("TURN: Relay allocated. Traffic tunnelled via {}", relay_addr))).await.ok();
+                    tx.send(UiEvent::Log(format!("TURN relay allocated ({})", relay_addr))).await.ok();
                     // Re-connect the UDP socket to the TURN server so all sends go through it.
                     // The TURN server forwards ChannelData to the OSTP server transparently.
                     socket
@@ -639,7 +637,7 @@ impl Bridge {
                         .with_context(|| format!("failed to re-connect to TURN {}", turn_addr))?;
                 }
                 Err(e) => {
-                    tx.send(UiEvent::Log(format!("TURN allocation failed: {e}. Falling back to direct UDP."))).await.ok();
+                    tx.send(UiEvent::Log(format!("TURN allocation failed: {}. Using direct UDP.", e))).await.ok();
                     socket
                         .connect(&self.server_addr)
                         .await
@@ -647,7 +645,7 @@ impl Bridge {
                 }
             }
         } else {
-            tx.send(UiEvent::Log(format!("Connected UDP directly to {}", self.server_addr))).await.ok();
+            tx.send(UiEvent::Log(format!("Connected to {}", self.server_addr))).await.ok();
             socket
                 .connect(&self.server_addr)
                 .await

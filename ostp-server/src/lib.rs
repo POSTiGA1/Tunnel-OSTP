@@ -152,23 +152,21 @@ pub async fn run_server(
         while let Some(ev) = ui_event_rx.recv().await {
             match ev {
                 UiEvent::Log(msg) => {
-                    if debug 
-                        || msg.starts_with("Listening on ") 
-                        || msg.starts_with("Hot-reloaded ") 
-                        || msg.starts_with("Client ") 
-                        || msg.starts_with("Cleaning up resources") 
-                    {
-                        println!("[ostp-server] {msg}");
+                    // Essential logs always visible; debug logs gated behind flag
+                    let is_essential = msg.starts_with("Client ")
+                        || msg.starts_with("Listening")
+                        || msg.starts_with("Shutdown")
+                        || msg.starts_with("Session ");
+                    if debug || is_essential {
+                        println!("[ostp] {msg}");
                     }
                 }
                 UiEvent::KeyCreated { key } => {
-                    if debug {
-                        println!("[ostp-server] New access key created: {key}");
-                    }
+                    println!("[ostp] Access key created: {key}");
                 }
                 UiEvent::UnauthorizedProbe { peer, bytes } => {
                     if debug {
-                        println!("[ostp-server] WARNING: unauthorized probe from {peer} ({bytes} bytes)");
+                        println!("[ostp] Unauthorized probe from {peer} ({bytes} bytes)");
                     }
                 }
                 UiEvent::PeerSeen { .. } => {}
@@ -177,15 +175,15 @@ pub async fn run_server(
         }
     });
 
-    println!("[ostp-server] Listening on {bind_addr}");
+    println!("[ostp] Listening on {bind_addr}");
     tokio::select! {
         res = run_server_loop(socket, dispatcher, max_datagram_size, ui_cmd_rx, ui_event_tx, shared_keys, outbound, debug) => {
             if let Err(e) = res {
-                eprintln!("[ostp-server] error: {e}");
+                eprintln!("[ostp] Server error: {e}");
             }
         }
         _ = wait_for_shutdown_signal() => {
-            println!("[ostp-server] shutdown signal received");
+            println!("[ostp] Shutdown signal received");
         }
     }
 
@@ -361,7 +359,7 @@ async fn run_server_loop(
                     let _ = socket.send_to(&frame, peer_addr).await?;
                 }
                 for sid in dropped_sessions {
-                    let _ = ui_event_tx.send(UiEvent::Log(format!("Cleaning up resources for expired session {sid}")));
+                    let _ = ui_event_tx.send(UiEvent::Log(format!("Session {sid} expired, releasing resources")));
                     let mut streams_to_cancel = Vec::new();
                     for (&(session_id, stream_id), _) in &remotes {
                         if session_id == sid {
