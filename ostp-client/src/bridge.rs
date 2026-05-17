@@ -432,8 +432,8 @@ impl Bridge {
                     }
                 }
                 proxy_ev = proxy_rx.recv(), if self.running && sessions_opt.as_ref().map(|s| {
-                    // §3 FIX: Apply backpressure. Suspend pulling from local proxy if ARQ buffers exceed 512 unacked frames
-                    s.iter().all(|ses| ses.machine.in_flight_count() < 512)
+                    // Backpressure: suspend proxy reads when ARQ window is saturated
+                    s.iter().all(|ses| ses.machine.in_flight_count() < 256)
                 }).unwrap_or(true) => {
                     if let Some(ev) = proxy_ev {
                         if let Some(sessions) = sessions_opt.as_mut() {
@@ -601,12 +601,12 @@ impl Bridge {
             max_padding: 1280, // Safe MTU size to avoid UDP fragmentation on Windows/PPPoE
             padding_strategy: PaddingStrategy::Profile(self.profile),
             obfuscation_key: obf_key,
-            max_reorder: 262144,
-            max_reorder_buffer: 32768, // Expanded to prevent dropping out-of-order packets during high-speed tests
-            ack_delay_ms: 5,   // Reduced from 20ms to 5ms for rapid ACK unblocking and throughput acceleration
-            rto_ms: 100,       // Reduced from 200ms to 100ms for faster recovery on packet loss
+            max_reorder: 16384,          // Max gap between expected and received nonce
+            max_reorder_buffer: 8192,    // Max buffered out-of-order frames
+            ack_delay_ms: 5,
+            rto_ms: 100,
             max_retries: 8,
-            max_sent_history: 65536, // Greatly expanded to guarantee that oldest unacked packets are not prematurely popped and lost
+            max_sent_history: 32768,     // Reduced: gap recovery handles unrecoverable frames
         })?;
 
         let addr = self.local_bind_addr.parse::<std::net::SocketAddr>().map_err(|e| anyhow::anyhow!("invalid bind addr: {}", e))?;
