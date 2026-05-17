@@ -31,6 +31,10 @@ struct Args {
     #[arg(long)]
     links: bool,
 
+    /// Validate configuration file and exit
+    #[arg(long)]
+    check: bool,
+
     /// Optional client connection share link (ostp://ACCESS_KEY@HOST:PORT) to run instantly
     url: Option<String>,
 }
@@ -133,11 +137,51 @@ impl UnifiedConfig {
 
 #[derive(Debug, Deserialize, Serialize)]
 struct ServerConfig {
-    listen: String,
+    listen: ListenConfig,
     access_keys: Vec<String>,
     turn_server: Option<String>,
     debug: Option<bool>,
     outbound: Option<OutboundConfig>,
+    api: Option<ApiConfig>,
+    fallback: Option<FallbackCfg>,
+}
+
+/// Supports both single string "0.0.0.0:50000" and array ["0.0.0.0:50000", "[::]:50000"]
+#[derive(Debug, Deserialize, Serialize, Clone)]
+#[serde(untagged)]
+enum ListenConfig {
+    Single(String),
+    Multiple(Vec<String>),
+}
+
+impl ListenConfig {
+    fn addresses(&self) -> Vec<String> {
+        match self {
+            ListenConfig::Single(s) => vec![s.clone()],
+            ListenConfig::Multiple(v) => v.clone(),
+        }
+    }
+
+    fn primary(&self) -> String {
+        match self {
+            ListenConfig::Single(s) => s.clone(),
+            ListenConfig::Multiple(v) => v.first().cloned().unwrap_or_default(),
+        }
+    }
+}
+
+#[derive(Debug, Deserialize, Serialize)]
+struct ApiConfig {
+    enabled: Option<bool>,
+    bind: Option<String>,
+    token: Option<String>,
+}
+
+#[derive(Debug, Deserialize, Serialize)]
+struct FallbackCfg {
+    enabled: Option<bool>,
+    listen: Option<String>,
+    target: Option<String>,
 }
 
 #[derive(Debug, Deserialize, Serialize)]
@@ -201,6 +245,17 @@ struct MuxConfig {
 
 #[tokio::main]
 async fn main() -> Result<()> {
+    // Initialize structured logging via tracing
+    // Default: info level; override with RUST_LOG env var (e.g. RUST_LOG=ostp_server=debug)
+    tracing_subscriber::fmt()
+        .with_env_filter(
+            tracing_subscriber::EnvFilter::try_from_default_env()
+                .unwrap_or_else(|_| tracing_subscriber::EnvFilter::new("info"))
+        )
+        .with_target(false)
+        .compact()
+        .init();
+
     let res = run_app().await;
     if let Err(e) = res {
         eprintln!();
@@ -308,6 +363,52 @@ async fn run_app() -> Result<()> {
         return run_client_directly(client_cfg).await;
     }
 
+    // Handle --check: validate config and exit
+    if args.check {
+        if !args.config.exists() {
+            anyhow::bail!("Configuration file {:?} not found.", args.config);
+        }
+        let content = fs::read_to_string(&args.config)?;
+        let mut stripped = json_comments::StripComments::new(content.as_bytes());
+        match serde_json::from_reader::<_, UnifiedConfig>(&mut stripped) {
+            Ok(config) => {
+                config.validate()?;
+                match &config.mode {
+                    AppMode::Server(s) => {
+                        println!("[ostp] Config OK: server mode");
+                        println!("  Listen: {:?}", s.listen.primary());
+                        println!("  Access keys: {}", s.access_keys.len());
+                        if let Some(api) = &s.api {
+                            println!("  API: {} (bind: {})",
+                                if api.enabled.unwrap_or(false) { "enabled" } else { "disabled" },
+                                api.bind.as_deref().unwrap_or("127.0.0.1:9090"));
+                        }
+                        if let Some(outbound) = &s.outbound {
+                            println!("  Outbound proxy: {} ({})",
+                                if outbound.enabled { "enabled" } else { "disabled" },
+                                outbound.protocol);
+                        }
+                        if let Some(fb) = &s.fallback {
+                            println!("  Fallback: {} ({} -> {})",
+                                if fb.enabled.unwrap_or(false) { "enabled" } else { "disabled" },
+                                fb.listen.as_deref().unwrap_or("0.0.0.0:443"),
+                                fb.target.as_deref().unwrap_or("127.0.0.1:8080"));
+                        }
+                    }
+                    AppMode::Client(c) => {
+                        println!("[ostp] Config OK: client mode");
+                        println!("  Server: {}", c.server);
+                        println!("  Key: {}...", &c.access_key[..8.min(c.access_key.len())]);
+                    }
+                }
+            }
+            Err(e) => {
+                anyhow::bail!("Config parse error: {}", e);
+            }
+        }
+        return Ok(());
+    }
+
     // Handle explicit configuration initialization
     if let Some(ref mode_str) = args.init {
         let is_server = mode_str == "server";
@@ -340,6 +441,22 @@ async fn run_app() -> Result<()> {
         "action": "proxy"
       }}
     ]
+  }},
+  
+  // Management REST API for third-party panels.
+  "api": {{
+    "enabled": false,
+    "bind": "127.0.0.1:9090",
+    // Set a strong token for authentication. Leave empty to disable auth.
+    "token": ""
+  }},
+  
+  // Fallback TCP proxy: unrecognized connections are proxied to a web server (anti-DPI).
+  "fallback": {{
+    "enabled": false,
+    "listen": "0.0.0.0:443",
+    // Target web server (e.g., local nginx or caddy)
+    "target": "127.0.0.1:8080"
   }},
   "debug": false
 }}"#, key)
@@ -429,7 +546,7 @@ async fn run_app() -> Result<()> {
     if args.links {
         match config.mode {
             AppMode::Server(server_cfg) => {
-                let listen = server_cfg.listen.clone();
+                let listen = server_cfg.listen.primary();
                 let parts: Vec<&str> = listen.split(':').collect();
                 let port = parts.get(1).unwrap_or(&"50000");
                 let host = if parts[0] == "0.0.0.0" { 
@@ -452,11 +569,11 @@ async fn run_app() -> Result<()> {
 
     match config.mode {
         AppMode::Server(server_cfg) => {
-            println!("[ostp] Starting server on {}", server_cfg.listen);
+            let listen_addrs = server_cfg.listen.addresses();
+            println!("[ostp] Starting server on {:?}", listen_addrs);
             if let Some(turn) = server_cfg.turn_server {
                 println!("[ostp] TURN relay enabled: {}", turn);
             }
-            // Temporarily pass control to the isolated server implementation
             let debug = server_cfg.debug.unwrap_or(false);
             let outbound = server_cfg.outbound.map(|o| ostp_server::OutboundConfig {
                 enabled: o.enabled,
@@ -474,7 +591,18 @@ async fn run_app() -> Result<()> {
                     .collect(),
                 default_action: parse_outbound_action(o.default_action),
             });
-            ostp_server::run_server(server_cfg.listen, server_cfg.access_keys, outbound, debug).await?;
+            let api_config = server_cfg.api.map(|a| ostp_server::ApiConfig {
+                enabled: a.enabled.unwrap_or(false),
+                bind: a.bind.unwrap_or_else(|| "127.0.0.1:9090".to_string()),
+                token: a.token.unwrap_or_default(),
+            });
+            let fallback_config = server_cfg.fallback.map(|f| ostp_server::FallbackConfig {
+                enabled: f.enabled.unwrap_or(false),
+                listen: f.listen.unwrap_or_else(|| "0.0.0.0:443".to_string()),
+                target: f.target.unwrap_or_else(|| "127.0.0.1:8080".to_string()),
+            });
+            // Pass all listen addresses for multi-listener support
+            ostp_server::run_server(listen_addrs, server_cfg.access_keys, outbound, api_config, fallback_config, debug).await?;
         }
         AppMode::Client(client_cfg) => {
             run_client_directly(client_cfg).await?;

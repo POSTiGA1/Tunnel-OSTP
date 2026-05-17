@@ -1,6 +1,3 @@
-mod dispatcher;
-mod signal;
-
 use anyhow::Result;
 use bytes::Bytes;
 use std::collections::HashMap;
@@ -8,12 +5,23 @@ use std::net::IpAddr;
 
 use dispatcher::{DispatchOutcome, Dispatcher};
 use ostp_core::relay::RelayMessage;
-use ostp_core::{NoiseRole, PaddingStrategy, ProtocolConfig};
 use signal::wait_for_shutdown_signal;
-use tokio::io::AsyncReadExt;
-use tokio::net::{TcpStream, UdpSocket};
+use tokio::net::UdpSocket;
 use tokio::sync::mpsc;
 use tokio::time::{interval, Duration, Instant};
+
+mod dispatcher;
+pub mod outbound;
+pub mod api;
+pub mod fallback;
+mod relay;
+mod signal;
+
+pub use outbound::{OutboundAction, OutboundConfig, OutboundRule};
+pub use api::ApiConfig;
+pub use fallback::FallbackConfig;
+
+// ── Internal event types ─────────────────────────────────────────────────────
 
 #[derive(Debug, Clone)]
 #[allow(dead_code)]
@@ -24,7 +32,7 @@ enum UiCommand {
 
 #[allow(dead_code)]
 #[derive(Debug, Clone)]
-enum UiEvent {
+pub(crate) enum UiEvent {
     #[allow(dead_code)]
     PeerSeen { peer: IpAddr },
     #[allow(dead_code)] Rx { peer: IpAddr, bytes: usize },
@@ -36,33 +44,19 @@ enum UiEvent {
     KeyCount(usize),
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum OutboundAction {
-    Proxy,
-    Direct,
+pub(crate) struct RemoteState {
+    pub data_tx: mpsc::UnboundedSender<Bytes>,
+    pub cancel_tx: mpsc::Sender<()>,
 }
 
-#[derive(Debug, Clone)]
-pub struct OutboundRule {
-    pub domain_suffix: Vec<String>,
-    pub ip_cidr: Vec<String>,
-    pub action: OutboundAction,
-}
-
-#[derive(Debug, Clone)]
-pub struct OutboundConfig {
-    pub enabled: bool,
-    pub protocol: String,
-    pub address: String,
-    pub port: u16,
-    pub rules: Vec<OutboundRule>,
-    pub default_action: OutboundAction,
-}
+// ── Public API ───────────────────────────────────────────────────────────────
 
 pub async fn run_server(
-    bind_addr: String,
+    bind_addrs: Vec<String>,
     access_keys: Vec<String>,
     outbound: Option<OutboundConfig>,
+    api_config: Option<ApiConfig>,
+    fallback_config: Option<FallbackConfig>,
     debug: bool,
 ) -> Result<()> {
     let mut keys_map = HashMap::new();
@@ -106,7 +100,7 @@ pub async fn run_server(
                                     }
                                     let mut keys_lock = shared_keys_clone.write().unwrap();
                                     *keys_lock = new_keys;
-                                    eprintln!("[ostp] Hot-reloaded {} access keys from config.json", keys_lock.len());
+                                    tracing::info!("Hot-reloaded {} access keys from config.json", keys_lock.len());
                                 }
                             }
                         }
@@ -116,17 +110,24 @@ pub async fn run_server(
         }
     });
 
-    let addr = bind_addr.parse::<std::net::SocketAddr>().map_err(|e| anyhow::anyhow!("invalid bind addr: {}", e))?;
-    let domain = if addr.is_ipv6() { socket2::Domain::IPV6 } else { socket2::Domain::IPV4 };
-    let sock = socket2::Socket::new(domain, socket2::Type::DGRAM, Some(socket2::Protocol::UDP))?;
-    let _ = sock.set_recv_buffer_size(33554432); // 32MB
-    let _ = sock.set_send_buffer_size(33554432); // 32MB
-    let actual_recv = sock.recv_buffer_size().unwrap_or(0);
-    let actual_send = sock.send_buffer_size().unwrap_or(0);
-    eprintln!("[ostp] UDP socket buffers: recv={}KB send={}KB", actual_recv / 1024, actual_send / 1024);
-    sock.bind(&addr.into())?;
-    sock.set_nonblocking(true)?;
-    let socket = UdpSocket::from_std(sock.into())?;
+    let mut sockets = Vec::new();
+    for bind_addr in &bind_addrs {
+        let addr = bind_addr.parse::<std::net::SocketAddr>()
+            .map_err(|e| anyhow::anyhow!("invalid bind addr '{}': {}", bind_addr, e))?;
+        let domain = if addr.is_ipv6() { socket2::Domain::IPV6 } else { socket2::Domain::IPV4 };
+        let sock = socket2::Socket::new(domain, socket2::Type::DGRAM, Some(socket2::Protocol::UDP))?;
+        let _ = sock.set_recv_buffer_size(33554432);
+        let _ = sock.set_send_buffer_size(33554432);
+        sock.bind(&addr.into())?;
+        sock.set_nonblocking(true)?;
+        let udp_sock = UdpSocket::from_std(sock.into())?;
+        tracing::info!("UDP socket bound to {}", bind_addr);
+        sockets.push(std::sync::Arc::new(udp_sock));
+    }
+    if sockets.is_empty() { anyhow::bail!("no bind addresses specified"); }
+    let primary_socket = sockets[0].clone();
+
+    use ostp_core::{NoiseRole, PaddingStrategy, ProtocolConfig};
     let protocol_config = ProtocolConfig {
         role: NoiseRole::Responder,
         psk: [0u8; 32],
@@ -141,17 +142,35 @@ pub async fn run_server(
         rto_ms: 100,
         max_retries: 8,
         max_sent_history: 32768,
-        // Defaults — overridden per-session by dispatcher using derive_all_secrets()
+        // Defaults -- overridden per-session by dispatcher using derive_all_secrets()
         handshake_pad_min: 32,
         handshake_pad_max: 128,
     };
 
     let dispatcher = Dispatcher::new(protocol_config, shared_keys.clone());
 
+    // Spawn Management API if configured
+    if let Some(api_cfg) = api_config {
+        if api_cfg.enabled {
+            let api_keys = shared_keys.clone();
+            let api_stats = dispatcher.user_stats_ref();
+            tokio::spawn(async move {
+                api::start_api_server(api_cfg, api_keys, api_stats).await;
+            });
+        }
+    }
+
+    // Spawn Fallback TCP proxy if configured
+    if let Some(fb_cfg) = fallback_config {
+        if fb_cfg.enabled {
+            tokio::spawn(async move {
+                fallback::start_fallback_server(fb_cfg).await;
+            });
+        }
+    }
+
     let (_ui_cmd_tx, ui_cmd_rx) = mpsc::unbounded_channel::<UiCommand>();
     let (ui_event_tx, mut ui_event_rx) = mpsc::unbounded_channel::<UiEvent>();
-
-    let max_datagram_size = 65535;
 
     // Headless event logger
     tokio::spawn(async move {
@@ -167,15 +186,15 @@ pub async fn run_server(
                         || msg.starts_with("Relay CLOSE")
                         || msg.starts_with("Relay error");
                     if debug || is_essential {
-                        eprintln!("[ostp] {msg}");
+                        tracing::info!("{msg}");
                     }
                 }
                 UiEvent::KeyCreated { key } => {
-                    eprintln!("[ostp] Access key created: {key}");
+                    tracing::info!("Access key created: {key}");
                 }
                 UiEvent::UnauthorizedProbe { peer, bytes } => {
                     if debug {
-                        eprintln!("[ostp] Unauthorized probe from {peer} ({bytes} bytes)");
+                        tracing::debug!("Unauthorized probe from {peer} ({bytes} bytes)");
                     }
                 }
                 UiEvent::PeerSeen { .. } => {}
@@ -185,31 +204,28 @@ pub async fn run_server(
     });
 
     let key_count = shared_keys.read().unwrap().len();
-    eprintln!("[ostp] Listening on {bind_addr} ({key_count} access keys loaded)");
-    eprintln!("[ostp] ARQ config: max_reorder=16384, reorder_buf=8192, sent_history=32768, rto=100ms");
+    tracing::info!(listeners = bind_addrs.len(), keys = key_count, "server started");
+    tracing::info!("ARQ config: max_reorder=16384, reorder_buf=8192, sent_history=32768, rto=100ms");
     tokio::select! {
-        res = run_server_loop(socket, dispatcher, max_datagram_size, ui_cmd_rx, ui_event_tx, shared_keys, outbound, debug) => {
+        res = run_server_loop(primary_socket, sockets, dispatcher, ui_cmd_rx, ui_event_tx, shared_keys, outbound, debug) => {
             if let Err(e) = res {
-                eprintln!("[ostp] Server error: {e}");
+                tracing::error!("Server error: {e}");
             }
         }
         _ = wait_for_shutdown_signal() => {
-            eprintln!("[ostp] Shutdown signal received");
+            tracing::info!("Shutdown signal received");
         }
     }
 
     Ok(())
 }
 
-struct RemoteState {
-    data_tx: mpsc::UnboundedSender<Bytes>,
-    cancel_tx: mpsc::Sender<()>,
-}
+// ── Server main loop ─────────────────────────────────────────────────────────
 
 async fn run_server_loop(
-    socket: UdpSocket,
+    primary_socket: std::sync::Arc<UdpSocket>,
+    sockets: Vec<std::sync::Arc<UdpSocket>>,
     mut dispatcher: Dispatcher,
-    _max_datagram_size: usize,
     mut ui_cmd_rx: mpsc::UnboundedReceiver<UiCommand>,
     ui_event_tx: mpsc::UnboundedSender<UiEvent>,
     shared_keys: std::sync::Arc<std::sync::RwLock<HashMap<String, ()>>>,
@@ -217,28 +233,31 @@ async fn run_server_loop(
     debug: bool,
 ) -> Result<()> {
     let mut remotes: HashMap<(u32, u16), RemoteState> = HashMap::new();
-    // Unbounded channel: bounded(10000) caused TCP-reader tasks to fail under Speedtest load
-    // when 50+ streams competed for slots. Backpressure is managed at the relay layer instead.
     let (stream_tx, mut stream_rx) = mpsc::unbounded_channel::<(u32, u16, Vec<u8>)>();
     let (connect_tx, mut connect_rx) = mpsc::unbounded_channel::<(u32, u16, String, Result<(tokio::net::tcp::OwnedWriteHalf, mpsc::Sender<()>), String>)>();
 
-    let socket = std::sync::Arc::new(socket);
+    let socket = primary_socket;
+    // Spawn a recv task for each socket, all feeding into the same channel
     let (udp_tx, mut udp_rx) = mpsc::channel(10000);
-    let socket_clone = socket.clone();
-    tokio::spawn(async move {
-        let mut buf = vec![0_u8; 65535];
-        loop {
-            match socket_clone.recv_from(&mut buf).await {
-                Ok((size, peer)) => {
-                    let packet = Bytes::copy_from_slice(&buf[..size]);
-                    if udp_tx.send((packet, peer)).await.is_err() {
-                        break;
+    for sock in &sockets {
+        let sock_clone = sock.clone();
+        let tx = udp_tx.clone();
+        tokio::spawn(async move {
+            let mut buf = vec![0_u8; 65535];
+            loop {
+                match sock_clone.recv_from(&mut buf).await {
+                    Ok((size, peer)) => {
+                        let packet = Bytes::copy_from_slice(&buf[..size]);
+                        if tx.send((packet, peer)).await.is_err() {
+                            break;
+                        }
                     }
+                    Err(_) => break,
                 }
-                Err(_) => break,
             }
-        }
-    });
+        });
+    }
+    drop(udp_tx); // Drop the original sender so the channel closes when all tasks end
 
     if debug {
         let _ = ui_event_tx.send(UiEvent::Log("Server loop started".to_string()));
@@ -302,7 +321,7 @@ async fn run_server_loop(
                                     "Deliver app payload sid={session_id} stream={stream_id} bytes={}",
                                     payload.len()
                                 )));
-                                handle_relay_message(
+                                relay::handle_relay_message(
                                     peer_addr,
                                     session_id,
                                     stream_id,
@@ -326,12 +345,12 @@ async fn run_server_loop(
             }
             Some((session_id, stream_id, data)) = stream_rx.recv() => {
                 if data.is_empty() {
-                    let _ = send_relay_to_stream(session_id, stream_id, RelayMessage::Close, &mut dispatcher, &socket, &ui_event_tx).await;
+                    let _ = relay::send_relay_to_stream(session_id, stream_id, RelayMessage::Close, &mut dispatcher, &socket, &ui_event_tx).await;
                     if let Some(state) = remotes.remove(&(session_id, stream_id)) {
                         let _ = state.cancel_tx.try_send(());
                     }
                 } else {
-                    let _ = send_relay_to_stream(session_id, stream_id, RelayMessage::Data(data), &mut dispatcher, &socket, &ui_event_tx).await;
+                    let _ = relay::send_relay_to_stream(session_id, stream_id, RelayMessage::Data(data), &mut dispatcher, &socket, &ui_event_tx).await;
                 }
             }
             Some((session_id, stream_id, target, res)) = connect_rx.recv() => {
@@ -347,12 +366,12 @@ async fn run_server_loop(
                             }
                         });
                         remotes.insert((session_id, stream_id), RemoteState { data_tx, cancel_tx });
-                        let _ = send_relay_to_stream(session_id, stream_id, RelayMessage::ConnectOk, &mut dispatcher, &socket, &ui_event_tx).await;
+                        let _ = relay::send_relay_to_stream(session_id, stream_id, RelayMessage::ConnectOk, &mut dispatcher, &socket, &ui_event_tx).await;
                         let _ = ui_event_tx.send(UiEvent::Log(format!("Relay CONNECT ok for [{session_id}:{stream_id}] -> {target}")));
                     }
                     Err(err) => {
                         let _ = ui_event_tx.send(UiEvent::Log(format!("Relay CONNECT failed for [{session_id}:{stream_id}] -> {target}: {err}")));
-                        let _ = send_relay_to_stream(session_id, stream_id, RelayMessage::Error(format!("connect failed: {err}")), &mut dispatcher, &socket, &ui_event_tx).await;
+                        let _ = relay::send_relay_to_stream(session_id, stream_id, RelayMessage::Error(format!("connect failed: {err}")), &mut dispatcher, &socket, &ui_event_tx).await;
                     }
                 }
             }
@@ -388,331 +407,4 @@ async fn run_server_loop(
     }
 
     Ok(())
-}
-
-async fn handle_relay_message(
-    _peer_addr: std::net::SocketAddr,
-    session_id: u32,
-    stream_id: u16,
-    payload: Bytes,
-    dispatcher: &mut Dispatcher,
-    socket: &UdpSocket,
-    remotes: &mut HashMap<(u32, u16), RemoteState>,
-    ui_event_tx: &mpsc::UnboundedSender<UiEvent>,
-    stream_tx: mpsc::UnboundedSender<(u32, u16, Vec<u8>)>,
-    connect_tx: mpsc::UnboundedSender<(u32, u16, String, Result<(tokio::net::tcp::OwnedWriteHalf, mpsc::Sender<()>), String>)>,
-    outbound: Option<OutboundConfig>,
-    debug: bool,
-) -> Result<()> {
-    match RelayMessage::decode(&payload)? {
-        RelayMessage::Connect(target) => {
-            let _ = ui_event_tx.send(UiEvent::Log(format!("Relay CONNECT start for [{session_id}:{stream_id}] -> {target}")));
-            let target_clone = target.clone();
-            let connect_tx_clone = connect_tx.clone();
-            let stream_tx_clone = stream_tx.clone();
-            let outbound_clone = outbound.clone();
-            tokio::spawn(async move {
-                let stream_res = connect_target(&target_clone, outbound_clone.as_ref(), debug).await;
-                match stream_res {
-                    Ok(stream) => {
-                        let (mut reader, writer) = stream.into_split();
-                        let (cancel_tx, mut cancel_rx) = mpsc::channel::<()>(1);
-                        tokio::spawn(async move {
-                            let mut buf = [0_u8; 4096];
-                            loop {
-                                tokio::select! {
-                                    _ = cancel_rx.recv() => break,
-                                    read_res = reader.read(&mut buf) => {
-                                        match read_res {
-                                            Ok(0) | Err(_) => {
-                                                let _ = stream_tx_clone.send((session_id, stream_id, Vec::new()));
-                                                break;
-                                            }
-                                            Ok(n) => {
-                                                if stream_tx_clone.send((session_id, stream_id, buf[..n].to_vec())).is_err() {
-                                                    break;
-                                                }
-                                            }
-                                        }
-                                    }
-                                }
-                            }
-                        });
-                        let _ = connect_tx_clone.send((session_id, stream_id, target_clone, Ok((writer, cancel_tx))));
-                    }
-                    Err(e) => {
-                        let _ = connect_tx_clone.send((session_id, stream_id, target_clone, Err(e.to_string())));
-                    }
-                }
-            });
-        }
-        RelayMessage::Data(data) => {
-            if let Some(remote) = remotes.get_mut(&(session_id, stream_id)) {
-                let _ = remote.data_tx.send(bytes::Bytes::from(data));
-            } else {
-                let _ = ui_event_tx.send(UiEvent::Log(format!("Relay DATA for unknown stream [{session_id}:{stream_id}] ({})", data.len())));
-            }
-        }
-        RelayMessage::KeepAlive => {}
-        RelayMessage::Close => {
-            if let Some(state) = remotes.remove(&(session_id, stream_id)) {
-                let _ = state.cancel_tx.try_send(());
-                let _ = ui_event_tx.send(UiEvent::Log(format!("Relay CLOSE [{session_id}:{stream_id}]")));
-            }
-        }
-        RelayMessage::ConnectOk => {}
-        RelayMessage::Error(msg) => {
-            let _ = ui_event_tx.send(UiEvent::Log(format!("Relay error from [{session_id}:{stream_id}]: {msg}")));
-        }
-        RelayMessage::Ping(ts) => {
-            send_relay_to_stream(session_id, stream_id, RelayMessage::Pong(ts), dispatcher, socket, ui_event_tx).await?;
-        }
-        RelayMessage::Pong(_) => {}
-    }
-    Ok(())
-}
-
-async fn send_relay_to_stream(
-    session_id: u32,
-    stream_id: u16,
-    msg: RelayMessage,
-    dispatcher: &mut Dispatcher,
-    socket: &UdpSocket,
-    ui_event_tx: &mpsc::UnboundedSender<UiEvent>,
-) -> Result<()> {
-    let payload = Bytes::from(msg.encode());
-    if let Some((frame, peer_addr)) = dispatcher.outbound_to_session(session_id, stream_id, payload)? {
-        let response_len = frame.len();
-        let _ = socket.send_to(&frame, peer_addr).await?;
-        let _ = ui_event_tx.send(UiEvent::Tx {
-            peer: peer_addr.ip(),
-            bytes: response_len,
-        });
-    }
-    Ok(())
-}
-
-async fn connect_target(
-    target: &str,
-    outbound: Option<&OutboundConfig>,
-    debug: bool,
-) -> Result<TcpStream> {
-    let connect_timeout = Duration::from_secs(10);
-    if let Some(outbound) = outbound {
-        if outbound.enabled {
-            let action = select_outbound_action(target, outbound, debug).await;
-            if action == OutboundAction::Proxy {
-                let proxy_addr = format!("{}:{}", outbound.address, outbound.port);
-                return match outbound.protocol.as_str() {
-                    "socks5" => connect_via_socks5(&proxy_addr, target).await,
-                    "http" => connect_via_http(&proxy_addr, target).await,
-                    _ => tokio::time::timeout(connect_timeout, TcpStream::connect(target))
-                        .await
-                        .map_err(|_| anyhow::anyhow!("connect timeout ({}s): {}", connect_timeout.as_secs(), target))?
-                        .map_err(Into::into),
-                };
-            }
-        }
-    }
-
-    tokio::time::timeout(connect_timeout, TcpStream::connect(target))
-        .await
-        .map_err(|_| anyhow::anyhow!("connect timeout ({}s): {}", connect_timeout.as_secs(), target))?
-        .map_err(Into::into)
-}
-
-async fn select_outbound_action(
-    target: &str,
-    outbound: &OutboundConfig,
-    debug: bool,
-) -> OutboundAction {
-    let (host, port) = match split_host_port(target) {
-        Some(v) => v,
-        None => return outbound.default_action,
-    };
-
-    let mut matched = None;
-    for rule in &outbound.rules {
-        if rule.domain_suffix.is_empty() && rule.ip_cidr.is_empty() {
-            continue;
-        }
-        if match_domain_rule(&host, &rule.domain_suffix) {
-            matched = Some(rule.action);
-            break;
-        }
-        if match_ip_rule(&host, port, &rule.ip_cidr).await {
-            matched = Some(rule.action);
-            break;
-        }
-    }
-
-    let action = matched.unwrap_or(outbound.default_action);
-    if debug {
-        eprintln!("[ostp] Outbound routing: target={target} action={action:?}");
-    }
-    action
-}
-
-fn match_domain_rule(host: &str, suffixes: &[String]) -> bool {
-    if suffixes.is_empty() {
-        return false;
-    }
-    let host = host.trim_end_matches('.').to_lowercase();
-    suffixes.iter().any(|suffix| {
-        let suffix = suffix.trim().trim_start_matches('.').to_lowercase();
-        !suffix.is_empty() && (host == suffix || host.ends_with(&format!(".{suffix}")))
-    })
-}
-
-async fn match_ip_rule(host: &str, port: u16, cidrs: &[String]) -> bool {
-    if cidrs.is_empty() {
-        return false;
-    }
-    let parsed: Vec<Cidr> = cidrs.iter().filter_map(|c| parse_cidr(c)).collect();
-    if parsed.is_empty() {
-        return false;
-    }
-    if let Ok(ip) = host.parse::<std::net::IpAddr>() {
-        return parsed.iter().any(|cidr| cidr.contains(&ip));
-    }
-
-    match tokio::net::lookup_host((host, port)).await {
-        Ok(addrs) => addrs.into_iter().any(|addr| parsed.iter().any(|cidr| cidr.contains(&addr.ip()))),
-        Err(_) => false,
-    }
-}
-
-async fn connect_via_socks5(proxy_addr: &str, target: &str) -> Result<TcpStream> {
-    use tokio::io::{AsyncReadExt, AsyncWriteExt};
-
-    let mut stream = TcpStream::connect(proxy_addr).await?;
-    stream.write_all(&[0x05, 0x01, 0x00]).await?;
-    let mut reply = [0u8; 2];
-    stream.read_exact(&mut reply).await?;
-    if reply != [0x05, 0x00] {
-        anyhow::bail!("SOCKS5 auth not accepted");
-    }
-
-    let (host, port) = split_host_port(target).ok_or_else(|| anyhow::anyhow!("invalid target"))?;
-    let mut req = Vec::new();
-    req.extend_from_slice(&[0x05, 0x01, 0x00]);
-    if let Ok(ip) = host.parse::<std::net::IpAddr>() {
-        match ip {
-            std::net::IpAddr::V4(v4) => {
-                req.push(0x01);
-                req.extend_from_slice(&v4.octets());
-            }
-            std::net::IpAddr::V6(v6) => {
-                req.push(0x04);
-                req.extend_from_slice(&v6.octets());
-            }
-        }
-    } else {
-        req.push(0x03);
-        req.push(host.len() as u8);
-        req.extend_from_slice(host.as_bytes());
-    }
-    req.extend_from_slice(&port.to_be_bytes());
-    stream.write_all(&req).await?;
-
-    let mut header = [0u8; 4];
-    stream.read_exact(&mut header).await?;
-    if header[1] != 0x00 {
-        anyhow::bail!("SOCKS5 connect failed: 0x{:02x}", header[1]);
-    }
-
-    let addr_len = match header[3] {
-        0x01 => 4,
-        0x04 => 16,
-        0x03 => {
-            let mut len = [0u8; 1];
-            stream.read_exact(&mut len).await?;
-            len[0] as usize
-        }
-        _ => 0,
-    };
-    if addr_len > 0 {
-        let mut skip = vec![0u8; addr_len + 2];
-        stream.read_exact(&mut skip).await?;
-    }
-
-    Ok(stream)
-}
-
-async fn connect_via_http(proxy_addr: &str, target: &str) -> Result<TcpStream> {
-    use tokio::io::{AsyncReadExt, AsyncWriteExt};
-
-    let mut stream = TcpStream::connect(proxy_addr).await?;
-    let request = format!("CONNECT {target} HTTP/1.1\r\nHost: {target}\r\n\r\n");
-    stream.write_all(request.as_bytes()).await?;
-
-    let mut buf = vec![0u8; 1024];
-    let n = stream.read(&mut buf).await?;
-    let response = String::from_utf8_lossy(&buf[..n]);
-    if !response.starts_with("HTTP/1.1 200") && !response.starts_with("HTTP/1.0 200") {
-        anyhow::bail!("HTTP CONNECT failed: {response}");
-    }
-    Ok(stream)
-}
-
-enum Cidr {
-    V4(u32, u8),
-    V6(u128, u8),
-}
-
-impl Cidr {
-    fn contains(&self, ip: &std::net::IpAddr) -> bool {
-        match (self, ip) {
-            (Cidr::V4(net, bits), std::net::IpAddr::V4(addr)) => {
-                let mask = if *bits == 0 { 0 } else { u32::MAX << (32 - bits) };
-                let ip = u32::from_be_bytes(addr.octets());
-                (ip & mask) == (*net & mask)
-            }
-            (Cidr::V6(net, bits), std::net::IpAddr::V6(addr)) => {
-                let mask = if *bits == 0 { 0 } else { u128::MAX << (128 - bits) };
-                let ip = u128::from_be_bytes(addr.octets());
-                (ip & mask) == (*net & mask)
-            }
-            _ => false,
-        }
-    }
-}
-
-fn parse_cidr(value: &str) -> Option<Cidr> {
-    let value = value.trim();
-    if value.is_empty() {
-        return None;
-    }
-    if let Some((addr_str, bits_str)) = value.split_once('/') {
-        let bits: u8 = bits_str.parse().ok()?;
-        if let Ok(addr) = addr_str.parse::<std::net::IpAddr>() {
-            return match addr {
-                std::net::IpAddr::V4(v4) => Some(Cidr::V4(u32::from_be_bytes(v4.octets()), bits.min(32))),
-                std::net::IpAddr::V6(v6) => Some(Cidr::V6(u128::from_be_bytes(v6.octets()), bits.min(128))),
-            };
-        }
-    }
-    if let Ok(addr) = value.parse::<std::net::IpAddr>() {
-        return match addr {
-            std::net::IpAddr::V4(v4) => Some(Cidr::V4(u32::from_be_bytes(v4.octets()), 32)),
-            std::net::IpAddr::V6(v6) => Some(Cidr::V6(u128::from_be_bytes(v6.octets()), 128)),
-        };
-    }
-    None
-}
-
-fn split_host_port(target: &str) -> Option<(String, u16)> {
-    if let Some((host, port)) = target.rsplit_once(':') {
-        if host.starts_with('[') && host.ends_with(']') {
-            let host = host.trim_start_matches('[').trim_end_matches(']').to_string();
-            let port = port.parse().ok()?;
-            return Some((host, port));
-        }
-        if host.contains(':') {
-            return None;
-        }
-        let port = port.parse().ok()?;
-        return Some((host.to_string(), port));
-    }
-    None
 }

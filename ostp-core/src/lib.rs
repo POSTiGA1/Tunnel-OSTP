@@ -1,7 +1,9 @@
+pub mod congestion;
 pub mod crypto;
 pub mod framing;
 pub mod protocol;
 pub mod relay;
+pub mod resumption;
 
 pub use crypto::NoiseRole;
 pub use framing::{TrafficProfile, PaddingStrategy};

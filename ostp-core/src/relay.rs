@@ -84,3 +84,83 @@ fn decode_with_len(input: &[u8]) -> Result<&[u8]> {
     }
     Ok(&input[2..2 + len])
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_connect_roundtrip() {
+        let msg = RelayMessage::Connect("example.com:443".to_string());
+        let encoded = msg.encode();
+        let decoded = RelayMessage::decode(&encoded).unwrap();
+        match decoded {
+            RelayMessage::Connect(addr) => assert_eq!(addr, "example.com:443"),
+            _ => panic!("expected Connect"),
+        }
+    }
+
+    #[test]
+    fn test_data_roundtrip() {
+        let data = vec![1, 2, 3, 4, 5];
+        let msg = RelayMessage::Data(data.clone());
+        let encoded = msg.encode();
+        let decoded = RelayMessage::decode(&encoded).unwrap();
+        match decoded {
+            RelayMessage::Data(d) => assert_eq!(d, data),
+            _ => panic!("expected Data"),
+        }
+    }
+
+    #[test]
+    fn test_simple_tags() {
+        assert_eq!(RelayMessage::KeepAlive.encode(), vec![3]);
+        assert_eq!(RelayMessage::Close.encode(), vec![4]);
+        assert_eq!(RelayMessage::ConnectOk.encode(), vec![5]);
+
+        assert!(matches!(RelayMessage::decode(&[3]).unwrap(), RelayMessage::KeepAlive));
+        assert!(matches!(RelayMessage::decode(&[4]).unwrap(), RelayMessage::Close));
+        assert!(matches!(RelayMessage::decode(&[5]).unwrap(), RelayMessage::ConnectOk));
+    }
+
+    #[test]
+    fn test_error_roundtrip() {
+        let msg = RelayMessage::Error("connection refused".to_string());
+        let encoded = msg.encode();
+        match RelayMessage::decode(&encoded).unwrap() {
+            RelayMessage::Error(e) => assert_eq!(e, "connection refused"),
+            _ => panic!("expected Error"),
+        }
+    }
+
+    #[test]
+    fn test_ping_pong_roundtrip() {
+        let ts = 1234567890u64;
+        match RelayMessage::decode(&RelayMessage::Ping(ts).encode()).unwrap() {
+            RelayMessage::Ping(t) => assert_eq!(t, ts),
+            _ => panic!("expected Ping"),
+        }
+        match RelayMessage::decode(&RelayMessage::Pong(ts).encode()).unwrap() {
+            RelayMessage::Pong(t) => assert_eq!(t, ts),
+            _ => panic!("expected Pong"),
+        }
+    }
+
+    #[test]
+    fn test_error_cases() {
+        assert!(RelayMessage::decode(&[]).is_err());
+        assert!(RelayMessage::decode(&[255]).is_err());
+        // Truncated: tag=1, len=5, only 2 bytes
+        assert!(RelayMessage::decode(&[1, 0, 5, b'a', b'b']).is_err());
+    }
+
+    #[test]
+    fn test_empty_data_roundtrip() {
+        let encoded = RelayMessage::Data(vec![]).encode();
+        match RelayMessage::decode(&encoded).unwrap() {
+            RelayMessage::Data(d) => assert!(d.is_empty()),
+            _ => panic!("expected Data"),
+        }
+    }
+}
+

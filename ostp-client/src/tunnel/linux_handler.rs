@@ -203,7 +203,7 @@ pub async fn run_linux_tunnel(
         tokio::spawn(async move {
             let reader = BufReader::new(stderr);
             for line in reader.lines().map_while(Result::ok) {
-                eprintln!("[tun2socks-err] {}", line);
+                tracing::warn!("tun2socks: {}", line);
             }
         });
     }

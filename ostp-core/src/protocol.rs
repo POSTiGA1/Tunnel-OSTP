@@ -5,6 +5,7 @@ use thiserror::Error;
 use std::collections::{BTreeMap, VecDeque};
 use std::time::{Duration, Instant};
 
+use crate::congestion::CongestionController;
 use crate::crypto::{NoiseRole, NoiseSession, SessionCipher};
 use crate::framing::{AdaptivePadder, FrameHeader, FrameKind, FramedPacket, PaddingStrategy};
 
@@ -93,7 +94,9 @@ pub struct ProtocolMachine {
     /// evicted from sent_history, this timer detects the deadlock and skips
     /// the gap to restore liveness.
     last_recv_advance: Instant,
-    /// Key-derived handshake padding range
+    /// Congestion controller (BBR-inspired adaptive window)
+    cc: CongestionController,
+        /// Key-derived handshake padding range
     handshake_pad_min: usize,
     handshake_pad_max: usize,
 }
@@ -138,7 +141,8 @@ impl ProtocolMachine {
             last_ack_sent: Instant::now(),
             last_nack_sent: Instant::now() - Duration::from_secs(1),
             last_recv_advance: Instant::now(),
-            handshake_pad_min: config.handshake_pad_min.max(8),
+            cc: CongestionController::new(1200),
+                        handshake_pad_min: config.handshake_pad_min.max(8),
             handshake_pad_max: config.handshake_pad_max.max(config.handshake_pad_min + 16),
         })
     }
@@ -266,7 +270,7 @@ impl ProtocolMachine {
             
             if nonce < self.expected_recv_nonce {
                 // Duplicate — the ACK we sent was likely lost or delayed.
-                eprintln!("[ostp] Duplicate frame nonce={} (expected {}), forcing ACK", nonce, self.expected_recv_nonce);
+                tracing::debug!("Duplicate frame nonce={} (expected {}), forcing ACK", nonce, self.expected_recv_nonce);
                 if let Some(ack_frame) = self.force_build_ack()? {
                     return Ok(ProtocolAction::SendDatagram(ack_frame));
                 }
@@ -274,8 +278,7 @@ impl ProtocolMachine {
             }
 
             if nonce > self.expected_recv_nonce + self.max_reorder {
-                eprintln!(
-                    "[ostp] Frame nonce={} exceeds max reorder window (expected={}, max_gap={}), sending NACK",
+                tracing::debug!("Frame nonce={} exceeds max reorder window (expected={}, max_gap={}), sending NACK",
                     nonce, self.expected_recv_nonce, self.max_reorder
                 );
                 if let Ok(nack_frame) = self.build_control_datagram(
@@ -305,10 +308,13 @@ impl ProtocolMachine {
                 if packet.payload.len() >= 8 {
                     let req_nonce = u64::from_be_bytes(packet.payload[..8].try_into().unwrap());
                     if let Some(cached_frame) = self.lookup_sent_frame(req_nonce) {
-                        eprintln!("[ostp] NACK received: retransmitting nonce={}", req_nonce);
+                        tracing::debug!("NACK received: retransmitting nonce={}", req_nonce);
+                        self.cc.on_loss(cached_frame.len() as u64);
                         outbound_actions.push(ProtocolAction::SendDatagram(cached_frame));
                     } else {
-                        eprintln!("[ostp] NACK received: nonce={} not found in sent_history (evicted)", req_nonce);
+                        tracing::debug!("NACK received: nonce={} not found in sent_history (evicted)", req_nonce);
+                        // Estimate ~1200 bytes lost for evicted frames
+                        self.cc.on_loss(1200);
                     }
                 }
             }
@@ -323,7 +329,7 @@ impl ProtocolMachine {
                     ProtocolAction::DeliverApp(packet.header.stream_id, packet.payload)
                 }
                 FrameKind::Close => {
-                    eprintln!("[ostp] Received Close frame, terminating session");
+                    tracing::info!("Received Close frame, terminating session");
                     self.state = OstpState::Closed;
                     ProtocolAction::Noop
                 }
@@ -357,8 +363,7 @@ impl ProtocolMachine {
                 if self.reorder_buffer.len() < self.max_reorder_buffer {
                     self.reorder_buffer.insert(nonce, action);
                 } else {
-                    eprintln!(
-                        "[ostp] Reorder buffer full ({}/{}), dropping frame nonce={}",
+                    tracing::warn!("Reorder buffer full ({}/{}), dropping frame nonce={}",
                         self.reorder_buffer.len(), self.max_reorder_buffer, nonce
                     );
                 }
@@ -497,8 +502,7 @@ impl ProtocolMachine {
                     delivered += 1;
                 }
                 self.ack_pending = true;
-                eprintln!(
-                    "[ostp] Gap recovery: skipped {} lost frames, delivered {} buffered frames (reorder_buf={})",
+                tracing::debug!("Gap recovery: skipped {} lost frames, delivered {} buffered frames (reorder_buf={})",
                     skipped, delivered, self.reorder_buffer.len()
                 );
             }
@@ -521,12 +525,12 @@ impl ProtocolMachine {
         self.sent_history.retain(|f| !f.is_retransmittable || f.retries <= grace);
         let evicted = before - self.sent_history.len();
         if evicted > 0 {
-            eprintln!("[ostp] Evicted {} zombie frames from sent_history (remaining={})", evicted, self.sent_history.len());
+            tracing::debug!("Evicted {} zombie frames from sent_history (remaining={})", evicted, self.sent_history.len());
         }
 
         // ── Retransmit expired frames ────────────────────────────────
         // Limit retransmits per tick to prevent bandwidth saturation
-        let mut retransmit_budget: usize = 8;
+        let mut retransmit_budget: usize = self.cc.retransmit_budget();
         for frame in self.sent_history.iter_mut() {
             if retransmit_budget == 0 {
                 break;
@@ -657,8 +661,7 @@ impl ProtocolMachine {
         });
         if self.sent_history.len() > self.max_sent_history {
             let overflow = self.sent_history.len() - self.max_sent_history;
-            eprintln!(
-                "[ostp] sent_history overflow: evicting {} oldest frames (cap={})",
+            tracing::debug!("sent_history overflow: evicting {} oldest frames (cap={})",
                 overflow, self.max_sent_history
             );
             while self.sent_history.len() > self.max_sent_history {
@@ -668,7 +671,27 @@ impl ProtocolMachine {
     }
 
     fn drop_acked_frames(&mut self, ranges: &[(u64, u64)]) {
+        let now = Instant::now();
+        let mut acked_bytes = 0u64;
+        let mut min_rtt = Duration::from_secs(60);
+
+        // Compute RTT from the oldest acked frame's send timestamp
+        for frame in self.sent_history.iter() {
+            if nonce_in_ranges(frame.nonce, ranges) {
+                acked_bytes += frame.bytes.len() as u64;
+                let rtt = now.duration_since(frame.last_sent);
+                if rtt < min_rtt {
+                    min_rtt = rtt;
+                }
+            }
+        }
+
         self.sent_history.retain(|frame| !nonce_in_ranges(frame.nonce, ranges));
+
+        // Notify congestion controller
+        if acked_bytes > 0 {
+            self.cc.on_ack(acked_bytes, min_rtt);
+        }
     }
 }
 

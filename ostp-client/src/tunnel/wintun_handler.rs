@@ -41,7 +41,7 @@ pub async fn run_wintun_tunnel(
 
     let debug = config.debug;
 
-    eprintln!("[ostp] Initializing TUN tunnel...");
+    tracing::info!("Initializing TUN tunnel...");
 
     let exe = std::env::current_exe()?;
     let dir = exe.parent().ok_or_else(|| anyhow!("failed to get binary directory"))?;
@@ -59,7 +59,7 @@ pub async fn run_wintun_tunnel(
 
     // 1. Delete stale TUN adapter if it exists from a previous run.
     //    This prevents wintun from creating "ostp_tun 2", "ostp_tun 3", etc.
-    eprintln!("[ostp] Cleaning up stale TUN adapter...");
+    tracing::info!("Cleaning up stale TUN adapter...");
     let _ = Command::new("powershell")
         .creation_flags(CREATE_NO_WINDOW)
         .args(["-NoProfile", "-Command", &format!(
@@ -79,7 +79,7 @@ pub async fn run_wintun_tunnel(
         .ok_or_else(|| anyhow!("Could not resolve host IP for routing exclusion"))?;
     
     let server_ip_str = server_ip.to_string();
-    eprintln!("[ostp] Resolved server IP: {}", server_ip_str);
+    tracing::info!("Resolved server IP: {}", server_ip_str);
 
     // 3. Prepare routing and firewall setup script
     let current_exe = std::env::current_exe()?.to_string_lossy().into_owned();
@@ -105,7 +105,7 @@ pub async fn run_wintun_tunnel(
 
     // 4. Launch tun2socks + route setup IN PARALLEL to save ~3 seconds
     let proxy_url = format!("http://{}", config.local_proxy.bind_addr);
-    eprintln!("[ostp] Starting tun2socks (proxy={})", proxy_url);
+    tracing::info!("Starting tun2socks (proxy={})", proxy_url);
 
     // Spawn tun2socks immediately — it creates the adapter on its own
     let mut child = Command::new(&tun2socks_exe)
@@ -151,7 +151,7 @@ pub async fn run_wintun_tunnel(
         if let Ok(out) = check {
             let status = String::from_utf8_lossy(&out.stdout).trim().to_string();
             if debug {
-                eprintln!("[ostp] Adapter status: '{}'", status);
+                tracing::info!("Adapter status: '{}'", status);
             }
             if status == "Up" || status == "Disconnected" || !status.is_empty() {
                 adapter_ready = true;
@@ -161,14 +161,14 @@ pub async fn run_wintun_tunnel(
     }
 
     if !adapter_ready {
-        eprintln!("[ostp] WARNING: TUN adapter did not appear within timeout. Proceeding anyway.");
+        tracing::warn!("WARNING: TUN adapter did not appear within timeout. Proceeding anyway.");
     }
 
     // Wait for route setup to finish (should already be done by now)
     let _ = route_handle.await;
 
     // 6. Configure the adapter (IP, metric, MTU, DNS)
-    eprintln!("[ostp] Applying network configuration...");
+    tracing::info!("Applying network configuration...");
     let mut net_setup = format!(
         "netsh interface ipv4 set address name=\"{TUN_NAME}\" static 10.1.0.2 255.255.255.0 10.1.0.1\n\
          netsh interface ipv4 set subinterface \"{TUN_NAME}\" mtu=1300 store=persistent\n\
@@ -177,7 +177,7 @@ pub async fn run_wintun_tunnel(
     
     if let Some(ref dns) = config.dns_server {
         if !dns.is_empty() {
-            eprintln!("[ostp] DNS server: {}", dns);
+            tracing::info!("DNS server: {}", dns);
             net_setup.push_str(&format!(
                 "netsh interface ipv4 set dnsservers name=\"{TUN_NAME}\" static {} primary\n", dns
             ));
@@ -189,7 +189,7 @@ pub async fn run_wintun_tunnel(
         .args(["-NoProfile", "-Command", &net_setup])
         .output()?;
 
-    eprintln!("[ostp] TUN tunnel active. All traffic is routed through OSTP.");
+    tracing::info!("TUN tunnel active. All traffic is routed through OSTP.");
 
     // 7. Spawn debug log readers for tun2socks output
     let mut stdout = child.stdout.take();
@@ -202,7 +202,7 @@ pub async fn run_wintun_tunnel(
             if let Some(out) = stdout.take() {
                 let reader = BufReader::new(out);
                 for line in reader.lines().map_while(Result::ok) {
-                    eprintln!("[tun2socks] {}", line);
+                    tracing::debug!("tun2socks: {}", line);
                 }
             }
         });
@@ -211,7 +211,7 @@ pub async fn run_wintun_tunnel(
             if let Some(err) = stderr.take() {
                 let reader = BufReader::new(err);
                 for line in reader.lines().map_while(Result::ok) {
-                    eprintln!("[tun2socks err] {}", line);
+                    tracing::warn!("tun2socks: {}", line);
                 }
             }
         });
@@ -220,9 +220,9 @@ pub async fn run_wintun_tunnel(
     // 8. Wait for shutdown signal
     let _ = shutdown.changed().await;
 
-    eprintln!("[ostp] Deactivating TUN tunnel...");
+    tracing::info!("Deactivating TUN tunnel...");
     drop(_guard);
-    eprintln!("[ostp] TUN tunnel stopped.");
+    tracing::info!("TUN tunnel stopped.");
     
     Ok(())
 }

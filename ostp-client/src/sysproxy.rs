@@ -24,7 +24,7 @@ const INTERNET_OPTION_REFRESH: u32 = 37;
 
 #[cfg(target_os = "windows")]
 pub fn enable_windows_proxy(proxy_addr: &str) {
-    eprintln!("[ostp] Enabling Windows system proxy: {}", proxy_addr);
+    tracing::info!("Enabling Windows system proxy: {}", proxy_addr);
 
     let result = Command::new("reg")
         .creation_flags(CREATE_NO_WINDOW)
@@ -39,9 +39,9 @@ pub fn enable_windows_proxy(proxy_addr: &str) {
         .output();
     match result {
         Ok(out) if !out.status.success() => {
-            eprintln!("[ostp] Failed to set ProxyEnable: {}", String::from_utf8_lossy(&out.stderr));
+            tracing::error!("Failed to set ProxyEnable: {}", String::from_utf8_lossy(&out.stderr));
         }
-        Err(e) => eprintln!("[ostp] Failed to execute reg.exe (ProxyEnable): {}", e),
+        Err(e) => tracing::error!("Failed to execute reg.exe (ProxyEnable): {}", e),
         _ => {}
     }
 
@@ -58,9 +58,9 @@ pub fn enable_windows_proxy(proxy_addr: &str) {
         .output();
     match result {
         Ok(out) if !out.status.success() => {
-            eprintln!("[ostp] Failed to set ProxyServer: {}", String::from_utf8_lossy(&out.stderr));
+            tracing::error!("Failed to set ProxyServer: {}", String::from_utf8_lossy(&out.stderr));
         }
-        Err(e) => eprintln!("[ostp] Failed to execute reg.exe (ProxyServer): {}", e),
+        Err(e) => tracing::error!("Failed to execute reg.exe (ProxyServer): {}", e),
         _ => {}
     }
 
@@ -78,12 +78,12 @@ pub fn enable_windows_proxy(proxy_addr: &str) {
         .output();
 
     refresh_wininet();
-    eprintln!("[ostp] System proxy enabled successfully");
+    tracing::info!("System proxy enabled successfully");
 }
 
 #[cfg(target_os = "windows")]
 pub fn disable_windows_proxy() {
-    eprintln!("[ostp] Disabling Windows system proxy");
+    tracing::info!("Disabling Windows system proxy");
     let _ = Command::new("reg")
         .creation_flags(CREATE_NO_WINDOW)
         .args([

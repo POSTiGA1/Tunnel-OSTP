@@ -4,9 +4,10 @@ use ostp_core::{OstpEvent, ProtocolAction, ProtocolConfig, ProtocolMachine};
 use std::collections::HashMap;
 use std::net::SocketAddr;
 use std::sync::{Arc, RwLock};
+use std::sync::atomic::{AtomicU64, Ordering};
 
 /// Maximum number of concurrent authenticated sessions.
-/// Excess handshake attempts are silently dropped — no response, no state allocated.
+/// Excess handshake attempts are silently dropped -- no response, no state allocated.
 const MAX_SESSIONS: usize = 1024;
 
 pub enum DispatchOutcome {
@@ -18,11 +19,54 @@ pub enum DispatchOutcome {
     },
 }
 
+/// Per-user traffic statistics.
+pub struct UserStats {
+    pub bytes_up: AtomicU64,
+    pub bytes_down: AtomicU64,
+    pub connections: AtomicU64,
+    pub limit_bytes: Option<u64>,
+    pub created_at: std::time::SystemTime,
+}
+
+impl UserStats {
+    pub fn new(limit: Option<u64>) -> Self {
+        Self {
+            bytes_up: AtomicU64::new(0),
+            bytes_down: AtomicU64::new(0),
+            connections: AtomicU64::new(0),
+            limit_bytes: limit,
+            created_at: std::time::SystemTime::now(),
+        }
+    }
+
+    pub fn is_over_limit(&self) -> bool {
+        if let Some(limit) = self.limit_bytes {
+            let total = self.bytes_up.load(Ordering::Relaxed)
+                + self.bytes_down.load(Ordering::Relaxed);
+            total >= limit
+        } else {
+            false
+        }
+    }
+}
+
+/// Snapshot of user stats for API responses.
+#[derive(Debug, Clone, serde::Serialize)]
+pub struct UserStatsSnapshot {
+    pub access_key: String,
+    pub bytes_up: u64,
+    pub bytes_down: u64,
+    pub connections: u64,
+    pub limit_bytes: Option<u64>,
+    pub online: bool,
+}
+
 pub struct PeerState {
     pub machine: ProtocolMachine,
     pub last_addr: SocketAddr,
     pub obfuscation_key: [u8; 8],
     pub last_seen: std::time::Instant,
+    pub access_key: String,
 }
 
 pub struct Dispatcher {
@@ -30,11 +74,13 @@ pub struct Dispatcher {
     addr_to_session: HashMap<SocketAddr, u32>,
     machine_config: ProtocolConfig,
     access_keys: Arc<RwLock<HashMap<String, ()>>>,
+    user_stats: Arc<RwLock<HashMap<String, Arc<UserStats>>>>,
     replay_cache: std::collections::HashMap<Vec<u8>, u64>,
     roaming_tokens: f64,
     last_token_regen: std::time::Instant,
 }
 
+#[allow(dead_code)]
 impl Dispatcher {
     pub fn new(machine_config: ProtocolConfig, access_keys: Arc<RwLock<HashMap<String, ()>>>) -> Self {
         Self {
@@ -42,10 +88,65 @@ impl Dispatcher {
             addr_to_session: HashMap::new(),
             machine_config,
             access_keys,
+            user_stats: Arc::new(RwLock::new(HashMap::new())),
             replay_cache: std::collections::HashMap::new(),
             roaming_tokens: 50.0,
             last_token_regen: std::time::Instant::now(),
         }
+    }
+
+    /// Returns a shared reference to user stats for the Management API.
+    pub fn user_stats_ref(&self) -> Arc<RwLock<HashMap<String, Arc<UserStats>>>> {
+        self.user_stats.clone()
+    }
+
+    /// Snapshot all user stats for API responses.
+    pub fn snapshot_all_users(&self) -> Vec<UserStatsSnapshot> {
+        let stats = self.user_stats.read().unwrap();
+        let online_keys: std::collections::HashSet<String> = self.peer_machines.values()
+            .map(|ps| ps.access_key.clone())
+            .collect();
+        stats.iter().map(|(key, us)| UserStatsSnapshot {
+            access_key: key.clone(),
+            bytes_up: us.bytes_up.load(Ordering::Relaxed),
+            bytes_down: us.bytes_down.load(Ordering::Relaxed),
+            connections: us.connections.load(Ordering::Relaxed),
+            limit_bytes: us.limit_bytes,
+            online: online_keys.contains(key),
+        }).collect()
+    }
+
+    /// Get or create stats entry for a user key.
+    fn get_or_create_user_stats(&self, key: &str) -> Arc<UserStats> {
+        let stats = self.user_stats.read().unwrap();
+        if let Some(existing) = stats.get(key) {
+            return existing.clone();
+        }
+        drop(stats);
+        let mut stats = self.user_stats.write().unwrap();
+        stats.entry(key.to_string())
+            .or_insert_with(|| Arc::new(UserStats::new(None)))
+            .clone()
+    }
+
+    /// Set traffic limit for a user.
+    pub fn set_user_limit(&self, key: &str, limit: Option<u64>) {
+        let mut stats = self.user_stats.write().unwrap();
+        let entry = stats.entry(key.to_string())
+            .or_insert_with(|| Arc::new(UserStats::new(limit)));
+        // Replace the entry with new limit (stats reset)
+        *entry = Arc::new(UserStats {
+            bytes_up: AtomicU64::new(entry.bytes_up.load(Ordering::Relaxed)),
+            bytes_down: AtomicU64::new(entry.bytes_down.load(Ordering::Relaxed)),
+            connections: AtomicU64::new(entry.connections.load(Ordering::Relaxed)),
+            limit_bytes: limit,
+            created_at: entry.created_at,
+        });
+    }
+
+    /// Active session count.
+    pub fn active_sessions(&self) -> usize {
+        self.peer_machines.len()
     }
 
     pub fn on_datagram(&mut self, peer: SocketAddr, packet: Bytes) -> Result<DispatchOutcome> {
@@ -100,17 +201,21 @@ impl Dispatcher {
         if let Some(session_id) = session_id_opt {
             if let Some(peer_state) = self.peer_machines.get_mut(&session_id) {
                 if peer_state.last_addr != peer {
-                    eprintln!("[ostp] Client roamed: session {} from {} to {}", session_id, peer_state.last_addr, peer);
+                    tracing::info!("Client roamed: session {} from {} to {}", session_id, peer_state.last_addr, peer);
                     self.addr_to_session.remove(&peer_state.last_addr);
                 }
                 peer_state.last_addr = peer;
                 peer_state.last_seen = std::time::Instant::now();
                 self.addr_to_session.insert(peer, session_id);
                 
+                // Track inbound bytes per user
+                let key = peer_state.access_key.clone();
+                track_user_bytes_up(&self.user_stats, &key, packet.len() as u64);
+
                 let action = match peer_state.machine.on_event(OstpEvent::Inbound(packet)) {
                     Ok(a) => a,
                     Err(e) => {
-                        eprintln!("[ostp] Protocol error for session {}: {}", session_id, e);
+                        tracing::warn!("Protocol error for session {}: {}", session_id, e);
                         return Ok(DispatchOutcome::Unauthorized);
                     }
                 };
@@ -175,7 +280,7 @@ impl Dispatcher {
             let mut machine = match ProtocolMachine::new(cfg) {
                 Ok(m) => m,
                 Err(e) => {
-                    eprintln!("[ostp] Failed to create protocol machine for key trial: {}", e);
+                    tracing::warn!("Failed to create protocol machine for key trial: {}", e);
                     continue;
                 }
             };
@@ -212,17 +317,17 @@ impl Dispatcher {
 
                         let drift = (now as i64 - ts as i64).abs();
                         if drift > 300 {
-                            eprintln!("[ostp] Handshake rejected: timestamp drift {}s exceeds 300s limit (peer={})", drift, peer);
+                            tracing::warn!("Handshake rejected: timestamp drift {}s exceeds 300s limit (peer={})", drift, peer);
                             continue;
                         }
 
                         if !self.replay_cache.contains_key(&payload.to_vec()) {
                             if self.replay_cache.len() >= 100_000 {
-                                eprintln!("[ostp] Replay cache full (100000 entries), rejecting handshake from {}", peer);
+                                tracing::warn!("Replay cache full (100000 entries), rejecting handshake from {}", peer);
                                 return Ok(DispatchOutcome::Unauthorized);
                             }
                             if self.peer_machines.len() >= MAX_SESSIONS {
-                                eprintln!("[ostp] Max sessions reached ({}), rejecting handshake from {}", MAX_SESSIONS, peer);
+                                tracing::warn!("Max sessions reached ({}), rejecting handshake from {}", MAX_SESSIONS, peer);
                                 return Ok(DispatchOutcome::Unauthorized);
                             }
 
@@ -230,16 +335,26 @@ impl Dispatcher {
 
                             machine.set_session_keys(candidate_session_id, secrets.obfuscation_key);
 
+                            // Track per-user connection count
+                            let user_stats = self.get_or_create_user_stats(&candidate_key);
+                            user_stats.connections.fetch_add(1, Ordering::Relaxed);
+
+                            // Check traffic limit before accepting
+                            if user_stats.is_over_limit() {
+                                tracing::warn!("User {} exceeded traffic limit, rejecting handshake from {}", candidate_key, peer);
+                                return Ok(DispatchOutcome::Unauthorized);
+                            }
+
                             self.peer_machines.insert(candidate_session_id, PeerState {
                                 machine,
                                 last_addr: peer,
                                 obfuscation_key: secrets.obfuscation_key,
                                 last_seen: std::time::Instant::now(),
+                                access_key: candidate_key.clone(),
                             });
                             self.addr_to_session.insert(peer, candidate_session_id);
 
-                            eprintln!(
-                                "[ostp] New session authenticated: sid={} peer={} (active_sessions={}, replay_cache={})",
+                            tracing::info!("New session authenticated: sid={} peer={} (active_sessions={}, replay_cache={})",
                                 candidate_session_id, peer, self.peer_machines.len(), self.replay_cache.len()
                             );
 
@@ -265,8 +380,13 @@ impl Dispatcher {
         };
 
         let addr = peer_state.last_addr;
+        let key = peer_state.access_key.clone();
         match peer_state.machine.on_event(OstpEvent::Outbound(stream_id, payload))? {
-            ProtocolAction::SendDatagram(frame) => Ok(Some((frame, addr))),
+            ProtocolAction::SendDatagram(frame) => {
+                // Track outbound bytes per user
+                track_user_bytes_down(&self.user_stats, &key, frame.len() as u64);
+                Ok(Some((frame, addr)))
+            }
             _ => Ok(None),
         }
     }
@@ -293,7 +413,7 @@ impl Dispatcher {
 
         // Clear expired sessions from internal state
         for sid in &expired {
-            eprintln!("[ostp] Session {} expired (inactive >5min), releasing", sid);
+            tracing::info!("Session {} expired (inactive >5min), releasing", sid);
             self.drop_session(*sid);
         }
 
@@ -302,7 +422,7 @@ impl Dispatcher {
             let action = match peer_state.machine.on_event(OstpEvent::Tick) {
                 Ok(a) => a,
                 Err(e) => {
-                    eprintln!("[ostp] Tick error for session: {}", e);
+                    tracing::warn!("Tick error for session: {}", e);
                     continue;
                 }
             };
@@ -331,4 +451,41 @@ impl Dispatcher {
             self.addr_to_session.remove(&state.last_addr);
         }
     }
+}
+
+// Free functions to avoid borrow-checker conflicts when tracking stats
+// while holding a mutable reference to peer_machines.
+
+fn get_or_create_stats(
+    user_stats: &Arc<RwLock<HashMap<String, Arc<UserStats>>>>,
+    key: &str,
+) -> Arc<UserStats> {
+    {
+        let stats = user_stats.read().unwrap();
+        if let Some(existing) = stats.get(key) {
+            return existing.clone();
+        }
+    }
+    let mut stats = user_stats.write().unwrap();
+    stats.entry(key.to_string())
+        .or_insert_with(|| Arc::new(UserStats::new(None)))
+        .clone()
+}
+
+fn track_user_bytes_up(
+    user_stats: &Arc<RwLock<HashMap<String, Arc<UserStats>>>>,
+    key: &str,
+    bytes: u64,
+) {
+    let stats = get_or_create_stats(user_stats, key);
+    stats.bytes_up.fetch_add(bytes, Ordering::Relaxed);
+}
+
+fn track_user_bytes_down(
+    user_stats: &Arc<RwLock<HashMap<String, Arc<UserStats>>>>,
+    key: &str,
+    bytes: u64,
+) {
+    let stats = get_or_create_stats(user_stats, key);
+    stats.bytes_down.fetch_add(bytes, Ordering::Relaxed);
 }
