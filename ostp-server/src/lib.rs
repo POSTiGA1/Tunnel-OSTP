@@ -10,8 +10,8 @@ use dispatcher::{DispatchOutcome, Dispatcher};
 use ostp_core::relay::RelayMessage;
 use ostp_core::{NoiseRole, PaddingStrategy, ProtocolConfig};
 use signal::wait_for_shutdown_signal;
-use tokio::io::{AsyncReadExt, AsyncWriteExt};
-use tokio::net::{tcp::OwnedWriteHalf, TcpStream, UdpSocket};
+use tokio::io::AsyncReadExt;
+use tokio::net::{TcpStream, UdpSocket};
 use tokio::sync::mpsc;
 use tokio::time::{interval, Duration, Instant};
 

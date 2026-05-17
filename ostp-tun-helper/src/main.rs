@@ -29,6 +29,7 @@ enum GuiCmd {
 
 #[derive(Serialize)]
 #[serde(tag = "type", rename_all = "lowercase")]
+#[allow(dead_code)]
 enum HelperMsg {
     Status { value: u8 },
     Log { message: String },
