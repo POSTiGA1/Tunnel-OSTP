@@ -10,7 +10,11 @@ use std::fs::OpenOptions;
 use std::io::Write as _;
 
 fn log_to_core_file(msg: &str) {
-    if let Ok(mut file) = OpenOptions::new().create(true).append(true).open("ostp-core.log") {
+    let path = std::env::current_exe()
+        .ok()
+        .and_then(|p| p.parent().map(|d| d.join("ostp-core.log")))
+        .unwrap_or_else(|| std::path::PathBuf::from("ostp-core.log"));
+    if let Ok(mut file) = OpenOptions::new().create(true).append(true).open(path) {
         let _ = writeln!(file, "[{}] {}", chrono::Local::now().format("%Y-%m-%d %H:%M:%S"), msg);
     }
 }

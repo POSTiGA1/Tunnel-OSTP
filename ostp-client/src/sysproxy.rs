@@ -2,6 +2,12 @@
 use std::process::Command;
 
 #[cfg(target_os = "windows")]
+use std::os::windows::process::CommandExt;
+
+#[cfg(target_os = "windows")]
+const CREATE_NO_WINDOW: u32 = 0x08000000;
+
+#[cfg(target_os = "windows")]
 #[link(name = "wininet")]
 extern "system" {
     fn InternetSetOptionW(
@@ -18,50 +24,74 @@ const INTERNET_OPTION_REFRESH: u32 = 37;
 
 #[cfg(target_os = "windows")]
 pub fn enable_windows_proxy(proxy_addr: &str) {
-    let _ = Command::new("reg")
+    eprintln!("[ostp] Enabling Windows system proxy: {}", proxy_addr);
+
+    let result = Command::new("reg")
+        .creation_flags(CREATE_NO_WINDOW)
         .args([
             "add",
             "HKCU\\Software\\Microsoft\\Windows\\CurrentVersion\\Internet Settings",
-            "/v",
-            "ProxyEnable",
-            "/t",
-            "REG_DWORD",
-            "/d",
-            "1",
+            "/v", "ProxyEnable",
+            "/t", "REG_DWORD",
+            "/d", "1",
             "/f",
         ])
         .output();
-        
-    let proxy_str = proxy_addr.to_string();
-    let _ = Command::new("reg")
+    match result {
+        Ok(out) if !out.status.success() => {
+            eprintln!("[ostp] Failed to set ProxyEnable: {}", String::from_utf8_lossy(&out.stderr));
+        }
+        Err(e) => eprintln!("[ostp] Failed to execute reg.exe (ProxyEnable): {}", e),
+        _ => {}
+    }
+
+    let result = Command::new("reg")
+        .creation_flags(CREATE_NO_WINDOW)
         .args([
             "add",
             "HKCU\\Software\\Microsoft\\Windows\\CurrentVersion\\Internet Settings",
-            "/v",
-            "ProxyServer",
-            "/t",
-            "REG_SZ",
-            "/d",
-            &proxy_str,
+            "/v", "ProxyServer",
+            "/t", "REG_SZ",
+            "/d", proxy_addr,
+            "/f",
+        ])
+        .output();
+    match result {
+        Ok(out) if !out.status.success() => {
+            eprintln!("[ostp] Failed to set ProxyServer: {}", String::from_utf8_lossy(&out.stderr));
+        }
+        Err(e) => eprintln!("[ostp] Failed to execute reg.exe (ProxyServer): {}", e),
+        _ => {}
+    }
+
+    // Set bypass list to prevent proxy loop for localhost traffic
+    let _ = Command::new("reg")
+        .creation_flags(CREATE_NO_WINDOW)
+        .args([
+            "add",
+            "HKCU\\Software\\Microsoft\\Windows\\CurrentVersion\\Internet Settings",
+            "/v", "ProxyOverride",
+            "/t", "REG_SZ",
+            "/d", "localhost;127.*;10.*;192.168.*;<local>",
             "/f",
         ])
         .output();
 
     refresh_wininet();
+    eprintln!("[ostp] System proxy enabled successfully");
 }
 
 #[cfg(target_os = "windows")]
 pub fn disable_windows_proxy() {
+    eprintln!("[ostp] Disabling Windows system proxy");
     let _ = Command::new("reg")
+        .creation_flags(CREATE_NO_WINDOW)
         .args([
             "add",
             "HKCU\\Software\\Microsoft\\Windows\\CurrentVersion\\Internet Settings",
-            "/v",
-            "ProxyEnable",
-            "/t",
-            "REG_DWORD",
-            "/d",
-            "0",
+            "/v", "ProxyEnable",
+            "/t", "REG_DWORD",
+            "/d", "0",
             "/f",
         ])
         .output();

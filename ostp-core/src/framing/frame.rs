@@ -44,7 +44,10 @@ impl FrameHeader {
     pub fn encode(&self, out: &mut BytesMut) {
         out.put_u8(self.version);
         out.put_u8(self.kind as u8);
-        out.put_u16(0); // 2 reserved bytes
+        // Anti-DPI: reserved bytes filled with random data instead of zeros
+        // to prevent known-plaintext fingerprinting inside encrypted frames
+        let rnd: u16 = rand::random();
+        out.put_u16(rnd);
         out.put_u16(self.stream_id);
         out.put_u32(self.payload_len);
         out.put_u16(self.pad_len);

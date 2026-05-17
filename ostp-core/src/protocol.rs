@@ -1,4 +1,5 @@
 use bytes::Bytes;
+use rand::Rng;
 use sha2::{Digest, Sha256};
 use thiserror::Error;
 use std::collections::{BTreeMap, VecDeque};
@@ -376,9 +377,19 @@ impl ProtocolMachine {
     }
 
     fn wrap_datagram_handshake(&self, noise_payload: &[u8]) -> Result<Bytes, ProtocolError> {
-        let mut out = Vec::with_capacity(4 + noise_payload.len());
+        // Anti-DPI: add random padding after the Noise payload to prevent
+        // size fingerprinting. Without this, every handshake is exactly 52 bytes
+        // which is trivially detectable by TSPU/DPI systems.
+        let pad_len: usize = rand::thread_rng().gen_range(32..=128);
+        let mut pad = vec![0u8; pad_len];
+        rand::thread_rng().fill(&mut pad[..]);
+
+        let mut out = Vec::with_capacity(4 + noise_payload.len() + 2 + pad_len);
         out.extend_from_slice(&self.session_id.to_be_bytes());
         out.extend_from_slice(noise_payload);
+        // 2-byte padding length prefix so receiver can strip it
+        out.extend_from_slice(&(pad_len as u16).to_be_bytes());
+        out.extend_from_slice(&pad);
         crate::crypto::obfuscate_packet_inplace(&mut out, &self.obfuscation_key, true);
         Ok(Bytes::from(out))
     }

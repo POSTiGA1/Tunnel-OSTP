@@ -318,7 +318,9 @@ async fn start_proxy_in_process(
     let metrics = Arc::new(BridgeMetrics {
         bytes_sent: portable_atomic::AtomicU64::new(0),
         bytes_recv: portable_atomic::AtomicU64::new(0),
-        connection_state: portable_atomic::AtomicU8::new(0),
+        // Start at 1 (connecting) so UI polling doesn't see 0 and flip back to disconnected
+        // before the handshake task has had a chance to begin.
+        connection_state: portable_atomic::AtomicU8::new(1),
     });
 
     let (shutdown_tx, shutdown_rx) = watch::channel(false);

@@ -13,7 +13,11 @@ use tokio::net::TcpListener;
 use portable_atomic::Ordering;
 
 fn log_to_file(msg: &str) {
-    if let Ok(mut file) = OpenOptions::new().create(true).append(true).open("ostp-helper.log") {
+    let path = std::env::current_exe()
+        .ok()
+        .and_then(|p| p.parent().map(|d| d.join("ostp-helper.log")))
+        .unwrap_or_else(|| std::path::PathBuf::from("ostp-helper.log"));
+    if let Ok(mut file) = OpenOptions::new().create(true).append(true).open(path) {
         let _ = writeln!(file, "[{}] {}", chrono::Local::now().format("%Y-%m-%d %H:%M:%S"), msg);
     }
 }

@@ -60,7 +60,7 @@ impl AdaptivePadder {
                 let jitter = if jitter_cap == 0 {
                     0
                 } else {
-                    rand::thread_rng().gen_range(0..=jitter_cap.min(96))
+                    rand::thread_rng().gen_range(0..=jitter_cap.min(256))
                 };
 
                 (base_pad + jitter).min(self.max_pad)
