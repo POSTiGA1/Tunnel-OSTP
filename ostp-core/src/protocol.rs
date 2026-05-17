@@ -243,17 +243,19 @@ impl ProtocolMachine {
             let nonce = u64::from_be_bytes(raw_vec[4..12].try_into().unwrap());
             
             if nonce < self.expected_recv_nonce {
-                // Duplicate packet! The ACK we sent was likely lost or delayed.
-                // We MUST trigger an immediate ACK to unblock the sender's congestion window.
+                // Duplicate — the ACK we sent was likely lost or delayed.
+                eprintln!("[ostp] Duplicate frame nonce={} (expected {}), forcing ACK", nonce, self.expected_recv_nonce);
                 if let Some(ack_frame) = self.force_build_ack()? {
                     return Ok(ProtocolAction::SendDatagram(ack_frame));
                 }
                 return Ok(ProtocolAction::Noop);
             }
 
-            // Buffer limit to prevent memory bloat, widened to handle high latency/speed gaps
             if nonce > self.expected_recv_nonce + self.max_reorder {
-                // Treat as heavy loss: request retransmit of the earliest missing packet.
+                eprintln!(
+                    "[ostp] Frame nonce={} exceeds max reorder window (expected={}, max_gap={}), sending NACK",
+                    nonce, self.expected_recv_nonce, self.max_reorder
+                );
                 if let Ok(nack_frame) = self.build_control_datagram(
                     0,
                     FrameKind::Nack,
@@ -280,9 +282,11 @@ impl ProtocolMachine {
             if packet.header.kind == FrameKind::Nack {
                 if packet.payload.len() >= 8 {
                     let req_nonce = u64::from_be_bytes(packet.payload[..8].try_into().unwrap());
-                    // Search history from back to front (newest most likely requested)
                     if let Some(cached_frame) = self.lookup_sent_frame(req_nonce) {
+                        eprintln!("[ostp] NACK received: retransmitting nonce={}", req_nonce);
                         outbound_actions.push(ProtocolAction::SendDatagram(cached_frame));
+                    } else {
+                        eprintln!("[ostp] NACK received: nonce={} not found in sent_history (evicted)", req_nonce);
                     }
                 }
             }
@@ -297,6 +301,7 @@ impl ProtocolMachine {
                     ProtocolAction::DeliverApp(packet.header.stream_id, packet.payload)
                 }
                 FrameKind::Close => {
+                    eprintln!("[ostp] Received Close frame, terminating session");
                     self.state = OstpState::Closed;
                     ProtocolAction::Noop
                 }
@@ -326,9 +331,14 @@ impl ProtocolMachine {
                 }
                 self.last_recv_advance = Instant::now();
             } else {
-                // Gap detected! Buffer current packet and request retransmit of the gap packet.
+                // Gap detected
                 if self.reorder_buffer.len() < self.max_reorder_buffer {
                     self.reorder_buffer.insert(nonce, action);
+                } else {
+                    eprintln!(
+                        "[ostp] Reorder buffer full ({}/{}), dropping frame nonce={}",
+                        self.reorder_buffer.len(), self.max_reorder_buffer, nonce
+                    );
                 }
 
                 // Rate-limited NACK: send at most once per 30ms to prevent retransmit storms.
@@ -441,16 +451,21 @@ impl ProtocolMachine {
             && self.last_recv_advance.elapsed() > Duration::from_secs(5)
         {
             if let Some(&first_buffered) = self.reorder_buffer.keys().next() {
-                // Skip expected_recv_nonce forward to the first buffered frame
+                let skipped = first_buffered.saturating_sub(self.expected_recv_nonce);
                 self.expected_recv_nonce = first_buffered;
                 self.last_recv_advance = Instant::now();
 
-                // Drain all continuous frames from the reorder buffer
+                let mut delivered = 0u64;
                 while let Some(buffered_action) = self.reorder_buffer.remove(&self.expected_recv_nonce) {
                     actions.push(buffered_action);
                     self.expected_recv_nonce = self.expected_recv_nonce.saturating_add(1);
+                    delivered += 1;
                 }
                 self.ack_pending = true;
+                eprintln!(
+                    "[ostp] Gap recovery: skipped {} lost frames, delivered {} buffered frames (reorder_buf={})",
+                    skipped, delivered, self.reorder_buffer.len()
+                );
             }
         }
 
@@ -467,7 +482,12 @@ impl ProtocolMachine {
         // Shorter grace period than before (was +4) to free memory faster
         // after high-throughput bursts.
         let grace = self.max_retries.saturating_add(2);
+        let before = self.sent_history.len();
         self.sent_history.retain(|f| !f.is_retransmittable || f.retries <= grace);
+        let evicted = before - self.sent_history.len();
+        if evicted > 0 {
+            eprintln!("[ostp] Evicted {} zombie frames from sent_history (remaining={})", evicted, self.sent_history.len());
+        }
 
         // ── Retransmit expired frames ────────────────────────────────
         // Limit retransmits per tick to prevent bandwidth saturation
@@ -600,8 +620,15 @@ impl ProtocolMachine {
             retries: 0,
             is_retransmittable,
         });
-        while self.sent_history.len() > self.max_sent_history {
-            self.sent_history.pop_front();
+        if self.sent_history.len() > self.max_sent_history {
+            let overflow = self.sent_history.len() - self.max_sent_history;
+            eprintln!(
+                "[ostp] sent_history overflow: evicting {} oldest frames (cap={})",
+                overflow, self.max_sent_history
+            );
+            while self.sent_history.len() > self.max_sent_history {
+                self.sent_history.pop_front();
+            }
         }
     }
 

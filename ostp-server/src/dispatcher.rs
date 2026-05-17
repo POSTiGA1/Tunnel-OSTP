@@ -99,8 +99,8 @@ impl Dispatcher {
 
         if let Some(session_id) = session_id_opt {
             if let Some(peer_state) = self.peer_machines.get_mut(&session_id) {
-                // Update address on seamless roaming: remove old mapping to prevent HashMap leak
                 if peer_state.last_addr != peer {
+                    eprintln!("[ostp] Client roamed: session {} from {} to {}", session_id, peer_state.last_addr, peer);
                     self.addr_to_session.remove(&peer_state.last_addr);
                 }
                 peer_state.last_addr = peer;
@@ -109,7 +109,10 @@ impl Dispatcher {
                 
                 let action = match peer_state.machine.on_event(OstpEvent::Inbound(packet)) {
                     Ok(a) => a,
-                    Err(_) => return Ok(DispatchOutcome::Unauthorized),
+                    Err(e) => {
+                        eprintln!("[ostp] Protocol error for session {}: {}", session_id, e);
+                        return Ok(DispatchOutcome::Unauthorized);
+                    }
                 };
 
                 let mut responses = Vec::new();
@@ -168,7 +171,10 @@ impl Dispatcher {
 
             let mut machine = match ProtocolMachine::new(cfg) {
                 Ok(m) => m,
-                Err(_) => continue,
+                Err(e) => {
+                    eprintln!("[ostp] Failed to create protocol machine for key trial: {}", e);
+                    continue;
+                }
             };
             let action = match machine.on_event(OstpEvent::Inbound(packet.clone())) {
                 Ok(a) => a,
@@ -203,18 +209,17 @@ impl Dispatcher {
 
                         let drift = (now as i64 - ts as i64).abs();
                         if drift > 300 {
-                            // Narrow window (5 mins) limits replay risk and bounds cache memory
+                            eprintln!("[ostp] Handshake rejected: timestamp drift {}s exceeds 300s limit (peer={})", drift, peer);
                             continue;
                         }
 
                         if !self.replay_cache.contains_key(&payload.to_vec()) {
-                            // Hard cap: prevent OOM under DDoS — replay cache grows
-                            // unboundedly between purge ticks without this limit.
                             if self.replay_cache.len() >= 100_000 {
+                                eprintln!("[ostp] Replay cache full (100000 entries), rejecting handshake from {}", peer);
                                 return Ok(DispatchOutcome::Unauthorized);
                             }
-                            // §4 fix: hard cap on concurrent sessions to prevent RAM exhaustion
                             if self.peer_machines.len() >= MAX_SESSIONS {
+                                eprintln!("[ostp] Max sessions reached ({}), rejecting handshake from {}", MAX_SESSIONS, peer);
                                 return Ok(DispatchOutcome::Unauthorized);
                             }
 
@@ -229,6 +234,11 @@ impl Dispatcher {
                                 last_seen: std::time::Instant::now(),
                             });
                             self.addr_to_session.insert(peer, candidate_session_id);
+
+                            eprintln!(
+                                "[ostp] New session authenticated: sid={} peer={} (active_sessions={}, replay_cache={})",
+                                candidate_session_id, peer, self.peer_machines.len(), self.replay_cache.len()
+                            );
 
                             return Ok(DispatchOutcome::Accepted {
                                 responses: response_opt.into_iter().collect(),
@@ -280,6 +290,7 @@ impl Dispatcher {
 
         // Clear expired sessions from internal state
         for sid in &expired {
+            eprintln!("[ostp] Session {} expired (inactive >5min), releasing", sid);
             self.drop_session(*sid);
         }
 
@@ -287,7 +298,10 @@ impl Dispatcher {
         for peer_state in self.peer_machines.values_mut() {
             let action = match peer_state.machine.on_event(OstpEvent::Tick) {
                 Ok(a) => a,
-                Err(_) => continue,
+                Err(e) => {
+                    eprintln!("[ostp] Tick error for session: {}", e);
+                    continue;
+                }
             };
 
             let mut queue = vec![action];

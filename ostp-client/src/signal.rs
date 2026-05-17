@@ -8,8 +8,12 @@ pub async fn wait_for_shutdown_signal() -> Result<()> {
     let mut sigint = signal(SignalKind::interrupt())?;
 
     tokio::select! {
-        _ = sigterm.recv() => {}
-        _ = sigint.recv() => {}
+        _ = sigterm.recv() => {
+            eprintln!("[ostp] Received SIGTERM, shutting down");
+        }
+        _ = sigint.recv() => {
+            eprintln!("[ostp] Received SIGINT, shutting down");
+        }
     }
 
     Ok(())
@@ -26,16 +30,19 @@ pub async fn wait_for_shutdown_signal() -> Result<()> {
 
         tokio::select! {
             res = c_c.recv() => {
+                eprintln!("[ostp] Received Ctrl+C, shutting down");
                 if res.is_none() {
                     std::future::pending::<()>().await;
                 }
             }
             res = c_close.recv() => {
+                eprintln!("[ostp] Received console close event, shutting down");
                 if res.is_none() {
                     std::future::pending::<()>().await;
                 }
             }
             res = c_break.recv() => {
+                eprintln!("[ostp] Received Ctrl+Break, shutting down");
                 if res.is_none() {
                     std::future::pending::<()>().await;
                 }

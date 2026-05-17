@@ -147,6 +147,7 @@ impl Bridge {
                                         Ok(a) => a,
                                         Err(e) => {
                                             let _ = tx.send(UiEvent::Log(format!("Protocol decrypt error: {e}"))).await;
+                                            eprintln!("[ostp] Inbound protocol error (session {}): {}", session_index, e);
                                             continue;
                                         }
                                     };
@@ -507,6 +508,7 @@ impl Bridge {
                                     }
                                 }
                                 Err(e) => {
+                                    eprintln!("[ostp] Protocol error packing outbound stream_id={}: {}", stream_id, e);
                                     let _ = tx.send(UiEvent::Log(format!("Protocol error packing TCP: {e}"))).await;
                                 }
                             }
@@ -614,6 +616,9 @@ impl Bridge {
         let sock = socket2::Socket::new(domain, socket2::Type::DGRAM, Some(socket2::Protocol::UDP))?;
         let _ = sock.set_recv_buffer_size(33554432); // 32MB
         let _ = sock.set_send_buffer_size(33554432); // 32MB
+        let actual_recv = sock.recv_buffer_size().unwrap_or(0);
+        let actual_send = sock.send_buffer_size().unwrap_or(0);
+        eprintln!("[ostp] UDP socket buffers: recv={}KB send={}KB", actual_recv / 1024, actual_send / 1024);
         sock.bind(&addr.into())?;
         sock.set_nonblocking(true)?;
         let socket = UdpSocket::from_std(sock.into())?;
@@ -671,6 +676,7 @@ impl Bridge {
         .await
         .context("handshake timeout waiting server response")??;
         self.metrics.bytes_recv.fetch_add(size as u64, Ordering::Relaxed);
+        eprintln!("[ostp] Handshake response received: {} bytes", size);
 
         let inbound = if self.turn_enabled && size >= 4 && buf[0] == 0x40 && buf[1] == 0x00 {
             let len = u16::from_be_bytes([buf[2], buf[3]]) as usize;
@@ -684,8 +690,8 @@ impl Bridge {
         };
         machine.on_event(OstpEvent::Inbound(inbound))?;
         let rtt_ms = start.elapsed().as_secs_f64() * 1000.0;
-        
-        // Success
+        eprintln!("[ostp] Handshake complete: session={:#010x} rtt={:.1}ms", session_id, rtt_ms);
+
         Ok((socket, machine, rtt_ms))
     }
 

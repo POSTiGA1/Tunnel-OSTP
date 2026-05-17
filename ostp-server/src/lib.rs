@@ -106,7 +106,7 @@ pub async fn run_server(
                                     }
                                     let mut keys_lock = shared_keys_clone.write().unwrap();
                                     *keys_lock = new_keys;
-                                    println!("[ostp-server] Hot-reloaded {} access keys from config.json", keys_lock.len());
+                                    eprintln!("[ostp] Hot-reloaded {} access keys from config.json", keys_lock.len());
                                 }
                             }
                         }
@@ -121,6 +121,9 @@ pub async fn run_server(
     let sock = socket2::Socket::new(domain, socket2::Type::DGRAM, Some(socket2::Protocol::UDP))?;
     let _ = sock.set_recv_buffer_size(33554432); // 32MB
     let _ = sock.set_send_buffer_size(33554432); // 32MB
+    let actual_recv = sock.recv_buffer_size().unwrap_or(0);
+    let actual_send = sock.send_buffer_size().unwrap_or(0);
+    eprintln!("[ostp] UDP socket buffers: recv={}KB send={}KB", actual_recv / 1024, actual_send / 1024);
     sock.bind(&addr.into())?;
     sock.set_nonblocking(true)?;
     let socket = UdpSocket::from_std(sock.into())?;
@@ -156,17 +159,20 @@ pub async fn run_server(
                     let is_essential = msg.starts_with("Client ")
                         || msg.starts_with("Listening")
                         || msg.starts_with("Shutdown")
-                        || msg.starts_with("Session ");
+                        || msg.starts_with("Session ")
+                        || msg.starts_with("Relay CONNECT")
+                        || msg.starts_with("Relay CLOSE")
+                        || msg.starts_with("Relay error");
                     if debug || is_essential {
-                        println!("[ostp] {msg}");
+                        eprintln!("[ostp] {msg}");
                     }
                 }
                 UiEvent::KeyCreated { key } => {
-                    println!("[ostp] Access key created: {key}");
+                    eprintln!("[ostp] Access key created: {key}");
                 }
                 UiEvent::UnauthorizedProbe { peer, bytes } => {
                     if debug {
-                        println!("[ostp] Unauthorized probe from {peer} ({bytes} bytes)");
+                        eprintln!("[ostp] Unauthorized probe from {peer} ({bytes} bytes)");
                     }
                 }
                 UiEvent::PeerSeen { .. } => {}
@@ -175,7 +181,9 @@ pub async fn run_server(
         }
     });
 
-    println!("[ostp] Listening on {bind_addr}");
+    let key_count = shared_keys.read().unwrap().len();
+    eprintln!("[ostp] Listening on {bind_addr} ({key_count} access keys loaded)");
+    eprintln!("[ostp] ARQ config: max_reorder=16384, reorder_buf=8192, sent_history=32768, rto=100ms");
     tokio::select! {
         res = run_server_loop(socket, dispatcher, max_datagram_size, ui_cmd_rx, ui_event_tx, shared_keys, outbound, debug) => {
             if let Err(e) = res {
@@ -183,7 +191,7 @@ pub async fn run_server(
             }
         }
         _ = wait_for_shutdown_signal() => {
-            println!("[ostp] Shutdown signal received");
+            eprintln!("[ostp] Shutdown signal received");
         }
     }
 
@@ -446,6 +454,7 @@ async fn handle_relay_message(
         RelayMessage::Close => {
             if let Some(state) = remotes.remove(&(session_id, stream_id)) {
                 let _ = state.cancel_tx.try_send(());
+                let _ = ui_event_tx.send(UiEvent::Log(format!("Relay CLOSE [{session_id}:{stream_id}]")));
             }
         }
         RelayMessage::ConnectOk => {}
@@ -536,7 +545,7 @@ async fn select_outbound_action(
 
     let action = matched.unwrap_or(outbound.default_action);
     if debug {
-        println!("[ostp-server] outbound decision target={target} action={action:?}");
+        eprintln!("[ostp] Outbound routing: target={target} action={action:?}");
     }
     action
 }
