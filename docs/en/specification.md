@@ -102,16 +102,23 @@ The initial handshake payload includes a Unix timestamp to mitigate replay attac
 
 ### 7.1 Selective-Repeat ARQ
 OSTP provides reliability over UDP using a **Selective-Repeat ARQ** mechanism:
-*   The receiver maintains a reorder buffer (default: 8192 packets).
-*   Unacknowledged packets are retransmitted after an adaptive Retransmission Time Out (RTO).
-*   Acknowledgments (ACKs) are piggybacked onto outbound data frames to minimize overhead.
-*   Backpressure is applied dynamically based on the number of in-flight unacknowledged frames.
+*   The receiver maintains a reorder buffer (default: 32768 packets) for out-of-order packet reassembly.
+*   Acknowledgments use a **Cumulative + SACK** scheme: the ACK payload contains a cumulative range `(0, expected_recv_nonce - 1)` confirming all contiguous packets received, plus up to 7 additional Selective ACK ranges for non-contiguous blocks in the reorder buffer.
+*   **Rate-limited NACK:** When a gap is detected, the receiver emits a NACK for the lowest missing nonce, but no more than once per 30ms. This prevents retransmission storms under normal UDP jitter.
+*   **Retransmission:** Unacknowledged data frames are retransmitted after an adaptive Retransmission Timeout (RTO, default: 100ms) with exponential backoff (up to 64× base RTO).
+*   **Zombie Frame Eviction:** Frames exceeding `max_retries + 4` attempts are automatically dropped from the send history, preventing unbounded memory consumption and stale retransmissions.
+*   **In-flight Counting:** Backpressure is based only on retransmittable (data) frames; control frames (ACK/NACK) are excluded from the in-flight count to prevent false backpressure under high load.
+*   **Graceful Close:** The `Closing` state processes all remaining in-flight packets before transitioning to `Closed`, preventing data loss during session teardown.
 
 ### 7.2 Adaptive Padding
 To resist traffic analysis via Packet Length Analysis (PLA), OSTP pads plaintext payloads before AEAD encryption. Padding bytes are drawn from a cryptographically secure random source. The protocol supports dynamic padding boundaries up to the maximum MTU (e.g., 1400 bytes), smoothing out recognizable application traffic bursts into constant-bitrate-like streams.
 
 ### 7.3 IP Roaming
-The server supports seamless network handoffs (e.g., transitioning from Wi-Fi to cellular networks). If a packet successfully passes AEAD authentication, the server automatically binds the Session ID to the new source IP address without requiring a session restart.
+The server supports seamless network handoffs (e.g., transitioning from Wi-Fi to cellular networks). If a packet successfully passes AEAD authentication, the server automatically binds the Session ID to the new source IP address without requiring a session restart. The server maintains a rate-limited roaming scanner (50 tokens/sec) to prevent CPU exhaustion from probing attacks.
+
+### 7.4 Session Keepalive
+*   **Client-side:** Ping/Pong frames with RTT measurement are sent every 5 seconds. If no valid UDP packet is received for 60 seconds, the client initiates reconnection.
+*   **Server-side:** Sessions with no activity for 300 seconds are automatically evicted.
 
 ---
 

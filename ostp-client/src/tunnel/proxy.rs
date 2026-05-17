@@ -43,8 +43,12 @@ pub async fn run_local_socks5_proxy(
             accepted = listener.accept() => {
                 let (socket, _) = accepted?;
                 let stream_id = next_stream_id;
-                next_stream_id = next_stream_id.wrapping_add(1);
-                if next_stream_id == 0 { next_stream_id = 1; }
+                // Advance, skipping zero and any stream_id still in active_streams
+                loop {
+                    next_stream_id = next_stream_id.wrapping_add(1);
+                    if next_stream_id == 0 { next_stream_id = 1; }
+                    if !active_streams.contains_key(&next_stream_id) { break; }
+                }
 
                 let (tx, rx) = mpsc::unbounded_channel();
                 active_streams.insert(stream_id, tx);
@@ -229,12 +233,18 @@ async fn handle_proxy_client(
         // Read the rest of the HTTP request headers byte-by-byte
         let mut header_bytes = Vec::with_capacity(512);
         header_bytes.push(first_byte[0]);
-        let mut byte = [0_u8; 1];
+        let mut chunk = [0_u8; 512];
         loop {
-            client.read_exact(&mut byte).await?;
-            header_bytes.push(byte[0]);
-            if header_bytes.ends_with(b"\r\n\r\n") {
-                break;
+            let n = client.read(&mut chunk).await?;
+            if n == 0 {
+                return Err(anyhow!("connection closed during HTTP header read"));
+            }
+            header_bytes.extend_from_slice(&chunk[..n]);
+            if header_bytes.len() >= 4 {
+                let tail = &header_bytes[header_bytes.len().saturating_sub(4)..];
+                if tail.ends_with(b"\r\n\r\n") {
+                    break;
+                }
             }
             if header_bytes.len() > 8192 {
                 client.write_all(b"HTTP/1.1 431 Request Header Fields Too Large\r\n\r\n").await?;

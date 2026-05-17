@@ -99,6 +99,10 @@ impl Dispatcher {
 
         if let Some(session_id) = session_id_opt {
             if let Some(peer_state) = self.peer_machines.get_mut(&session_id) {
+                // Update address on seamless roaming: remove old mapping to prevent HashMap leak
+                if peer_state.last_addr != peer {
+                    self.addr_to_session.remove(&peer_state.last_addr);
+                }
                 peer_state.last_addr = peer;
                 peer_state.last_seen = std::time::Instant::now();
                 self.addr_to_session.insert(peer, session_id);
@@ -204,6 +208,11 @@ impl Dispatcher {
                         }
 
                         if !self.replay_cache.contains_key(&payload.to_vec()) {
+                            // Hard cap: prevent OOM under DDoS — replay cache grows
+                            // unboundedly between purge ticks without this limit.
+                            if self.replay_cache.len() >= 100_000 {
+                                return Ok(DispatchOutcome::Unauthorized);
+                            }
                             // §4 fix: hard cap on concurrent sessions to prevent RAM exhaustion
                             if self.peer_machines.len() >= MAX_SESSIONS {
                                 return Ok(DispatchOutcome::Unauthorized);

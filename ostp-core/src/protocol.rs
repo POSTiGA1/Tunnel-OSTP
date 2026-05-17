@@ -81,6 +81,8 @@ pub struct ProtocolMachine {
     max_sent_history: usize,
     ack_pending: bool,
     last_ack_sent: Instant,
+    /// Rate-limit: prevents sending a NACK more than once per 30ms to avoid storms
+    last_nack_sent: Instant,
 }
 
 #[derive(Debug, Clone)]
@@ -121,11 +123,14 @@ impl ProtocolMachine {
             max_sent_history: config.max_sent_history.max(1),
             ack_pending: false,
             last_ack_sent: Instant::now(),
+            last_nack_sent: Instant::now() - Duration::from_secs(1),
         })
     }
 
     pub fn in_flight_count(&self) -> usize {
-        self.sent_history.len()
+        // COUNT ONLY retransmittable Data frames — control frames (Ack/Nack) must not
+        // contribute to this counter or they will trigger false backpressure.
+        self.sent_history.iter().filter(|f| f.is_retransmittable).count()
     }
 
     pub fn state(&self) -> OstpState {
@@ -170,9 +175,12 @@ impl ProtocolMachine {
                 self.build_tracked_datagram(0, FrameKind::Close, Bytes::new())
                     .map(ProtocolAction::SendDatagram)
             }
-            (OstpState::Closing, OstpEvent::Inbound(_)) => {
+            (OstpState::Closing, OstpEvent::Inbound(raw)) => {
+                // Process final in-flight packets to prevent data loss during teardown.
+                // The remote may still have data or ACKs in transit when we initiated Close.
+                let result = self.handle_inbound(raw);
                 self.state = OstpState::Closed;
-                Ok(ProtocolAction::Noop)
+                result
             }
             (OstpState::Established, OstpEvent::Tick) => self.handle_tick(),
             (OstpState::Closed, _) => Ok(ProtocolAction::Noop),
@@ -312,15 +320,21 @@ impl ProtocolMachine {
                     })?;
                 }
             } else {
-                // Gap detected! Buffer current packet and request immediate retransmit of the gap packet.
+                // Gap detected! Buffer current packet and request retransmit of the gap packet.
                 if self.reorder_buffer.len() < self.max_reorder_buffer {
                     self.reorder_buffer.insert(nonce, action);
                 }
-                
-                // Emit a Nack frame for the lowest missing sequence
-                let nack_payload = self.expected_recv_nonce.to_be_bytes();
-                if let Ok(nack_frame) = self.build_control_datagram(0, FrameKind::Nack, Bytes::copy_from_slice(&nack_payload)) {
-                    outbound_actions.push(ProtocolAction::SendDatagram(nack_frame));
+
+                // Rate-limited NACK: send at most once per 30ms to prevent retransmit storms.
+                // Under high load with natural UDP reordering, sending a NACK per packet
+                // causes exponential retransmit explosion that saturates the channel.
+                let nack_cooldown = Duration::from_millis(30);
+                if self.last_nack_sent.elapsed() >= nack_cooldown {
+                    self.last_nack_sent = Instant::now();
+                    let nack_payload = self.expected_recv_nonce.to_be_bytes();
+                    if let Ok(nack_frame) = self.build_control_datagram(0, FrameKind::Nack, Bytes::copy_from_slice(&nack_payload)) {
+                        outbound_actions.push(ProtocolAction::SendDatagram(nack_frame));
+                    }
                 }
             }
 
@@ -419,16 +433,22 @@ impl ProtocolMachine {
 
         let now = Instant::now();
         let base_rto_ms = self.rto.as_millis().max(1) as u64;
+
+        // Evict zombie frames that exceeded max_retries + grace period.
+        // Without eviction, unacknowledged frames accumulate forever, consuming memory
+        // and wasting bandwidth on retransmits that will never be acknowledged.
+        let grace = self.max_retries.saturating_add(4);
+        self.sent_history.retain(|f| !f.is_retransmittable || f.retries <= grace);
+
         for frame in self.sent_history.iter_mut() {
             if !frame.is_retransmittable {
                 continue;
             }
 
-            if frame.retries == self.max_retries {
+            if frame.retries >= self.max_retries {
                 tracing::warn!(
-                    "Frame {} exceeded max retries ({}); continuing with backoff",
-                    frame.nonce,
-                    self.max_retries
+                    "Frame nonce={} retry {}/{} (backoff active)",
+                    frame.nonce, frame.retries, self.max_retries
                 );
             }
 
@@ -517,7 +537,12 @@ impl ProtocolMachine {
         }
 
         if ranges.len() > MAX_RANGES {
-            ranges = ranges[ranges.len() - MAX_RANGES..].to_vec();
+            // Always preserve the cumulative range (index 0) so the sender knows
+            // all frames up to expected_recv_nonce are received. Truncate SACK ranges.
+            let mut trimmed = vec![ranges[0]];
+            let tail_start = ranges.len().saturating_sub(MAX_RANGES - 1);
+            trimmed.extend_from_slice(&ranges[tail_start..]);
+            ranges = trimmed;
         }
 
         let mut out = Vec::with_capacity(1 + ranges.len() * 16);

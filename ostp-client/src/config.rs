@@ -129,6 +129,7 @@ struct RawUnifiedConfig {
     tun: Option<RawTunSection>,
     exclude: Option<RawExcludeSection>,
     mux: Option<RawMuxSection>,
+    turn: Option<RawTurnSection>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -148,6 +149,14 @@ struct RawExcludeSection {
 struct RawMuxSection {
     enabled: Option<bool>,
     sessions: Option<usize>,
+}
+
+#[derive(Debug, Deserialize)]
+struct RawTurnSection {
+    enabled: Option<bool>,
+    server_addr: Option<String>,
+    username: Option<String>,
+    access_key: Option<String>,
 }
 
 impl ClientConfig {
@@ -192,7 +201,15 @@ impl ClientConfig {
                 bind_addr: socks5,
                 connect_timeout_ms: 15000,
             },
-            turn: TurnConfig::default(),
+            turn: match raw.turn {
+                Some(t) => TurnConfig {
+                    enabled: t.enabled.unwrap_or(false),
+                    server_addr: t.server_addr.unwrap_or_default(),
+                    username: t.username.unwrap_or_default(),
+                    access_key: t.access_key.unwrap_or_default(),
+                },
+                None => TurnConfig::default(),
+            },
             exclusions: ExclusionConfig {
                 domains: exclusions.domains.unwrap_or_default(),
                 ips: exclusions.ips.unwrap_or_default(),

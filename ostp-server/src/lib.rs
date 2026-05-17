@@ -208,7 +208,9 @@ async fn run_server_loop(
     debug: bool,
 ) -> Result<()> {
     let mut remotes: HashMap<(u32, u16), RemoteState> = HashMap::new();
-    let (stream_tx, mut stream_rx) = mpsc::channel::<(u32, u16, Vec<u8>)>(10000);
+    // Unbounded channel: bounded(10000) caused TCP-reader tasks to fail under Speedtest load
+    // when 50+ streams competed for slots. Backpressure is managed at the relay layer instead.
+    let (stream_tx, mut stream_rx) = mpsc::unbounded_channel::<(u32, u16, Vec<u8>)>();
     let (connect_tx, mut connect_rx) = mpsc::unbounded_channel::<(u32, u16, String, Result<(tokio::net::tcp::OwnedWriteHalf, mpsc::Sender<()>), String>)>();
 
     let socket = std::sync::Arc::new(socket);
@@ -388,7 +390,7 @@ async fn handle_relay_message(
     socket: &UdpSocket,
     remotes: &mut HashMap<(u32, u16), RemoteState>,
     ui_event_tx: &mpsc::UnboundedSender<UiEvent>,
-    stream_tx: mpsc::Sender<(u32, u16, Vec<u8>)>,
+    stream_tx: mpsc::UnboundedSender<(u32, u16, Vec<u8>)>,
     connect_tx: mpsc::UnboundedSender<(u32, u16, String, Result<(tokio::net::tcp::OwnedWriteHalf, mpsc::Sender<()>), String>)>,
     outbound: Option<OutboundConfig>,
     debug: bool,
@@ -414,11 +416,11 @@ async fn handle_relay_message(
                                     read_res = reader.read(&mut buf) => {
                                         match read_res {
                                             Ok(0) | Err(_) => {
-                                                let _ = stream_tx_clone.send((session_id, stream_id, Vec::new())).await;
+                                                let _ = stream_tx_clone.send((session_id, stream_id, Vec::new()));
                                                 break;
                                             }
                                             Ok(n) => {
-                                                if stream_tx_clone.send((session_id, stream_id, buf[..n].to_vec())).await.is_err() {
+                                                if stream_tx_clone.send((session_id, stream_id, buf[..n].to_vec())).is_err() {
                                                     break;
                                                 }
                                             }
@@ -485,6 +487,7 @@ async fn connect_target(
     outbound: Option<&OutboundConfig>,
     debug: bool,
 ) -> Result<TcpStream> {
+    let connect_timeout = Duration::from_secs(10);
     if let Some(outbound) = outbound {
         if outbound.enabled {
             let action = select_outbound_action(target, outbound, debug).await;
@@ -493,13 +496,19 @@ async fn connect_target(
                 return match outbound.protocol.as_str() {
                     "socks5" => connect_via_socks5(&proxy_addr, target).await,
                     "http" => connect_via_http(&proxy_addr, target).await,
-                    _ => TcpStream::connect(target).await.map_err(Into::into),
+                    _ => tokio::time::timeout(connect_timeout, TcpStream::connect(target))
+                        .await
+                        .map_err(|_| anyhow::anyhow!("connect timeout ({}s): {}", connect_timeout.as_secs(), target))?
+                        .map_err(Into::into),
                 };
             }
         }
     }
 
-    TcpStream::connect(target).await.map_err(Into::into)
+    tokio::time::timeout(connect_timeout, TcpStream::connect(target))
+        .await
+        .map_err(|_| anyhow::anyhow!("connect timeout ({}s): {}", connect_timeout.as_secs(), target))?
+        .map_err(Into::into)
 }
 
 async fn select_outbound_action(

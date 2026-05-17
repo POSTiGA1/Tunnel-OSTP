@@ -279,15 +279,16 @@ fn format_bytes(bps: u64) -> String {
 fn is_essential_log(text: &str) -> bool {
     matches!(
         text,
-        "Handshaking started"
-            | "Bridge connection established"
+        "Connection established"
             | "TUN Tunnel established"
             | "Bridge stopped"
             | "TUN Tunnel stopped"
             | "Runtime config reloaded"
+            | "Connecting to remote server..."
     ) || text.starts_with("Connected UDP directly to ")
         || text.starts_with("TURN: Relay allocated")
         || text.starts_with("TURN allocation failed")
-        || text.starts_with("Handshake failed")
-        || text.starts_with("Connection timeout")
+        || text.starts_with("Connection failed:")
+        || text.starts_with("Connection lost")
+        || text.starts_with("Protocol tick fatal error")
 }

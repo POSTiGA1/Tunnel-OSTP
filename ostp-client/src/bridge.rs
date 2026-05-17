@@ -354,7 +354,7 @@ impl Bridge {
                 _ = keepalive_tick.tick() => {
                     if self.running {
                         // 1. Connection Liveness Check
-                        if self.last_valid_recv.elapsed().as_secs() > 30 {
+                        if self.last_valid_recv.elapsed().as_secs() > 60 {
                             let _ = tx.send(UiEvent::Log("Connection lost (timeout). Reconnecting...".into())).await;
                             self.running = false;
                             _proxy_guard = None;
@@ -369,11 +369,13 @@ impl Bridge {
                         // 2. Active Keep-Alive / Heartbeat
                         if let Some(sessions) = sessions_opt.as_mut() {
                             for session in sessions.iter_mut() {
-                                // Send Ping (Internal Metric)
+                                // Send Ping (Internal RTT Metric)
                                 let ts = SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_millis() as u64;
                                 let ping_payload = Bytes::from(RelayMessage::Ping(ts).encode());
                                 if let Ok(ProtocolAction::SendDatagram(frame)) = session.machine.on_event(OstpEvent::Outbound(0, ping_payload)) {
-                                    let _ = session.socket.send(&frame).await;
+                                    // Must go through send_datagram() for TURN-mode wrapping;
+                                    // raw socket.send() bypasses the ChannelData header and breaks RTT in TURN.
+                                    let _ = send_datagram(&session.socket, &frame, self.turn_enabled).await;
                                     self.metrics.bytes_sent.fetch_add(frame.len() as u64, Ordering::Relaxed);
                                 }
 
