@@ -9,6 +9,12 @@ on:
 permissions:
   contents: write
 
+# ── Global defaults ─────────────────────────────────────────────────────────
+env:
+  CARGO_TERM_COLOR: always
+  CARGO_INCREMENTAL: 0
+  RUST_BACKTRACE: short
+
 jobs:
   publish-release-matrix:
     name: Release for ${{ matrix.target }}
@@ -17,21 +23,21 @@ jobs:
       fail-fast: false
       matrix:
         include:
-          # ==========================================
-          # 🏁 WINDOWS ECOSYSTEM
-          # ==========================================
+          # ── Windows ──────────────────────────────────────────────────────
           - os: windows-latest
             target: x86_64-pc-windows-msvc
             artifact_name: ostp.exe
             release_name: ostp-windows-amd64.zip
             tun2socks_arch: windows-amd64
             wintun_arch: amd64
+
           - os: windows-latest
             target: i686-pc-windows-msvc
             artifact_name: ostp.exe
             release_name: ostp-windows-386.zip
             tun2socks_arch: windows-386
             wintun_arch: x86
+
           - os: windows-latest
             target: aarch64-pc-windows-msvc
             artifact_name: ostp.exe
@@ -39,45 +45,47 @@ jobs:
             tun2socks_arch: windows-arm64
             wintun_arch: arm64
 
-          # ==========================================
-          # 🍏 APPLE DARWIN (macOS)
-          # ==========================================
+          # ── macOS ─────────────────────────────────────────────────────────
           - os: macos-latest
             target: x86_64-apple-darwin
             artifact_name: ostp
             release_name: ostp-darwin-amd64.tar.gz
             tun2socks_arch: darwin-amd64
+
           - os: macos-latest
             target: aarch64-apple-darwin
             artifact_name: ostp
             release_name: ostp-darwin-arm64.tar.gz
             tun2socks_arch: darwin-arm64
 
-          # ==========================================
-          # 🐧 LINUX & FreeBSD STANDARD
-          # ==========================================
+          # ── Linux native ──────────────────────────────────────────────────
           - os: ubuntu-latest
             target: x86_64-unknown-linux-musl
             artifact_name: ostp
             release_name: ostp-linux-amd64.tar.gz
             tun2socks_arch: linux-amd64
+
           - os: ubuntu-latest
             target: i686-unknown-linux-musl
             artifact_name: ostp
             release_name: ostp-linux-386.tar.gz
             tun2socks_arch: linux-386
+
+          # ── Linux cross ───────────────────────────────────────────────────
           - os: ubuntu-latest
             target: aarch64-unknown-linux-musl
             artifact_name: ostp
             release_name: ostp-linux-arm64.tar.gz
             tun2socks_arch: linux-arm64
             use_cross: true
+
           - os: ubuntu-latest
             target: armv7-unknown-linux-musleabihf
             artifact_name: ostp
             release_name: ostp-linux-armv7.tar.gz
             tun2socks_arch: linux-armv7
             use_cross: true
+
           - os: ubuntu-latest
             target: x86_64-unknown-freebsd
             artifact_name: ostp
@@ -85,9 +93,6 @@ jobs:
             tun2socks_arch: freebsd-amd64
             use_cross: true
 
-          # ==========================================
-          # 🛰️ ROUTER & SPECIAL ARCHITECTURES (Cross)
-          # ==========================================
           - os: ubuntu-latest
             target: mipsel-unknown-linux-musl
             artifact_name: ostp
@@ -95,6 +100,7 @@ jobs:
             tun2socks_arch: linux-mipsle-softfloat
             use_cross: true
             toolchain: nightly
+
           - os: ubuntu-latest
             target: riscv64gc-unknown-linux-gnu
             artifact_name: ostp
@@ -102,9 +108,6 @@ jobs:
             tun2socks_arch: linux-riscv64
             use_cross: true
 
-          # ==========================================
-          # 🤖 MOBILE & EMBEDDED SUITE (Cross)
-          # ==========================================
           - os: ubuntu-latest
             target: aarch64-linux-android
             artifact_name: ostp
@@ -116,102 +119,102 @@ jobs:
       - name: Checkout code
         uses: actions/checkout@v4
 
-      - name: Initialize Rust ecosystem (Native Host)
-        if: ${{ !matrix.use_cross }}
+      # ── Rust toolchain ─────────────────────────────────────────────────────
+      - name: Setup Rust toolchain
         uses: dtolnay/rust-toolchain@stable
         with:
           toolchain: ${{ matrix.toolchain || 'stable' }}
-          targets: ${{ matrix.target }}
+          targets: ${{ !matrix.use_cross && matrix.target || '' }}
 
-      - name: Initialize Rust ecosystem (Cross Container Host)
-        if: ${{ matrix.use_cross }}
-        uses: dtolnay/rust-toolchain@stable
+      # ── Cargo cache (shared per target) ───────────────────────────────────
+      - name: Restore Cargo cache
+        uses: actions/cache@v4
         with:
-          toolchain: ${{ matrix.toolchain || 'stable' }}
+          path: |
+            ~/.cargo/registry/index/
+            ~/.cargo/registry/cache/
+            ~/.cargo/git/db/
+            target/
+          key: cargo-${{ matrix.target }}-${{ hashFiles('**/Cargo.lock') }}
+          restore-keys: |
+            cargo-${{ matrix.target }}-
 
-      - name: Activate rust compilation caching
-        if: ${{ !matrix.use_cross }}
-        uses: swatinem/rust-cache@v2
-
-      - name: Setup local MUSL linker dependencies
+      # ── MUSL tools for native Linux musl builds ────────────────────────────
+      - name: Install musl-tools
         if: ${{ matrix.os == 'ubuntu-latest' && !matrix.use_cross }}
         run: sudo apt-get update && sudo apt-get install -y musl-tools
 
-      - name: Pre-flight compilation check
+      # ── Native build ───────────────────────────────────────────────────────
+      - name: Build (native)
         if: ${{ !matrix.use_cross }}
         shell: bash
-        run: |
-          cargo check --target ${{ matrix.target }} --bin ostp 2>&1
-          echo "Pre-flight check passed."
+        run: cargo build --release --target ${{ matrix.target }} --bin ostp
 
-      - name: Execute Standard Native Compilation (Windows)
-        if: ${{ !matrix.use_cross && matrix.os == 'windows-latest' }}
-        run: |
-          cargo build --release --target ${{ matrix.target }} --bin ostp
-
-      - name: Execute Standard Native Compilation (Unix)
-        if: ${{ !matrix.use_cross && matrix.os != 'windows-latest' }}
-        shell: bash
-        run: |
-          cargo build --release --target ${{ matrix.target }} --bin ostp
-
-      - name: Execute Specialized Cross-Compilation
+      # ── Cross build ────────────────────────────────────────────────────────
+      - name: Restore cross binary cache
         if: ${{ matrix.use_cross }}
-        run: |
-          cargo install cross --git https://github.com/cross-rs/cross.git
-          cross build --release --target ${{ matrix.target }} --bin ostp
+        id: cross-cache
+        uses: actions/cache@v4
+        with:
+          path: ~/.cargo/bin/cross
+          key: cross-bin-${{ runner.os }}-v1
 
-      - name: Inject Win32 Driver Dependencies (Windows)
+      - name: Install cross (if not cached)
+        if: ${{ matrix.use_cross && steps.cross-cache.outputs.cache-hit != 'true' }}
+        run: cargo install cross --git https://github.com/cross-rs/cross.git --locked
+
+      - name: Build (cross)
+        if: ${{ matrix.use_cross }}
+        run: cross build --release --target ${{ matrix.target }} --bin ostp
+
+      # ── Driver dependencies ────────────────────────────────────────────────
+      - name: Download tun2socks + wintun (Windows)
         if: ${{ matrix.os == 'windows-latest' && matrix.tun2socks_arch }}
         shell: pwsh
         run: |
-          cd target/${{ matrix.target }}/release
           $ProgressPreference = 'SilentlyContinue'
-          # 1. Acquire tun2socks
-          Invoke-WebRequest -Uri "https://github.com/xjasonlyu/tun2socks/releases/download/v2.6.0/tun2socks-${{ matrix.tun2socks_arch }}.zip" -OutFile "tun2socks.zip"
-          Expand-Archive -Path "tun2socks.zip" -DestinationPath "tun_temp" -Force
-          Get-ChildItem -Path "tun_temp" -Filter "*.exe" -Recurse | Copy-Item -Destination "tun2socks.exe" -Force
-          # 2. Acquire wintun
-          Invoke-WebRequest -Uri "https://www.wintun.net/builds/wintun-0.14.1.zip" -OutFile "wintun.zip"
-          Expand-Archive -Path "wintun.zip" -DestinationPath "wintun_temp" -Force
-          Get-ChildItem -Path "wintun_temp" -Filter "wintun.dll" -Recurse | Where-Object { $_.FullName -match 'bin[\\/]${{ matrix.wintun_arch }}[\\/]' } | Copy-Item -Destination "." -Force
-          # Cleanup
-          Remove-Item "tun2socks.zip", "tun_temp", "wintun.zip", "wintun_temp" -Recurse -Force
+          $dir = "target/${{ matrix.target }}/release"
+          Invoke-WebRequest -Uri "https://github.com/xjasonlyu/tun2socks/releases/download/v2.6.0/tun2socks-${{ matrix.tun2socks_arch }}.zip" -OutFile "$dir/t2s.zip"
+          Expand-Archive "$dir/t2s.zip" -DestinationPath "$dir/t2s_tmp" -Force
+          Get-ChildItem "$dir/t2s_tmp" -Filter "*.exe" -Recurse | Select-Object -First 1 | Copy-Item -Destination "$dir/tun2socks.exe"
+          Invoke-WebRequest -Uri "https://www.wintun.net/builds/wintun-0.14.1.zip" -OutFile "$dir/wt.zip"
+          Expand-Archive "$dir/wt.zip" -DestinationPath "$dir/wt_tmp" -Force
+          Get-ChildItem "$dir/wt_tmp" -Filter "wintun.dll" -Recurse | Where-Object { $_.FullName -match 'bin[\\/]${{ matrix.wintun_arch }}[\\/]' } | Copy-Item -Destination "$dir/"
+          Remove-Item "$dir/t2s.zip","$dir/t2s_tmp","$dir/wt.zip","$dir/wt_tmp" -Recurse -Force
 
-      - name: Inject Unix Driver Dependencies (Unix)
+      - name: Download tun2socks (Unix)
         if: ${{ matrix.os != 'windows-latest' && matrix.tun2socks_arch }}
         shell: bash
         run: |
-          cd target/${{ matrix.target }}/release
-          # All platforms in tun2socks v2.6.0 use .zip packaging
+          dir="target/${{ matrix.target }}/release"
           URL="https://github.com/xjasonlyu/tun2socks/releases/download/v2.6.0/tun2socks-${{ matrix.tun2socks_arch }}.zip"
-          curl -f -L "$URL" -o "tun2socks.zip" || { echo "Failed to download tun2socks"; exit 0; }
-          unzip -o "tun2socks.zip"
-          find . -maxdepth 2 -name "tun2socks*" ! -name "*.zip" -type f -exec mv {} ./tun2socks \;
-          rm -f "tun2socks.zip"
-          chmod +x tun2socks || true
+          curl -fsSL "$URL" -o "$dir/t2s.zip" || exit 0
+          unzip -o "$dir/t2s.zip" -d "$dir/t2s_tmp"
+          find "$dir/t2s_tmp" -type f -name "tun2socks*" ! -name "*.zip" | head -1 | xargs -I{} cp {} "$dir/tun2socks"
+          chmod +x "$dir/tun2socks" 2>/dev/null || true
+          rm -rf "$dir/t2s.zip" "$dir/t2s_tmp"
 
-      - name: Package release artifact (Windows)
+      # ── Package ────────────────────────────────────────────────────────────
+      - name: Package (Windows)
         if: ${{ matrix.os == 'windows-latest' }}
         shell: pwsh
         run: |
-          cd target/${{ matrix.target }}/release
-          $files = @("ostp.exe")
-          if (Test-Path "tun2socks.exe") { $files += "tun2socks.exe" }
-          if (Test-Path "wintun.dll") { $files += "wintun.dll" }
-          Compress-Archive -Path $files -DestinationPath ../../../${{ matrix.release_name }} -Force
+          $dir = "target/${{ matrix.target }}/release"
+          $files = @("$dir/ostp.exe")
+          if (Test-Path "$dir/tun2socks.exe") { $files += "$dir/tun2socks.exe" }
+          if (Test-Path "$dir/wintun.dll")    { $files += "$dir/wintun.dll" }
+          Compress-Archive -Path $files -DestinationPath "${{ matrix.release_name }}" -Force
 
-      - name: Package release artifact (Unix Systems)
+      - name: Package (Unix)
         if: ${{ matrix.os != 'windows-latest' }}
         run: |
-          cd target/${{ matrix.target }}/release
-          FILES="${{ matrix.artifact_name }}"
-          if [ -f "tun2socks" ]; then
-            FILES="$FILES tun2socks"
-          fi
-          tar -czf ../../../${{ matrix.release_name }} $FILES
+          dir="target/${{ matrix.target }}/release"
+          FILES="$dir/${{ matrix.artifact_name }}"
+          [ -f "$dir/tun2socks" ] && FILES="$FILES $dir/tun2socks"
+          tar -czf "${{ matrix.release_name }}" -C "$dir" $(basename $FILES | tr '\n' ' ')
 
-      - name: Inject artifact to Global GitHub Release Assets
+      # ── Upload ─────────────────────────────────────────────────────────────
+      - name: Upload to GitHub Release
         if: ${{ startsWith(github.ref, 'refs/tags/') }}
         uses: softprops/action-gh-release@v2
         with:
@@ -219,11 +222,9 @@ jobs:
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
-  # ==========================================
-  # Windows GUI (Tauri) Build
-  # ==========================================
+  # ── Windows GUI (Tauri) ──────────────────────────────────────────────────
   publish-gui:
-    name: GUI for Windows ${{ matrix.arch_label }}
+    name: GUI Windows ${{ matrix.arch_label }}
     runs-on: windows-latest
     strategy:
       fail-fast: false
@@ -247,58 +248,70 @@ jobs:
         with:
           targets: ${{ matrix.target }}
 
-      - name: Activate Rust caching
-        uses: swatinem/rust-cache@v2
+      - name: Restore Cargo cache
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry/index/
+            ~/.cargo/registry/cache/
+            ~/.cargo/git/db/
+            target/
+            ostp-gui/src-tauri/target/
+          key: cargo-gui-${{ matrix.target }}-${{ hashFiles('**/Cargo.lock') }}
+          restore-keys: |
+            cargo-gui-${{ matrix.target }}-
 
       - name: Setup Node.js
         uses: actions/setup-node@v4
         with:
           node-version: 20
+          cache: npm
+          cache-dependency-path: ostp-gui/package-lock.json
 
-      - name: Install Tauri CLI
-        run: cargo install tauri-cli --version "^2"
+      # Cache tauri-cli binary to skip reinstall every run
+      - name: Cache tauri-cli
+        id: tauri-cli-cache
+        uses: actions/cache@v4
+        with:
+          path: ~/.cargo/bin/cargo-tauri*
+          key: tauri-cli-v2-${{ runner.os }}
 
-      - name: Build Tun Helper
-        run: |
-          cargo build --release --target ${{ matrix.target }} -p ostp-tun-helper
+      - name: Install Tauri CLI (if not cached)
+        if: steps.tauri-cli-cache.outputs.cache-hit != 'true'
+        run: cargo install tauri-cli --version "^2" --locked
 
-      - name: Build Tauri application
+      - name: Build tun-helper
+        run: cargo build --release --target ${{ matrix.target }} -p ostp-tun-helper
+
+      - name: Build Tauri app
         shell: pwsh
         run: |
           cd ostp-gui
           cargo tauri build --target ${{ matrix.target }}
 
-      - name: Package GUI release
+      - name: Package GUI
         shell: pwsh
         run: |
           $ProgressPreference = 'SilentlyContinue'
           $dist = "ostp-gui-dist"
           New-Item -ItemType Directory -Force -Path $dist
 
-          # 1. Copy the Tauri executable
-          $exePath = Get-ChildItem -Path "ostp-gui/src-tauri/target/${{ matrix.target }}/release" -Filter "ostp-gui.exe" | Select-Object -First 1
-          Copy-Item $exePath.FullName -Destination "$dist/ostp-gui.exe"
+          $exePath = Get-ChildItem "ostp-gui/src-tauri/target/${{ matrix.target }}/release" -Filter "ostp-gui.exe" | Select-Object -First 1
+          Copy-Item $exePath.FullName "$dist/ostp-gui.exe"
+          Copy-Item "target/${{ matrix.target }}/release/ostp-tun-helper.exe" "$dist/ostp-tun-helper.exe"
 
-          # 1.5 Copy the Tun Helper executable
-          Copy-Item "target/${{ matrix.target }}/release/ostp-tun-helper.exe" -Destination "$dist/ostp-tun-helper.exe"
+          Invoke-WebRequest "https://github.com/xjasonlyu/tun2socks/releases/download/v2.6.0/tun2socks-${{ matrix.tun2socks_arch }}.zip" -OutFile "t2s.zip"
+          Expand-Archive "t2s.zip" "t2s_tmp" -Force
+          Get-ChildItem "t2s_tmp" -Filter "*.exe" -Recurse | Select-Object -First 1 | Copy-Item -Destination "$dist/tun2socks.exe"
 
-          # 2. Download tun2socks
-          Invoke-WebRequest -Uri "https://github.com/xjasonlyu/tun2socks/releases/download/v2.6.0/tun2socks-${{ matrix.tun2socks_arch }}.zip" -OutFile "tun2socks.zip"
-          Expand-Archive -Path "tun2socks.zip" -DestinationPath "tun_temp" -Force
-          Get-ChildItem -Path "tun_temp" -Filter "*.exe" -Recurse | Copy-Item -Destination "$dist/tun2socks.exe" -Force
+          Invoke-WebRequest "https://www.wintun.net/builds/wintun-0.14.1.zip" -OutFile "wt.zip"
+          Expand-Archive "wt.zip" "wt_tmp" -Force
+          Get-ChildItem "wt_tmp" -Filter "wintun.dll" -Recurse | Where-Object { $_.FullName -match 'bin[\\/]${{ matrix.wintun_arch }}[\\/]' } | Copy-Item -Destination "$dist/"
 
-          # 3. Download wintun
-          Invoke-WebRequest -Uri "https://www.wintun.net/builds/wintun-0.14.1.zip" -OutFile "wintun.zip"
-          Expand-Archive -Path "wintun.zip" -DestinationPath "wintun_temp" -Force
-          Get-ChildItem -Path "wintun_temp" -Filter "wintun.dll" -Recurse | Where-Object { $_.FullName -match 'bin[\\/]${{ matrix.wintun_arch }}[\\/]' } | Copy-Item -Destination "$dist/wintun.dll" -Force
+          Compress-Archive "$dist/*" "ostp-windows-gui-${{ matrix.arch_label }}.zip" -Force
+          Remove-Item "t2s.zip","t2s_tmp","wt.zip","wt_tmp",$dist -Recurse -Force
 
-          # 4. Create zip archive
-          Compress-Archive -Path "$dist/*" -DestinationPath "ostp-windows-gui-${{ matrix.arch_label }}.zip" -Force
-
-          # Cleanup
-          Remove-Item "tun2socks.zip", "tun_temp", "wintun.zip", "wintun_temp", $dist -Recurse -Force
-
-      - name: Upload GUI artifact to release
+      - name: Upload GUI to release
         if: ${{ startsWith(github.ref, 'refs/tags/') }}
         uses: softprops/action-gh-release@v2
         with:

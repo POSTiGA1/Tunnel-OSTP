@@ -2,159 +2,245 @@
 <html lang="en">
 <head>
   <meta charset="UTF-8" />
-  <link rel="stylesheet" href="styles.css" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-  <title>OSTP Client</title>
-  <script type="module" src="main.js" defer></script>
+  <title>OSTP</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com" />
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+  <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&family=JetBrains+Mono:wght@400;500&display=swap" />
+  <link rel="stylesheet" href="styles.css" />
 </head>
 <body>
-  <div class="app-container">
-    <!-- Dynamic Mesh Background Particles -->
-    <div class="mesh-bg"></div>
-    <div class="blur-overlay"></div>
+  <div class="app-root">
 
-    <!-- Main Screen -->
+    <!-- Ambient light blobs -->
+    <div class="ambient" aria-hidden="true">
+      <div class="blob blob-1"></div>
+      <div class="blob blob-2"></div>
+      <div class="blob blob-3"></div>
+    </div>
+
+    <!-- ── HOME SCREEN ──────────────────────────────────────────── -->
     <div id="home-screen" class="screen active">
-      <header class="app-header">
-        <div class="logo-container">
-          <div class="logo-icon"></div>
-          <h1>OSTP</h1>
+
+      <!-- Top bar -->
+      <header class="topbar">
+        <div class="brand">
+          <div class="brand-dot" id="brand-dot"></div>
+          <span class="brand-name">OSTP</span>
         </div>
-        <div class="header-actions">
-          <button id="btn-lang" class="icon-btn lang-btn" aria-label="Language" title="Language">
+        <div class="topbar-right">
+          <button id="btn-lang" class="pill-btn" title="Language">
             <span id="lang-label">EN</span>
           </button>
           <button id="btn-go-settings" class="icon-btn" aria-label="Settings">
-            <svg viewBox="0 0 24 24" width="24" height="24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="3"></circle><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 1 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 1 1-2.83-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 1 1 2.83-2.83l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 1 1 2.83 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z"></path></svg>
+            <!-- Gear icon -->
+            <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+              <circle cx="12" cy="12" r="3"/>
+              <path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 1 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 1 1-2.83-2.83l.06-.06A1.65 1.65 0 0 0 4.68 15a1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 1 1 2.83-2.83l.06.06A1.65 1.65 0 0 0 9 4.68a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 1 1 2.83 2.83l-.06.06A1.65 1.65 0 0 0 19.4 9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z"/>
+            </svg>
           </button>
         </div>
       </header>
 
-      <div class="main-content">
-        <div class="power-button-container">
-          <div class="pulse-ring"></div>
-          <div class="pulse-ring delay-1"></div>
-          <button id="btn-connect" class="power-btn">
+      <!-- Center stage -->
+      <main class="stage">
+
+        <!-- Orbit rings -->
+        <div class="orbit-wrap" id="orbit-wrap">
+          <div class="orbit orbit-1"></div>
+          <div class="orbit orbit-2"></div>
+          <div class="orbit orbit-3"></div>
+
+          <!-- Power button -->
+          <button id="btn-connect" class="power-btn" aria-label="Connect">
             <div class="power-icon">
-              <svg viewBox="0 0 24 24" width="48" height="48" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M18.36 6.64a9 9 0 1 1-12.73 0"></path><line x1="12" y1="2" x2="12" y2="12"></line></svg>
+              <svg width="44" height="44" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round">
+                <path d="M18.36 6.64a9 9 0 1 1-12.73 0"/>
+                <line x1="12" y1="2" x2="12" y2="12"/>
+              </svg>
             </div>
           </button>
         </div>
 
-        <div class="status-display">
-          <span id="status-text" class="status-disconnected" data-i18n="status_disconnected">Disconnected</span>
-          <span id="uptime-text" class="subtext" data-i18n="hint_tap">Tap to protect your traffic</span>
+        <!-- Status block -->
+        <div class="status-block">
+          <div id="status-text" class="status-label" data-i18n="status_disconnected">Disconnected</div>
+          <div id="uptime-text" class="status-sub" data-i18n="hint_tap">Tap to protect your traffic</div>
         </div>
 
-        <div class="metrics-grid">
-          <div class="metric-card glass">
-            <div class="metric-icon down">
-              <svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 5v14M19 12l-7 7-7-7"/></svg>
-            </div>
-            <div class="metric-data">
-              <span class="metric-label" data-i18n="download">Download</span>
-              <span id="metric-down" class="metric-value">0.0 B</span>
-            </div>
+        <!-- Server badge (shown when connected) -->
+        <div id="server-badge" class="server-badge hidden">
+          <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round">
+            <rect x="2" y="2" width="20" height="8" rx="2"/>
+            <rect x="2" y="14" width="20" height="8" rx="2"/>
+            <line x1="6" y1="6" x2="6.01" y2="6"/>
+            <line x1="6" y1="18" x2="6.01" y2="18"/>
+          </svg>
+          <span id="server-badge-text">—</span>
+        </div>
+
+      </main>
+
+      <!-- Traffic metrics bar -->
+      <footer class="metrics-bar">
+        <div class="metric">
+          <div class="metric-icon down-icon">
+            <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round">
+              <path d="M12 5v14M19 12l-7 7-7-7"/>
+            </svg>
           </div>
-          <div class="metric-card glass">
-            <div class="metric-icon up">
-              <svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 19V5M5 12l7-7 7 7"/></svg>
-            </div>
-            <div class="metric-data">
-              <span class="metric-label" data-i18n="upload">Upload</span>
-              <span id="metric-up" class="metric-value">0.0 B</span>
-            </div>
+          <div class="metric-body">
+            <span class="metric-label" data-i18n="download">Download</span>
+            <span id="metric-down" class="metric-value">0 B</span>
           </div>
         </div>
-      </div>
+
+        <div class="metric-sep"></div>
+
+        <div class="metric">
+          <div class="metric-icon up-icon">
+            <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round">
+              <path d="M12 19V5M5 12l7-7 7 7"/>
+            </svg>
+          </div>
+          <div class="metric-body">
+            <span class="metric-label" data-i18n="upload">Upload</span>
+            <span id="metric-up" class="metric-value">0 B</span>
+          </div>
+        </div>
+
+        <div class="metric-sep"></div>
+
+        <div class="metric">
+          <div class="metric-icon ping-icon">
+            <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round">
+              <path d="M1 6l5.5 5.5L12 6l5.5 5.5L23 6"/>
+              <path d="M1 18l5.5-5.5L12 18l5.5-5.5L23 18"/>
+            </svg>
+          </div>
+          <div class="metric-body">
+            <span class="metric-label">Mode</span>
+            <span id="metric-mode" class="metric-value">—</span>
+          </div>
+        </div>
+      </footer>
     </div>
 
-    <!-- Settings Screen -->
+    <!-- ── SETTINGS SCREEN ──────────────────────────────────────── -->
     <div id="settings-screen" class="screen">
-      <header class="app-header">
+
+      <header class="topbar">
         <button id="btn-back" class="icon-btn" aria-label="Back">
-          <svg viewBox="0 0 24 24" width="24" height="24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><path d="M19 12H5M12 19l-7-7 7-7"/></svg>
+          <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round">
+            <path d="M19 12H5M12 19l-7-7 7-7"/>
+          </svg>
         </button>
-        <h2 data-i18n="settings_title">Configuration</h2>
-        <div style="width: 40px;"></div>
+        <span class="topbar-title" data-i18n="settings_title">Configuration</span>
+        <div style="width:36px"></div>
       </header>
 
-      <div class="settings-content">
-        <!-- Import Area -->
-        <div class="import-container glass">
-          <input type="text" id="in-import-url" data-i18n-placeholder="import_placeholder" placeholder="Paste ostp:// share link here..." />
-          <button id="btn-import-url" class="small-btn" data-i18n="import_btn">Import</button>
+      <div class="settings-body">
+
+        <!-- Quick import -->
+        <div class="import-row">
+          <input id="in-import-url"
+                 class="import-input"
+                 type="text"
+                 data-i18n-placeholder="import_placeholder"
+                 placeholder="Paste ostp:// share link..." />
+          <button id="btn-import-url" class="accent-btn" data-i18n="import_btn">Import</button>
         </div>
 
-        <!-- Form Settings -->
-        <div class="editor-container glass scrollable">
-          <div class="form-group">
-            <label for="in-server" data-i18n="label_server">Server Address</label>
-            <input type="text" id="in-server" placeholder="host:port" />
+        <!-- Form card -->
+        <div class="card scrollable">
+
+          <div class="field-group">
+            <label class="field-label" for="in-server" data-i18n="label_server">Server Address</label>
+            <input id="in-server" class="field-input" type="text" placeholder="host:port" spellcheck="false" />
           </div>
 
-          <div class="form-group">
-            <label for="in-key" data-i18n="label_key">Access Key</label>
-            <input type="password" id="in-key" data-i18n-placeholder="ph_key" placeholder="Enter secure access key" />
-          </div>
-
-          <div class="form-group">
-            <label for="in-socks" data-i18n="label_socks">Local Proxy Address</label>
-            <input type="text" id="in-socks" placeholder="127.0.0.1:1088" />
-          </div>
-
-          <div class="form-group">
-            <label for="in-dns" data-i18n="label_dns">Custom DNS Server</label>
-            <input type="text" id="in-dns" placeholder="8.8.8.8" />
-          </div>
-
-          <div class="form-group row-align">
-            <div class="label-stack">
-              <span class="toggle-label" data-i18n="label_tun">TUN Tunnel Mode</span>
-              <span class="toggle-subtext" data-i18n="tun_hint">Route all system traffic (Admin req.)</span>
+          <div class="field-group">
+            <label class="field-label" for="in-key" data-i18n="label_key">Access Key</label>
+            <div class="input-wrap">
+              <input id="in-key" class="field-input has-icon" type="password" data-i18n-placeholder="ph_key" placeholder="Secure access key" spellcheck="false" />
+              <button class="peek-btn" id="btn-peek-key" tabindex="-1" aria-label="Show key">
+                <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                  <path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z"/>
+                  <circle cx="12" cy="12" r="3"/>
+                </svg>
+              </button>
             </div>
-            <label class="switch">
-              <input type="checkbox" id="in-tun-mode">
-              <span class="slider round"></span>
+          </div>
+
+          <div class="field-group">
+            <label class="field-label" for="in-socks" data-i18n="label_socks">Local Proxy</label>
+            <input id="in-socks" class="field-input" type="text" placeholder="127.0.0.1:1088" />
+          </div>
+
+          <div class="field-group">
+            <label class="field-label" for="in-dns" data-i18n="label_dns">DNS Server</label>
+            <input id="in-dns" class="field-input" type="text" placeholder="1.1.1.1" />
+          </div>
+
+          <!-- Toggles -->
+          <div class="toggle-row">
+            <div class="toggle-text">
+              <span class="toggle-name" data-i18n="label_tun">TUN Mode</span>
+              <span class="toggle-hint" data-i18n="tun_hint">Route all system traffic</span>
+            </div>
+            <label class="toggle">
+              <input type="checkbox" id="in-tun-mode" />
+              <span class="toggle-track">
+                <span class="toggle-thumb"></span>
+              </span>
             </label>
           </div>
-          
-          <div class="form-group row-align">
-            <div class="label-stack">
-              <span class="toggle-label" data-i18n="label_debug">Debug Logs</span>
-              <span class="toggle-subtext" data-i18n="debug_hint">Enable verbose internal event outputs</span>
+
+          <div class="toggle-row">
+            <div class="toggle-text">
+              <span class="toggle-name" data-i18n="label_debug">Debug Logs</span>
+              <span class="toggle-hint" data-i18n="debug_hint">Verbose output</span>
             </div>
-            <label class="switch">
-              <input type="checkbox" id="in-debug">
-              <span class="slider round"></span>
+            <label class="toggle">
+              <input type="checkbox" id="in-debug" />
+              <span class="toggle-track">
+                <span class="toggle-thumb"></span>
+              </span>
             </label>
           </div>
 
-          <!-- Exclusions Section Divider -->
-          <div class="section-divider"><span data-i18n="excl_title">Exclusions</span> <span class="divider-hint" data-i18n="excl_hint">(one per line)</span></div>
-
-          <div class="form-group">
-            <label for="in-ex-domains" data-i18n="excl_domains">Bypass Domains</label>
-            <textarea id="in-ex-domains" placeholder="example.com&#10;*.google.com" rows="2"></textarea>
+          <!-- Exclusions -->
+          <div class="section-head">
+            <span data-i18n="excl_title">Exclusions</span>
+            <span class="section-hint" data-i18n="excl_hint">one per line</span>
           </div>
 
-          <div class="form-group">
-            <label for="in-ex-ips" data-i18n="excl_ips">Bypass IPs / CIDR Ranges</label>
-            <textarea id="in-ex-ips" placeholder="192.168.1.0/24&#10;10.0.0.1" rows="2"></textarea>
+          <div class="field-group">
+            <label class="field-label" for="in-ex-domains" data-i18n="excl_domains">Bypass Domains</label>
+            <textarea id="in-ex-domains" class="field-input mono" placeholder="example.com&#10;*.google.com" rows="2"></textarea>
           </div>
 
-          <div class="form-group">
-            <label for="in-ex-processes" data-i18n="excl_processes">Bypass Processes</label>
-            <textarea id="in-ex-processes" placeholder="chrome.exe&#10;firefox.exe" rows="2"></textarea>
+          <div class="field-group">
+            <label class="field-label" for="in-ex-ips" data-i18n="excl_ips">Bypass IPs / CIDR</label>
+            <textarea id="in-ex-ips" class="field-input mono" placeholder="192.168.1.0/24&#10;10.0.0.1" rows="2"></textarea>
+          </div>
+
+          <div class="field-group">
+            <label class="field-label" for="in-ex-processes" data-i18n="excl_processes">Bypass Processes</label>
+            <textarea id="in-ex-processes" class="field-input mono" placeholder="chrome.exe&#10;firefox.exe" rows="2"></textarea>
           </div>
         </div>
-        
-        <div class="actions-container">
-          <button id="btn-save-config" class="primary-btn glass" data-i18n="save_btn">Save & Apply</button>
-        </div>
-        <div id="config-toast" class="toast" data-i18n="toast_saved">Configuration saved</div>
+
+        <!-- Save -->
+        <button id="btn-save-config" class="save-btn" data-i18n="save_btn">Save &amp; Apply</button>
+
       </div>
     </div>
+
+    <!-- Toast -->
+    <div id="toast" class="toast" role="status" aria-live="polite"></div>
+
   </div>
+  <script type="module" src="main.js"></script>
 </body>
 </html>

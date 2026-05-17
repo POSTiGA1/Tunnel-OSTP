@@ -1,176 +1,208 @@
-import { t, toggleLang, applyTranslations, getLang } from './i18n.js';
+import { t, toggleLang, applyTranslations } from './i18n.js';
 
-let invoke = () => {
-  console.warn('Tauri invoke is not available in this environment.');
-  return Promise.resolve(null);
-};
-if (window.__TAURI__ && window.__TAURI__.core) {
+// ── Tauri invoke shim ────────────────────────────────────────────────────────
+let invoke = () => Promise.resolve(null);
+if (window.__TAURI__?.core) {
   invoke = window.__TAURI__.core.invoke;
 }
 
-// State management
-let appState = 'disconnected'; 
-let pollInterval = null;
-let elapsedSeconds = 0;
-let elapsedTimer = null;
-let rawConfigObj = null;
+// ── State ────────────────────────────────────────────────────────────────────
+let appState    = 'disconnected'; // 'disconnected' | 'connecting' | 'connected'
+let pollTimer   = null;
+let uptimeTimer = null;
+let uptimeSecs  = 0;
+let rawConfig   = null;           // parsed config.json object
+let serverAddr  = '';             // current server address (for badge)
 
-// DOM Elements
-const btnConnect = document.getElementById('btn-connect');
-const powerContainer = document.querySelector('.power-button-container');
-const statusText = document.getElementById('status-text');
-const uptimeText = document.getElementById('uptime-text');
-const metricDown = document.getElementById('metric-down');
-const metricUp = document.getElementById('metric-up');
+// ── DOM refs ─────────────────────────────────────────────────────────────────
+const $ = id => document.getElementById(id);
 
-const homeScreen = document.getElementById('home-screen');
-const settingsScreen = document.getElementById('settings-screen');
-const btnGoSettings = document.getElementById('btn-go-settings');
-const btnBack = document.getElementById('btn-back');
-const btnSaveConfig = document.getElementById('btn-save-config');
-const configToast = document.getElementById('config-toast');
-const btnLang = document.getElementById('btn-lang');
+const homeScreen     = $('home-screen');
+const settingsScreen = $('settings-screen');
+const btnConnect     = $('btn-connect');
+const orbitWrap      = $('orbit-wrap');
+const brandDot       = $('brand-dot');
+const statusLabel    = $('status-text');
+const statusSub      = $('uptime-text');
+const serverBadge    = $('server-badge');
+const serverBadgeTxt = $('server-badge-text');
+const metricDown     = $('metric-down');
+const metricUp       = $('metric-up');
+const metricMode     = $('metric-mode');
+const toast          = $('toast');
 
-// Input Form Elements
-const inImportUrl = document.getElementById('in-import-url');
-const btnImportUrl = document.getElementById('btn-import-url');
-const inServer = document.getElementById('in-server');
-const inKey = document.getElementById('in-key');
-const inSocks = document.getElementById('in-socks');
-const inDns = document.getElementById('in-dns');
-const inTunMode = document.getElementById('in-tun-mode');
-const inDebug = document.getElementById('in-debug');
+const btnGoSettings  = $('btn-go-settings');
+const btnBack        = $('btn-back');
+const btnLang        = $('btn-lang');
+const btnImport      = $('btn-import-url');
+const btnPeekKey     = $('btn-peek-key');
+const btnSave        = $('btn-save-config');
+const importInput    = $('in-import-url');
+const inServer       = $('in-server');
+const inKey          = $('in-key');
+const inSocks        = $('in-socks');
+const inDns          = $('in-dns');
+const inTun          = $('in-tun-mode');
+const inDebug        = $('in-debug');
+const inDomains      = $('in-ex-domains');
+const inIps          = $('in-ex-ips');
+const inProcesses    = $('in-ex-processes');
 
-// Exclusions Textareas
-const inExDomains = document.getElementById('in-ex-domains');
-const inExIps = document.getElementById('in-ex-ips');
-const inExProcesses = document.getElementById('in-ex-processes');
-
-// Utils
-function formatBytes(bytes) {
-  if (bytes === 0) return '0.0 B';
-  const k = 1024;
-  const sizes = ['B', 'KB', 'MB', 'GB', 'TB'];
-  const i = Math.floor(Math.log(bytes) / Math.log(k));
-  return parseFloat((bytes / Math.pow(k, i)).toFixed(1)) + ' ' + sizes[i];
+// ── Utilities ────────────────────────────────────────────────────────────────
+function fmtBytes(b) {
+  if (!b || b === 0) return '0 B';
+  const units = ['B', 'KB', 'MB', 'GB', 'TB'];
+  const i = Math.min(Math.floor(Math.log2(b) / 10), 4);
+  return (b / Math.pow(1024, i)).toFixed(i === 0 ? 0 : 1) + ' ' + units[i];
 }
 
-function formatTime(seconds) {
-  const hrs = Math.floor(seconds / 3600);
-  const mins = Math.floor((seconds % 3600) / 60);
-  const secs = seconds % 60;
-  return [
-    hrs > 0 ? String(hrs).padStart(2, '0') : null,
-    String(mins).padStart(2, '0'),
-    String(secs).padStart(2, '0')
-  ].filter(x => x !== null).join(':');
+function fmtTime(s) {
+  const h = Math.floor(s / 3600);
+  const m = Math.floor((s % 3600) / 60);
+  const sec = s % 60;
+  const pad = n => String(n).padStart(2, '0');
+  return h > 0
+    ? `${h}:${pad(m)}:${pad(sec)}`
+    : `${pad(m)}:${pad(sec)}`;
 }
 
-// State Updates
-function setUIState(state) {
-  if (appState === state) return;
-  appState = state;
-  
+function splitLines(val) {
+  return val.split('\n').map(l => l.trim()).filter(Boolean);
+}
+
+// ── Toast ────────────────────────────────────────────────────────────────────
+let toastTimer = null;
+function showToast(msg, variant = '') {
+  toast.textContent = msg;
+  toast.className = 'toast show' + (variant ? ' is-' + variant : '');
+  clearTimeout(toastTimer);
+  toastTimer = setTimeout(() => {
+    toast.classList.remove('show');
+  }, 2400);
+}
+
+// ── State machine ────────────────────────────────────────────────────────────
+function setState(next) {
+  if (appState === next) return;
+  appState = next;
+
+  // Reset all dynamic classes
   btnConnect.className = 'power-btn';
-  powerContainer.className = 'power-button-container';
-  statusText.className = '';
+  orbitWrap.className  = 'orbit-wrap';
+  brandDot.className   = 'brand-dot';
+  statusLabel.className = 'status-label';
 
-  if (state === 'disconnected') {
-    statusText.textContent = t('status_disconnected');
-    statusText.classList.add('status-disconnected');
-    uptimeText.textContent = t('hint_tap');
-    
-    clearInterval(pollInterval);
-    clearInterval(elapsedTimer);
-    pollInterval = null;
-    elapsedTimer = null;
-    elapsedSeconds = 0;
+  if (next === 'disconnected') {
+    statusLabel.textContent = t('status_disconnected');
+    statusSub.textContent   = t('hint_tap');
+    statusLabel.classList.add('');
+    serverBadge.classList.add('hidden');
+    metricDown.textContent  = '0 B';
+    metricUp.textContent    = '0 B';
+    metricMode.textContent  = '—';
+    clearInterval(pollTimer);
+    clearInterval(uptimeTimer);
+    pollTimer = uptimeTimer = null;
+    uptimeSecs = 0;
 
-  } else if (state === 'connecting') {
+  } else if (next === 'connecting') {
     btnConnect.classList.add('connecting');
-    powerContainer.classList.add('connecting');
-    statusText.textContent = t('status_connecting');
-    statusText.classList.add('status-connecting');
-    uptimeText.textContent = t('hint_connecting');
+    orbitWrap.classList.add('connecting');
+    brandDot.classList.add('connecting');
+    statusLabel.classList.add('is-connecting');
+    statusLabel.textContent = t('status_connecting');
+    statusSub.textContent   = t('hint_connecting');
+    serverBadge.classList.add('hidden');
+    clearInterval(uptimeTimer);
+    uptimeSecs = 0;
 
-    clearInterval(elapsedTimer);
-    elapsedTimer = null;
-    elapsedSeconds = 0;
-
-  } else if (state === 'connected') {
+  } else if (next === 'connected') {
     btnConnect.classList.add('connected');
-    powerContainer.classList.add('connected');
-    statusText.textContent = t('status_connected');
-    statusText.classList.add('status-connected');
-    
-    if (!elapsedTimer) {
-      elapsedSeconds = 0;
-      elapsedTimer = setInterval(() => {
-        elapsedSeconds++;
-        uptimeText.textContent = `${t('hint_connected')} | ${formatTime(elapsedSeconds)}`;
+    orbitWrap.classList.add('connected');
+    brandDot.classList.add('connected');
+    statusLabel.classList.add('is-connected');
+    statusLabel.textContent = t('status_connected');
+
+    // Show server badge
+    if (serverAddr) {
+      serverBadgeTxt.textContent = serverAddr;
+      serverBadge.classList.remove('hidden');
+    }
+
+    // Start uptime counter
+    if (!uptimeTimer) {
+      uptimeSecs = 0;
+      uptimeTimer = setInterval(() => {
+        uptimeSecs++;
+        statusSub.textContent = fmtTime(uptimeSecs);
       }, 1000);
     }
   }
 }
 
-// UI Event Handlers
-async function handleToggleConnect() {
+// ── Polling ──────────────────────────────────────────────────────────────────
+async function poll() {
+  try {
+    const code = await invoke('get_tunnel_status');
+    if      (code === 0) { setState('disconnected'); return; }
+    else if (code === 1)   setState('connecting');
+    else if (code === 2)   setState('connected');
+
+    const metrics = await invoke('get_metrics');
+    if (metrics) {
+      metricDown.textContent = fmtBytes(metrics.bytes_recv);
+      metricUp.textContent   = fmtBytes(metrics.bytes_sent);
+    }
+  } catch {
+    setState('disconnected');
+  }
+}
+
+function startPolling() {
+  clearInterval(pollTimer);
+  poll();
+  pollTimer = setInterval(poll, 1000);
+}
+
+// ── Connect / Disconnect ─────────────────────────────────────────────────────
+async function handleToggle() {
   if (appState === 'disconnected') {
-    setUIState('connecting');
+    // Read server address for badge before connecting
     try {
-      const success = await invoke('start_tunnel');
-      if (success) {
-        startGlobalPolling();
+      const raw = await invoke('get_config');
+      const cfg = JSON.parse(raw);
+      serverAddr = cfg.server || '';
+
+      // Determine mode label
+      const isTun = cfg.tun?.enable;
+      metricMode.textContent = isTun ? 'TUN' : 'SOCKS5';
+    } catch { serverAddr = ''; }
+
+    setState('connecting');
+
+    try {
+      const ok = await invoke('start_tunnel');
+      if (ok) {
+        startPolling();
       } else {
-        setUIState('disconnected');
+        setState('disconnected');
+        showToast(t('toast_error') || 'Failed to connect', 'error');
       }
     } catch (err) {
-      console.error('Tunnel start error:', err);
-      setUIState('disconnected');
+      setState('disconnected');
+      showToast(String(err), 'error');
     }
   } else {
-    try {
-      await invoke('stop_tunnel');
-    } catch (err) {
-      console.error(err);
-    }
-    setUIState('disconnected');
+    try { await invoke('stop_tunnel'); } catch { /* ignore */ }
+    setState('disconnected');
+    showToast(t('toast_disconnected') || 'Disconnected');
   }
 }
 
-function startGlobalPolling() {
-  if (pollInterval) clearInterval(pollInterval);
-  pollInterval = setInterval(uiSyncTick, 1000);
-  uiSyncTick(); 
-}
-
-async function uiSyncTick() {
-  try {
-    const statusCode = await invoke('get_tunnel_status');
-    
-    if (statusCode === 0) {
-      setUIState('disconnected');
-      return;
-    } else if (statusCode === 1) {
-      setUIState('connecting');
-    } else if (statusCode === 2) {
-      setUIState('connected');
-    }
-    
-    const stats = await invoke('get_metrics'); 
-    if (stats) {
-      metricDown.textContent = formatBytes(stats.bytes_recv);
-      metricUp.textContent = formatBytes(stats.bytes_sent);
-    }
-  } catch (e) {
-    console.error('Sync error', e);
-    setUIState('disconnected');
-  }
-}
-
-function switchScreen(target) {
-  if (target === 'settings') {
-    loadConfigIntoFields();
+// ── Screen navigation ────────────────────────────────────────────────────────
+function showScreen(name) {
+  if (name === 'settings') {
+    loadConfigIntoForm();
     homeScreen.classList.remove('active');
     settingsScreen.classList.add('active');
   } else {
@@ -179,161 +211,127 @@ function switchScreen(target) {
   }
 }
 
-// Config Management
-async function loadConfigIntoFields() {
+// ── Config — load ─────────────────────────────────────────────────────────────
+async function loadConfigIntoForm() {
   try {
-    const rawStr = await invoke('get_config');
-    rawConfigObj = JSON.parse(rawStr);
-    
-    const isClient = rawConfigObj.mode === 'client';
-    const clientConf = isClient ? rawConfigObj : null;
+    const raw = await invoke('get_config');
+    rawConfig = JSON.parse(raw);
+    const c = rawConfig.mode === 'client' ? rawConfig : null;
+    if (!c) return;
 
-    if (clientConf) {
-      inServer.value = clientConf.server || '';
-      inKey.value = clientConf.access_key || '';
-      inSocks.value = clientConf.socks5_bind || '127.0.0.1:1088';
-      
-      const tunEnabled = clientConf.tun && clientConf.tun.enable;
-      inTunMode.checked = !!tunEnabled;
-      
-      inDns.value = (clientConf.tun && clientConf.tun.dns) || '';
-      inDebug.checked = !!clientConf.debug;
+    inServer.value  = c.server        || '';
+    inKey.value     = c.access_key    || '';
+    inSocks.value   = c.socks5_bind   || '127.0.0.1:1088';
+    inTun.checked   = !!c.tun?.enable;
+    inDns.value     = c.tun?.dns      || '';
+    inDebug.checked = !!c.debug;
 
-      // Load exclusions (arrays to multiline string)
-      const exc = clientConf.exclude || {};
-      inExDomains.value = (exc.domains || []).join('\n');
-      inExIps.value = (exc.ips || []).join('\n');
-      inExProcesses.value = (exc.processes || []).join('\n');
-    }
+    const ex = c.exclude || {};
+    inDomains.value   = (ex.domains   || []).join('\n');
+    inIps.value       = (ex.ips       || []).join('\n');
+    inProcesses.value = (ex.processes || []).join('\n');
   } catch (err) {
-    console.error('Error loading config', err);
+    showToast(String(err), 'error');
   }
 }
 
-function parseTextAreaToArray(val) {
-  return val.split('\n')
-    .map(line => line.trim())
-    .filter(line => line.length > 0);
-}
+// ── Config — save ─────────────────────────────────────────────────────────────
+async function handleSave() {
+  if (!rawConfig) rawConfig = { mode: 'client', log_level: 'info' };
 
-async function handleSaveConfig() {
-  if (!rawConfigObj) rawConfigObj = { mode: 'client', log_level: 'info' };
-  
-  rawConfigObj.mode = 'client';
-  rawConfigObj.server = inServer.value.trim();
-  rawConfigObj.access_key = inKey.value.trim();
-  rawConfigObj.socks5_bind = inSocks.value.trim() || null;
-  
-  if (!rawConfigObj.tun) {
-    rawConfigObj.tun = {
-      wintun_path: "./wintun.dll",
-      ipv4_address: "10.1.0.2/24"
-    };
+  const server = inServer.value.trim();
+  const key    = inKey.value.trim();
+
+  if (!server) { showToast(t('err_server_req') || 'Server address required', 'error'); return; }
+  if (!key)    { showToast(t('err_key_req')    || 'Access key required',     'error'); return; }
+
+  rawConfig.mode       = 'client';
+  rawConfig.server     = server;
+  rawConfig.access_key = key;
+  rawConfig.socks5_bind = inSocks.value.trim() || null;
+  rawConfig.debug      = inDebug.checked;
+
+  if (!rawConfig.tun) {
+    rawConfig.tun = { wintun_path: './wintun.dll', ipv4_address: '10.1.0.2/24' };
   }
-  rawConfigObj.tun.enable = inTunMode.checked;
-  
-  const dnsVal = inDns.value.trim();
-  rawConfigObj.tun.dns = dnsVal ? dnsVal : null;
+  rawConfig.tun.enable = inTun.checked;
+  rawConfig.tun.dns    = inDns.value.trim() || null;
 
-  rawConfigObj.debug = inDebug.checked;
-
-  // Save Exclusions
-  rawConfigObj.exclude = {
-    domains: parseTextAreaToArray(inExDomains.value),
-    ips: parseTextAreaToArray(inExIps.value),
-    processes: parseTextAreaToArray(inExProcesses.value)
+  rawConfig.exclude = {
+    domains:   splitLines(inDomains.value),
+    ips:       splitLines(inIps.value),
+    processes: splitLines(inProcesses.value),
   };
 
-  // Validation
-  if (!rawConfigObj.server) {
-    showToast(t('err_server_req') || 'Server address is required');
-    return;
-  }
-  if (!rawConfigObj.access_key) {
-    showToast(t('err_key_req') || 'Access key is required');
-    return;
-  }
-
   try {
-    const finalJson = JSON.stringify(rawConfigObj, null, 2);
-    const success = await invoke('save_config', { jsonContent: finalJson });
-    if (success) {
-      showToast(t('toast_saved'));
-      setTimeout(() => switchScreen('home'), 800);
+    const ok = await invoke('save_config', { jsonContent: JSON.stringify(rawConfig, null, 2) });
+    if (ok) {
+      showToast(t('toast_saved'), 'ok');
+      setTimeout(() => showScreen('home'), 700);
+    } else {
+      showToast(t('toast_error'), 'error');
     }
   } catch (err) {
-    showToast(t('toast_error') + ': ' + err);
+    showToast(String(err), 'error');
   }
 }
 
-// OSTP URI Sharing Parser
-function handleImportUrl() {
-  const urlStr = inImportUrl.value.trim();
-  if (!urlStr) return;
-
+// ── Import share link ─────────────────────────────────────────────────────────
+function handleImport() {
+  const raw = importInput.value.trim();
+  if (!raw) return;
   try {
-    if (!urlStr.startsWith('ostp://')) {
-      throw new Error('Link must start with ostp://');
-    }
-    const url = new URL(urlStr);
-    
-    const accessKey = decodeURIComponent(url.username);
-    const serverHost = url.host; 
-
-    if (!accessKey || !serverHost) {
-      throw new Error('Incomplete parameters');
-    }
-
-    inServer.value = serverHost;
-    inKey.value = accessKey;
-    inImportUrl.value = ''; 
-    showToast(t('toast_imported'));
+    if (!raw.startsWith('ostp://')) throw new Error('Link must start with ostp://');
+    const url = new URL(raw);
+    const key  = decodeURIComponent(url.username);
+    const host = url.host;
+    if (!key || !host) throw new Error('Incomplete link parameters');
+    inServer.value = host;
+    inKey.value    = key;
+    importInput.value = '';
+    showToast(t('toast_imported'), 'ok');
   } catch (err) {
-    showToast(t('toast_error') + ': ' + err.message);
+    showToast(err.message, 'error');
   }
 }
 
-function showToast(message) {
-  configToast.textContent = message || t('toast_saved');
-  configToast.classList.add('show');
-  setTimeout(() => configToast.classList.remove('show'), 2000);
+// ── Peek key ──────────────────────────────────────────────────────────────────
+let peeking = false;
+function togglePeek() {
+  peeking = !peeking;
+  inKey.type = peeking ? 'text' : 'password';
+  btnPeekKey.style.color = peeking
+    ? 'var(--c-accent)'
+    : 'var(--c-txt-3)';
 }
 
-// Initialization
+// ── Init ──────────────────────────────────────────────────────────────────────
 window.addEventListener('DOMContentLoaded', async () => {
-  // Apply translations on load
   applyTranslations();
-  
-  // Re-apply dynamic status text
-  setUIState(appState);
+  setState('disconnected');
 
-  btnConnect.addEventListener('click', handleToggleConnect);
-  btnGoSettings.addEventListener('click', () => switchScreen('settings'));
-  btnBack.addEventListener('click', () => switchScreen('home'));
-  btnSaveConfig.addEventListener('click', handleSaveConfig);
-  
-  btnImportUrl.addEventListener('click', handleImportUrl);
-  inImportUrl.addEventListener('keydown', (e) => {
-    if (e.key === 'Enter') handleImportUrl();
-  });
+  // Event wiring
+  btnConnect.addEventListener('click',       handleToggle);
+  btnGoSettings.addEventListener('click',    () => showScreen('settings'));
+  btnBack.addEventListener('click',          () => showScreen('home'));
+  btnSave.addEventListener('click',          handleSave);
+  btnImport.addEventListener('click',        handleImport);
+  btnPeekKey.addEventListener('click',       togglePeek);
+  importInput.addEventListener('keydown', e => { if (e.key === 'Enter') handleImport(); });
 
-  // Language toggle
   btnLang.addEventListener('click', () => {
     toggleLang();
-    // Re-apply dynamic elements
-    const currentState = appState;
-    appState = ''; // Force refresh
-    setUIState(currentState);
+    // Refresh dynamic text without losing state
+    const cur = appState;
+    appState = '';
+    setState(cur);
+    document.getElementById('lang-label').textContent =
+      localStorage.getItem('ostp_lang') === 'ru' ? 'RU' : 'EN';
   });
 
+  // Restore status on app open
   try {
-    const statusCode = await invoke('get_tunnel_status');
-    if (statusCode > 0) {
-      startGlobalPolling();
-    } else {
-      setUIState('disconnected');
-    }
-  } catch (err) {
-    setUIState('disconnected');
-  }
+    const code = await invoke('get_tunnel_status');
+    if (code > 0) startPolling();
+  } catch { /* not in Tauri context */ }
 });
