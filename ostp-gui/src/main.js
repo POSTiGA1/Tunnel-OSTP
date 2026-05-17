@@ -1,6 +1,12 @@
 import { t, toggleLang, applyTranslations, getLang } from './i18n.js';
 
-const { invoke } = window.__TAURI__.core;
+let invoke = () => {
+  console.warn('Tauri invoke is not available in this environment.');
+  return Promise.resolve(null);
+};
+if (window.__TAURI__ && window.__TAURI__.core) {
+  invoke = window.__TAURI__.core.invoke;
+}
 
 // State management
 let appState = 'disconnected'; 
@@ -240,9 +246,11 @@ async function handleSaveConfig() {
 
   // Validation
   if (!rawConfigObj.server) {
+    showToast(t('err_server_req') || 'Server address is required');
     return;
   }
   if (!rawConfigObj.access_key) {
+    showToast(t('err_key_req') || 'Access key is required');
     return;
   }
 

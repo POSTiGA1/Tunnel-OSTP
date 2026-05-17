@@ -413,9 +413,35 @@ struct HelperPipeState {
 fn find_helper_exe() -> Option<PathBuf> {
     if let Ok(exe) = std::env::current_exe() {
         if let Some(dir) = exe.parent() {
+            // 1. Release/Production adjacent
             let candidate = dir.join("ostp-tun-helper.exe");
             if candidate.exists() { return Some(candidate); }
+            
+            // 2. Tauri target directory fallback
+            // e.g. from ostp-gui/src-tauri/target/debug/deps/
+            let mut parent = dir;
+            while let Some(p) = parent.parent() {
+                if p.file_name().map(|n| n == "target").unwrap_or(false) {
+                    let deb = p.join("debug").join("ostp-tun-helper.exe");
+                    if deb.exists() { return Some(deb); }
+                    let rel = p.join("release").join("ostp-tun-helper.exe");
+                    if rel.exists() { return Some(rel); }
+                }
+                parent = p;
+            }
         }
+    }
+    // 3. Current working directory target fallback
+    let cwd = std::env::current_dir().unwrap_or_default();
+    let candidates = [
+        cwd.join("ostp-tun-helper.exe"),
+        cwd.join("target").join("debug").join("ostp-tun-helper.exe"),
+        cwd.join("target").join("release").join("ostp-tun-helper.exe"),
+        cwd.join("..").join("target").join("debug").join("ostp-tun-helper.exe"),
+        cwd.join("..").join("target").join("release").join("ostp-tun-helper.exe"),
+    ];
+    for path in &candidates {
+        if path.exists() { return Some(path.clone()); }
     }
     None
 }

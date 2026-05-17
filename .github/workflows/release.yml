@@ -258,6 +258,10 @@ jobs:
       - name: Install Tauri CLI
         run: cargo install tauri-cli --version "^2"
 
+      - name: Build Tun Helper
+        run: |
+          cargo build --release --target ${{ matrix.target }} -p ostp-tun-helper
+
       - name: Build Tauri application
         shell: pwsh
         run: |
@@ -274,6 +278,9 @@ jobs:
           # 1. Copy the Tauri executable
           $exePath = Get-ChildItem -Path "ostp-gui/src-tauri/target/${{ matrix.target }}/release" -Filter "ostp-gui.exe" | Select-Object -First 1
           Copy-Item $exePath.FullName -Destination "$dist/ostp-gui.exe"
+
+          # 1.5 Copy the Tun Helper executable
+          Copy-Item "target/${{ matrix.target }}/release/ostp-tun-helper.exe" -Destination "$dist/ostp-tun-helper.exe"
 
           # 2. Download tun2socks
           Invoke-WebRequest -Uri "https://github.com/xjasonlyu/tun2socks/releases/download/v2.6.0/tun2socks-${{ matrix.tun2socks_arch }}.zip" -OutFile "tun2socks.zip"
