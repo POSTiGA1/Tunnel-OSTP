@@ -661,8 +661,19 @@ impl Bridge {
         let throughput = incoming.saturating_add(outgoing);
 
         tx.send(UiEvent::Traffic { incoming_bps: incoming, outgoing_bps: outgoing }).await.ok();
+
+        // Dynamically report connection status based on whether we have received server packets recently (last 10 seconds)
+        let is_healthy = self.last_valid_recv.elapsed() < Duration::from_secs(10);
+        let status = if is_healthy {
+            self.metrics.connection_state.store(2, Ordering::Relaxed);
+            ConnectionStatus::Established
+        } else {
+            self.metrics.connection_state.store(1, Ordering::Relaxed);
+            ConnectionStatus::Handshaking
+        };
+
         tx.send(UiEvent::Metrics {
-            status: ConnectionStatus::Established,
+            status,
             rtt_ms: self.last_rtt_ms,
             throughput_bps: throughput,
         }).await.ok();

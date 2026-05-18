@@ -45,7 +45,7 @@ impl AdaptivePadder {
     }
 
     pub fn padding_for_len(&self, payload_len: usize) -> usize {
-        match self.strategy {
+        let raw_pad = match self.strategy {
             PaddingStrategy::Fixed(target) => target.saturating_sub(payload_len),
             PaddingStrategy::Adaptive => {
                 let base_bucket = 64;
@@ -69,7 +69,12 @@ impl AdaptivePadder {
                 let target = prof.target_size(payload_len);
                 target.saturating_sub(payload_len).min(self.max_pad)
             }
-        }
+        };
+
+        // Strict clamp to ensure total packet size (including overhead) never exceeds mtu_hint
+        let overhead = 38;
+        let max_allowed = self.mtu_hint.saturating_sub(payload_len).saturating_sub(overhead);
+        raw_pad.min(max_allowed)
     }
 
     pub fn build_padding(&self, payload_len: usize) -> Vec<u8> {
