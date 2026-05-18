@@ -15,6 +15,8 @@ struct SdkState {
     runtime: Option<Runtime>,
     shutdown_tx: Option<watch::Sender<bool>>,
     metrics: Option<Arc<BridgeMetrics>>,
+    tun_child: Option<std::process::Child>,
+    cmd_tx: Option<mpsc::Sender<BridgeCommand>>,
 }
 
 lazy_static! {
@@ -22,8 +24,12 @@ lazy_static! {
         runtime: None,
         shutdown_tx: None,
         metrics: None,
+        tun_child: None,
+        cmd_tx: None,
     });
     static ref LOGS: Mutex<VecDeque<String>> = Mutex::new(VecDeque::new());
+    static ref JVM: Mutex<Option<jni::JavaVM>> = Mutex::new(None);
+    static ref CLASS_REF: Mutex<Option<jni::objects::GlobalRef>> = Mutex::new(None);
 }
 
 fn add_log(text: String) {
@@ -40,6 +46,9 @@ pub extern "system" fn Java_net_ostp_client_OstpClientSdk_startClient(
     mut env: JNIEnv,
     _class: JClass,
     config_json: JString,
+    fd: jni::sys::jint,
+    t2s_bin_path: JString,
+    local_proxy: JString,
 ) -> jboolean {
     let mut state = match STATE.lock() {
         Ok(s) => s,
@@ -51,7 +60,57 @@ pub extern "system" fn Java_net_ostp_client_OstpClientSdk_startClient(
         return jni::sys::JNI_TRUE;
     }
 
+    if let Ok(jvm) = env.get_java_vm() {
+        if let Ok(mut guard) = JVM.lock() {
+            *guard = Some(jvm);
+        }
+    }
+
+    if let Ok(cls) = env.find_class("net/ostp/client/OstpClientSdk") {
+        if let Ok(global_cls) = env.new_global_ref(cls) {
+            if let Ok(mut guard) = CLASS_REF.lock() {
+                *guard = Some(global_cls);
+            }
+        }
+    }
+
+    ostp_client::bridge::set_socket_protector(|fd| {
+        let jvm_guard = match JVM.lock() {
+            Ok(g) => g,
+            Err(_) => return false,
+        };
+        let class_guard = match CLASS_REF.lock() {
+            Ok(g) => g,
+            Err(_) => return false,
+        };
+        if let (Some(ref jvm), Some(ref class_ref)) = (&*jvm_guard, &*class_guard) {
+            if let Ok(mut env) = jvm.attach_current_thread() {
+                let class_obj = unsafe { jni::objects::JClass::from_raw(class_ref.as_obj().as_raw()) };
+                let val = env.call_static_method(
+                    &class_obj,
+                    "protectSocket",
+                    "(I)Z",
+                    &[jni::objects::JValue::from(fd)],
+                );
+                if let Ok(jval) = val {
+                    return jval.z().unwrap_or(false);
+                }
+            }
+        }
+        false
+    });
+
     let config_str: String = match env.get_string(&config_json) {
+        Ok(s) => s.into(),
+        Err(_) => return jni::sys::JNI_FALSE,
+    };
+
+    let t2s_path: String = match env.get_string(&t2s_bin_path) {
+        Ok(s) => s.into(),
+        Err(_) => return jni::sys::JNI_FALSE,
+    };
+
+    let proxy_addr: String = match env.get_string(&local_proxy) {
         Ok(s) => s.into(),
         Err(_) => return jni::sys::JNI_FALSE,
     };
@@ -64,6 +123,8 @@ pub extern "system" fn Java_net_ostp_client_OstpClientSdk_startClient(
             return jni::sys::JNI_FALSE;
         }
     };
+
+    let debug = config.debug;
 
     // Create tokio runtime
     let rt = match Runtime::new() {
@@ -135,9 +196,64 @@ pub extern "system" fn Java_net_ostp_client_OstpClientSdk_startClient(
         let _ = cmd_tx_clone.send(BridgeCommand::ToggleTunnel).await;
     });
 
+    // Spawn tun2socks
+    let fd_str = format!("fd://{}", fd);
+    let proxy_str = format!("socks5://{}", proxy_addr);
+
+    if debug {
+        add_log(format!("Spawning tun2socks: {} -device {} -proxy {}", t2s_path, fd_str, proxy_str));
+    }
+
+    let mut cmd = std::process::Command::new(&t2s_path);
+    cmd.arg("-device")
+       .arg(&fd_str)
+       .arg("-proxy")
+       .arg(&proxy_str)
+       .stdout(std::process::Stdio::piped())
+       .stderr(std::process::Stdio::piped());
+
+    let mut child = match cmd.spawn() {
+        Ok(c) => c,
+        Err(e) => {
+            add_log(format!("Failed to spawn tun2socks from Rust: {e}"));
+            return jni::sys::JNI_FALSE;
+        }
+    };
+
+    let stdout = child.stdout.take().unwrap();
+    let stderr = child.stderr.take().unwrap();
+
+    // Read stdout
+    std::thread::spawn(move || {
+        use std::io::{BufRead, BufReader};
+        let reader = BufReader::new(stdout);
+        for line in reader.lines() {
+            if let Ok(l) = line {
+                if debug {
+                    add_log(format!("tun2socks: {}", l));
+                }
+            }
+        }
+    });
+
+    // Read stderr & wait
+    std::thread::spawn(move || {
+        use std::io::{BufRead, BufReader};
+        let reader = BufReader::new(stderr);
+        for line in reader.lines() {
+            if let Ok(l) = line {
+                if debug {
+                    add_log(format!("tun2socks ERROR: {}", l));
+                }
+            }
+        }
+    });
+
     state.runtime = Some(rt);
     state.shutdown_tx = Some(shutdown_tx);
     state.metrics = Some(metrics_clone);
+    state.tun_child = Some(child);
+    state.cmd_tx = Some(cmd_tx);
 
     add_log("OSTP SDK: Client successfully started".to_string());
     jni::sys::JNI_TRUE
@@ -153,6 +269,11 @@ pub extern "system" fn Java_net_ostp_client_OstpClientSdk_stopClient(
         Err(_) => return jni::sys::JNI_FALSE,
     };
 
+    if let Some(mut child) = state.tun_child.take() {
+        let _ = child.kill();
+        add_log("Killed tun2socks process".to_string());
+    }
+
     if let Some(shutdown_tx) = state.shutdown_tx.take() {
         let _ = shutdown_tx.send(true);
     }
@@ -161,6 +282,7 @@ pub extern "system" fn Java_net_ostp_client_OstpClientSdk_stopClient(
         rt.shutdown_timeout(std::time::Duration::from_secs(3));
     }
 
+    state.cmd_tx = None;
     state.metrics = None;
     add_log("OSTP SDK: Client successfully stopped".to_string());
     jni::sys::JNI_TRUE
@@ -182,13 +304,17 @@ pub extern "system" fn Java_net_ostp_client_OstpClientSdk_getMetrics(
     if let Some(m) = &state.metrics {
         let sent = m.bytes_sent.load(Ordering::Relaxed);
         let recv = m.bytes_recv.load(Ordering::Relaxed);
-        let json = format!(r#"{{"bytes_sent": {}, "bytes_recv": {}}}"#, sent, recv);
+        let conn_state = m.connection_state.load(Ordering::Relaxed);
+        let json = format!(
+            r#"{{"bytes_sent": {}, "bytes_recv": {}, "connection_state": {}}}"#,
+            sent, recv, conn_state
+        );
         match env.new_string(json) {
             Ok(s) => s.into_raw(),
             Err(_) => std::ptr::null_mut(),
         }
     } else {
-        match env.new_string(r#"{"bytes_sent": 0, "bytes_recv": 0}"#) {
+        match env.new_string(r#"{"bytes_sent": 0, "bytes_recv": 0, "connection_state": 0}"#) {
             Ok(s) => s.into_raw(),
             Err(_) => std::ptr::null_mut(),
         }
@@ -213,5 +339,17 @@ pub extern "system" fn Java_net_ostp_client_OstpClientSdk_getLogs(
     match env.new_string(json) {
         Ok(s) => s.into_raw(),
         Err(_) => std::ptr::null_mut(),
+    }
+}
+
+#[no_mangle]
+pub extern "system" fn Java_net_ostp_client_OstpClientSdk_addLog(
+    mut env: JNIEnv,
+    _class: JClass,
+    log_msg: JString,
+) {
+    if let Ok(s) = env.get_string(&log_msg) {
+        let text: String = s.into();
+        add_log(text);
     }
 }

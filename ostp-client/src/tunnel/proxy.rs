@@ -123,6 +123,21 @@ fn extract_host_port(uri: &str, default_port: u16) -> String {
     }
 }
 
+struct StreamGuard {
+    stream_id: u16,
+    close_tx: mpsc::Sender<u16>,
+}
+
+impl Drop for StreamGuard {
+    fn drop(&mut self) {
+        let tx = self.close_tx.clone();
+        let id = self.stream_id;
+        tokio::spawn(async move {
+            let _ = tx.send(id).await;
+        });
+    }
+}
+
 async fn handle_proxy_client(
     mut client: TcpStream,
     stream_id: u16,
@@ -133,6 +148,8 @@ async fn handle_proxy_client(
     debug: bool,
     matcher: ExclusionMatcher,
 ) -> Result<()> {
+    let _guard = StreamGuard { stream_id, close_tx: close_tx.clone() };
+
     // Peek the first byte to distinguish SOCKS5 (0x05) from HTTP (any printable ASCII)
     let mut first_byte = [0_u8; 1];
     client.read_exact(&mut first_byte).await?;
