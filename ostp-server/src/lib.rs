@@ -337,7 +337,9 @@ async fn run_server_loop(
                             peer_last_seen.insert(peer_ip, now);
                             if !peer_available.get(&peer_ip).copied().unwrap_or(false) {
                                 peer_available.insert(peer_ip, true);
-                                let _ = ui_event_tx.send(UiEvent::Log(format!("Client {peer_ip} connected")));
+                                let is_tcp = tcp_map.read().await.contains_key(&peer_addr);
+                                let proto = if is_tcp { "TCP (UoT)" } else { "UDP" };
+                                let _ = ui_event_tx.send(UiEvent::Log(format!("Client {peer_ip} connected via {proto}")));
                             }
 
                             if app_payloads.is_empty() && now.duration_since(last_empty_app_log) > Duration::from_secs(5) {
