@@ -60,6 +60,7 @@ fn parse_ostp_link(link: &str) -> Result<ClientConfig> {
         server,
         access_key,
         mtu: None,
+        transport: None,
         socks5_bind: Some("127.0.0.1:1088".to_string()), // Fallback to standard SOCKS5 port
         tun: Some(TunConfig {
             enable: false, // Default to proxy, configurable via settings GUI
@@ -196,6 +197,14 @@ struct ClientConfig {
     debug: Option<bool>,
     exclude: Option<ExcludeConfig>,
     mux: Option<MuxConfig>,
+    transport: Option<TransportConfigRaw>,
+}
+
+#[derive(Debug, Deserialize, Serialize, Clone)]
+struct TransportConfigRaw {
+    mode: Option<String>,
+    stealth_sni: Option<String>,
+    stealth_port: Option<u16>,
 }
 
 #[derive(Debug, Deserialize, Serialize, Clone)]
@@ -657,7 +666,11 @@ async fn run_client_directly(client_cfg: ClientConfig) -> Result<()> {
             enabled: client_cfg.mux.as_ref().and_then(|m| m.enabled).unwrap_or(false),
             sessions: client_cfg.mux.as_ref().and_then(|m| m.sessions).unwrap_or(1),
         },
-        transport: ostp_client::config::TransportConfig::default(),
+        transport: ostp_client::config::TransportConfig {
+            mode: client_cfg.transport.as_ref().and_then(|t| t.mode.clone()).unwrap_or_else(|| "udp".to_string()),
+            stealth_sni: client_cfg.transport.as_ref().and_then(|t| t.stealth_sni.clone()).unwrap_or_else(|| "microsoft.com".to_string()),
+            stealth_port: client_cfg.transport.as_ref().and_then(|t| t.stealth_port).unwrap_or(443),
+        },
         dns_server: client_cfg.tun.as_ref().and_then(|t| t.dns.clone()),
     };
 

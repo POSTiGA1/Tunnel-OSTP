@@ -159,6 +159,14 @@ struct RawUnifiedConfig {
     exclude: Option<RawExcludeSection>,
     mux: Option<RawMuxSection>,
     turn: Option<RawTurnSection>,
+    transport: Option<RawTransportSection>,
+}
+
+#[derive(Debug, Deserialize)]
+struct RawTransportSection {
+    mode: Option<String>,
+    stealth_sni: Option<String>,
+    stealth_port: Option<u16>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -232,14 +240,16 @@ impl ClientConfig {
                 bind_addr: socks5,
                 connect_timeout_ms: 15000,
             },
-            turn: match raw.turn {
-                Some(t) => TurnConfig {
-                    enabled: t.enabled.unwrap_or(false),
-                    server_addr: t.server_addr.unwrap_or_default(),
-                    username: t.username.unwrap_or_default(),
-                    access_key: t.access_key.unwrap_or_default(),
-                },
-                None => TurnConfig::default(),
+            turn: TurnConfig {
+                enabled: raw.turn.as_ref().and_then(|t| t.enabled).unwrap_or(false),
+                server_addr: raw.turn.as_ref().and_then(|t| t.server_addr.clone()).unwrap_or_default(),
+                username: raw.turn.as_ref().and_then(|t| t.username.clone()).unwrap_or_default(),
+                access_key: raw.turn.as_ref().and_then(|t| t.access_key.clone()).unwrap_or_default(),
+            },
+            transport: TransportConfig {
+                mode: raw.transport.as_ref().and_then(|t| t.mode.clone()).unwrap_or_else(|| "udp".to_string()),
+                stealth_sni: raw.transport.as_ref().and_then(|t| t.stealth_sni.clone()).unwrap_or_else(|| "microsoft.com".to_string()),
+                stealth_port: raw.transport.as_ref().and_then(|t| t.stealth_port).unwrap_or(443),
             },
             exclusions: ExclusionConfig {
                 domains: exclusions.domains.unwrap_or_default(),
@@ -250,7 +260,6 @@ impl ClientConfig {
                 enabled: mux.enabled.unwrap_or(false),
                 sessions: mux.sessions.unwrap_or(1),
             },
-            transport: TransportConfig::default(),
             dns_server: raw.tun.as_ref().and_then(|t| t.dns.clone()),
         })
 
