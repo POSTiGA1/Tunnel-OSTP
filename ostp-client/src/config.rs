@@ -14,6 +14,8 @@ pub struct ClientConfig {
     pub local_proxy: LocalProxyConfig,
     pub turn: TurnConfig,
     #[serde(default)]
+    pub transport: TransportConfig,
+    #[serde(default)]
     pub exclusions: ExclusionConfig,
     #[serde(default)]
     pub multiplex: MultiplexConfig,
@@ -52,14 +54,47 @@ pub struct LocalProxyConfig {
     pub connect_timeout_ms: u64,
 }
 
+/// Transport layer configuration.
+/// `mode` = "udp" (default) or "wss" (WebSocket Secure — bypasses DPI whitelists).
 #[derive(Debug, Clone, Serialize, Deserialize)]
-#[derive(Default)]
+pub struct TransportConfig {
+    /// "udp" or "wss"
+    #[serde(default = "default_transport_mode")]
+    pub mode: String,
+    /// WebSocket host (domain for TLS connect and HTTP Host header)
+    #[serde(default)]
+    pub wss_host: String,
+    /// WebSocket HTTP path, e.g. "/ostp"
+    #[serde(default = "default_wss_path")]
+    pub wss_path: String,
+    /// TLS SNI override; defaults to wss_host if empty
+    #[serde(default)]
+    pub wss_sni: String,
+}
+
+fn default_transport_mode() -> String { "udp".to_string() }
+fn default_wss_path() -> String { "/ostp".to_string() }
+
+impl Default for TransportConfig {
+    fn default() -> Self {
+        Self {
+            mode: default_transport_mode(),
+            wss_host: String::new(),
+            wss_path: default_wss_path(),
+            wss_sni: String::new(),
+        }
+    }
+}
+
+
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
 pub struct TurnConfig {
     pub enabled: bool,
     pub server_addr: String,
     pub username: String,
     pub access_key: String,
 }
+
 
 impl Default for OstpConfig {
     fn default() -> Self {
@@ -91,6 +126,7 @@ impl Default for ClientConfig {
             ostp: OstpConfig::default(),
             local_proxy: LocalProxyConfig::default(),
             turn: TurnConfig::default(),
+            transport: TransportConfig::default(),
             exclusions: ExclusionConfig::default(),
             multiplex: MultiplexConfig::default(),
             dns_server: None,
@@ -210,7 +246,9 @@ impl ClientConfig {
                 enabled: mux.enabled.unwrap_or(false),
                 sessions: mux.sessions.unwrap_or(1),
             },
+            transport: TransportConfig::default(),
             dns_server: raw.tun.as_ref().and_then(|t| t.dns.clone()),
         })
+
     }
 }

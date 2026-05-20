@@ -647,8 +647,10 @@ async fn run_client_directly(client_cfg: ClientConfig) -> Result<()> {
             enabled: client_cfg.mux.as_ref().and_then(|m| m.enabled).unwrap_or(false),
             sessions: client_cfg.mux.as_ref().and_then(|m| m.sessions).unwrap_or(1),
         },
+        transport: ostp_client::config::TransportConfig::default(),
         dns_server: client_cfg.tun.as_ref().and_then(|t| t.dns.clone()),
     };
+
     // Run the client implementation
     ostp_client::runner::run_client(client_conf).await?;
     Ok(())
