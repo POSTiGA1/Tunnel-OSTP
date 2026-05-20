@@ -55,33 +55,29 @@ pub struct LocalProxyConfig {
 }
 
 /// Transport layer configuration.
-/// `mode` = "udp" (default) or "wss" (WebSocket Secure — bypasses DPI whitelists).
+/// `mode` = "udp" (default) or "uot" (UDP over TCP with xHTTP stealth).
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct TransportConfig {
-    /// "udp" or "wss"
+    /// "udp" or "uot"
     #[serde(default = "default_transport_mode")]
     pub mode: String,
-    /// WebSocket host (domain for TLS connect and HTTP Host header)
+    /// TLS SNI and HTTP Host for stealth routing
     #[serde(default)]
-    pub wss_host: String,
-    /// WebSocket HTTP path, e.g. "/ostp"
-    #[serde(default = "default_wss_path")]
-    pub wss_path: String,
-    /// TLS SNI override; defaults to wss_host if empty
-    #[serde(default)]
-    pub wss_sni: String,
+    pub stealth_sni: String,
+    /// TCP Port for the stealth connection
+    #[serde(default = "default_stealth_port")]
+    pub stealth_port: u16,
 }
 
 fn default_transport_mode() -> String { "udp".to_string() }
-fn default_wss_path() -> String { "/ostp".to_string() }
+fn default_stealth_port() -> u16 { 443 }
 
 impl Default for TransportConfig {
     fn default() -> Self {
         Self {
             mode: default_transport_mode(),
-            wss_host: String::new(),
-            wss_path: default_wss_path(),
-            wss_sni: String::new(),
+            stealth_sni: String::new(),
+            stealth_port: default_stealth_port(),
         }
     }
 }

@@ -38,20 +38,20 @@ pub struct BridgeMetrics {
     pub connection_state: AtomicU8,
 }
 
-async fn send_datagram(socket: &UdpSocket, frame: &Bytes, turn_enabled: bool) -> std::io::Result<usize> {
+async fn send_datagram(socket: &crate::transport::Transport, frame: &Bytes, turn_enabled: bool) -> std::io::Result<usize> {
     if turn_enabled {
         let mut out = bytes::BytesMut::with_capacity(4 + frame.len());
         bytes::BufMut::put_u16(&mut out, 0x4000);
         bytes::BufMut::put_u16(&mut out, frame.len() as u16);
         out.extend_from_slice(frame);
-        socket.send(&out).await
+        socket.send(&out.freeze()).await
     } else {
         socket.send(frame).await
     }
 }
 
 struct SessionState {
-    socket: Arc<UdpSocket>,
+    socket: crate::transport::Transport,
     machine: ProtocolMachine,
 }
 
@@ -73,6 +73,10 @@ pub struct Bridge {
     pub mode: String,
     pub mux_enabled: bool,
     pub mux_sessions: usize,
+
+    pub transport_mode: String,
+    pub stealth_sni: String,
+    pub stealth_port: u16,
 
     metrics: Arc<BridgeMetrics>,
     sample_sent: u64,
@@ -102,6 +106,10 @@ impl Bridge {
             mode: config.mode.clone(),
             mux_enabled: config.multiplex.enabled,
             mux_sessions: config.multiplex.sessions.max(1),
+
+            transport_mode: config.transport.mode.clone(),
+            stealth_sni: config.transport.stealth_sni.clone(),
+            stealth_port: config.transport.stealth_port,
 
             metrics,
             sample_sent: 0,
@@ -261,8 +269,7 @@ impl Bridge {
                                     match self.perform_handshake_with_id(&tx, session_id).await {
                                         Ok((sock, mach, rtt)) => {
                                             let session_index = sessions.len();
-                                            let socket = Arc::new(sock);
-                                            let socket_clone = socket.clone();
+                                            let socket_clone = sock.clone();
                                             let udp_tx_clone = udp_tx.clone();
                                             let is_turn = self.turn_enabled;
                                             tokio::spawn(async move {
@@ -295,7 +302,7 @@ impl Bridge {
                                                 }
                                             });
 
-                                            sessions.push(SessionState { socket, machine: mach });
+                                            sessions.push(SessionState { socket: sock, machine: mach });
                                             rtt_sum += rtt;
                                             successful_sessions += 1;
                                         }
@@ -357,8 +364,7 @@ impl Bridge {
                                     match self.perform_handshake_with_id(&tx, session_id).await {
                                         Ok((sock, mach, rtt)) => {
                                             let session_index = new_sessions.len();
-                                            let socket = Arc::new(sock);
-                                            let socket_clone = socket.clone();
+                                            let socket_clone = sock.clone();
                                             let udp_tx_clone = udp_tx.clone();
                                             let is_turn = self.turn_enabled;
                                             tokio::spawn(async move {
@@ -381,7 +387,7 @@ impl Bridge {
                                                     }
                                                 }
                                             });
-                                            new_sessions.push(SessionState { socket, machine: mach });
+                                            new_sessions.push(SessionState { socket: sock, machine: mach });
                                             rtt_sum += rtt;
                                             successful_sessions += 1;
                                         }
@@ -470,8 +476,7 @@ impl Bridge {
                                 match self.perform_handshake_with_id(&tx, session_id).await {
                                     Ok((sock, mach, rtt)) => {
                                         let session_index = new_sessions.len();
-                                        let socket = Arc::new(sock);
-                                        let socket_clone = socket.clone();
+                                        let socket_clone = sock.clone();
                                         let udp_tx_clone = udp_tx.clone();
                                         let is_turn = self.turn_enabled;
                                         tokio::spawn(async move {
@@ -501,7 +506,7 @@ impl Bridge {
                                             }
                                         });
 
-                                        new_sessions.push(SessionState { socket, machine: mach });
+                                        new_sessions.push(SessionState { socket: sock, machine: mach });
                                         rtt_sum += rtt;
                                         successful_sessions += 1;
                                     }
@@ -750,7 +755,7 @@ impl Bridge {
         &mut self,
         tx: &mpsc::Sender<UiEvent>,
         session_id: u32,
-    ) -> Result<(UdpSocket, ProtocolMachine, f64)> {
+    ) -> Result<(crate::transport::Transport, ProtocolMachine, f64)> {
         let timestamp = std::time::SystemTime::now()
             .duration_since(std::time::UNIX_EPOCH)
             .unwrap_or_default()
@@ -791,13 +796,13 @@ impl Bridge {
 
         tx.send(UiEvent::Log(format!("Connecting to remote server: {}...", target_addr))).await.ok();
 
-        let socket = match self.try_connect_socket(target_ip, port).await {
+        let socket = match self.try_connect_transport(target_ip, port).await {
             Ok(sock) => sock,
             Err(e) => {
                 if let std::net::IpAddr::V4(ipv4) = target_ip {
                     tx.send(UiEvent::Log(format!("Direct IPv4 connection failed: {}. Trying NAT64 fallback...", e))).await.ok();
                     let nat64_ipv6 = synthesize_nat64(ipv4);
-                    match self.try_connect_socket(std::net::IpAddr::V6(nat64_ipv6), port).await {
+                    match self.try_connect_transport(std::net::IpAddr::V6(nat64_ipv6), port).await {
                         Ok(sock) => sock,
                         Err(fallback_err) => {
                             return Err(anyhow::anyhow!("Direct IPv4 failed: {}. NAT64 fallback failed: {}", e, fallback_err));
@@ -809,7 +814,11 @@ impl Bridge {
             }
         };
 
-        if self.turn_enabled {
+        if self.turn_enabled && self.transport_mode != "wss" {
+            let udp_socket = match &socket {
+                crate::transport::Transport::Udp(sock) => sock,
+                _ => return Err(anyhow::anyhow!("TURN requires UDP transport")),
+            };
             let turn_addr = if self.turn_server.contains(':') {
                 self.turn_server.clone()
             } else {
@@ -817,7 +826,7 @@ impl Bridge {
             };
             tx.send(UiEvent::Log(format!("Allocating TURN relay via {}", turn_addr))).await.ok();
 
-            match crate::turn::perform_turn_allocation(&socket, &turn_addr, &self.turn_username, &self.turn_password, &self.server_addr).await {
+            match crate::turn::perform_turn_allocation(udp_socket, &turn_addr, &self.turn_username, &self.turn_password, &self.server_addr).await {
                 Ok(relay_addr) => {
                     tx.send(UiEvent::Log(format!("TURN relay allocated ({})", relay_addr))).await.ok();
                     
@@ -826,7 +835,7 @@ impl Bridge {
                         .collect();
                     let turn_target = resolved_turn.first().ok_or_else(|| anyhow::anyhow!("no IP resolved for TURN {}", turn_addr))?;
                     
-                    let connect_ip = if socket.local_addr().map(|a| a.is_ipv6()).unwrap_or(false) && turn_target.is_ipv4() {
+                    let connect_ip = if udp_socket.local_addr().map(|a| a.is_ipv6()).unwrap_or(false) && turn_target.is_ipv4() {
                         if let std::net::IpAddr::V4(ipv4) = turn_target.ip() {
                             std::net::IpAddr::V6(synthesize_nat64(ipv4))
                         } else {
@@ -837,14 +846,14 @@ impl Bridge {
                     };
                     
                     let connect_addr = std::net::SocketAddr::new(connect_ip, turn_target.port());
-                    socket
+                    udp_socket
                         .connect(connect_addr)
                         .await
                         .with_context(|| format!("failed to re-connect to TURN {}", connect_addr))?;
                 }
                 Err(e) => {
                     tx.send(UiEvent::Log(format!("TURN allocation failed: {}. Using direct UDP.", e))).await.ok();
-                    let connect_ip = if socket.local_addr().map(|a| a.is_ipv6()).unwrap_or(false) && target_ip.is_ipv4() {
+                    let connect_ip = if udp_socket.local_addr().map(|a| a.is_ipv6()).unwrap_or(false) && target_ip.is_ipv4() {
                         if let std::net::IpAddr::V4(ipv4) = target_ip {
                             std::net::IpAddr::V6(synthesize_nat64(ipv4))
                         } else {
@@ -854,7 +863,7 @@ impl Bridge {
                         target_ip
                     };
                     let connect_addr = std::net::SocketAddr::new(connect_ip, port);
-                    socket
+                    udp_socket
                         .connect(connect_addr)
                         .await
                         .with_context(|| format!("failed to connect udp to {}", connect_addr))?;
@@ -898,7 +907,7 @@ impl Bridge {
             if let std::net::IpAddr::V4(ipv4) = target_ip {
                 tx.send(UiEvent::Log("Direct IPv4 handshake timed out. Trying NAT64 fallback...".to_string())).await.ok();
                 let nat64_ipv6 = synthesize_nat64(ipv4);
-                match self.try_connect_socket(std::net::IpAddr::V6(nat64_ipv6), port).await {
+                match self.try_connect_transport(std::net::IpAddr::V6(nat64_ipv6), port).await {
                     Ok(fallback_socket) => {
                         let mut fallback_success = false;
                         for attempt in 0..4 {
@@ -963,39 +972,49 @@ impl Bridge {
         self.turn_password = cfg.turn.access_key.clone();
         self.mux_enabled = cfg.multiplex.enabled;
         self.mux_sessions = cfg.multiplex.sessions.max(1);
+        self.transport_mode = cfg.transport.mode.clone();
+        self.stealth_sni = cfg.transport.stealth_sni.clone();
+        self.stealth_port = cfg.transport.stealth_port;
     }
 
-    async fn try_connect_socket(
+    async fn try_connect_transport(
         &self,
         target_ip: std::net::IpAddr,
         port: u16,
-    ) -> Result<UdpSocket> {
-        let is_ipv6 = target_ip.is_ipv6();
-        let domain = if is_ipv6 { socket2::Domain::IPV6 } else { socket2::Domain::IPV4 };
-        let bind_addr = if is_ipv6 {
-            std::net::SocketAddr::new(std::net::IpAddr::V6(std::net::Ipv6Addr::UNSPECIFIED), 0)
+    ) -> Result<crate::transport::Transport> {
+        if self.transport_mode == "uot" {
+            let (tx, rx) = crate::transport::xhttp::connect_xhttp(
+                target_ip, self.stealth_port, &self.stealth_sni, &self.access_key
+            ).await?;
+            Ok(crate::transport::Transport::Uot { tx, rx })
         } else {
-            std::net::SocketAddr::new(std::net::IpAddr::V4(std::net::Ipv4Addr::UNSPECIFIED), 0)
-        };
+            let is_ipv6 = target_ip.is_ipv6();
+            let domain = if is_ipv6 { socket2::Domain::IPV6 } else { socket2::Domain::IPV4 };
+            let bind_addr = if is_ipv6 {
+                std::net::SocketAddr::new(std::net::IpAddr::V6(std::net::Ipv6Addr::UNSPECIFIED), 0)
+            } else {
+                std::net::SocketAddr::new(std::net::IpAddr::V4(std::net::Ipv4Addr::UNSPECIFIED), 0)
+            };
 
-        let sock = socket2::Socket::new(domain, socket2::Type::DGRAM, Some(socket2::Protocol::UDP))?;
-        #[cfg(unix)]
-        {
-            use std::os::unix::io::AsRawFd;
-            protect_socket(sock.as_raw_fd());
+            let sock = socket2::Socket::new(domain, socket2::Type::DGRAM, Some(socket2::Protocol::UDP))?;
+            #[cfg(unix)]
+            {
+                use std::os::unix::io::AsRawFd;
+                protect_socket(sock.as_raw_fd());
+            }
+            let _ = sock.set_recv_buffer_size(33554432); // 32MB
+            let _ = sock.set_send_buffer_size(33554432); // 32MB
+            let actual_recv = sock.recv_buffer_size().unwrap_or(0);
+            let actual_send = sock.send_buffer_size().unwrap_or(0);
+            tracing::info!("UDP socket buffers: recv={}KB send={}KB", actual_recv / 1024, actual_send / 1024);
+            sock.bind(&bind_addr.into())?;
+            sock.set_nonblocking(true)?;
+            let socket = UdpSocket::from_std(sock.into())?;
+
+            let connect_addr = std::net::SocketAddr::new(target_ip, port);
+            socket.connect(connect_addr).await.with_context(|| format!("failed to connect udp to {}", connect_addr))?;
+            Ok(crate::transport::Transport::Udp(Arc::new(socket)))
         }
-        let _ = sock.set_recv_buffer_size(33554432); // 32MB
-        let _ = sock.set_send_buffer_size(33554432); // 32MB
-        let actual_recv = sock.recv_buffer_size().unwrap_or(0);
-        let actual_send = sock.send_buffer_size().unwrap_or(0);
-        tracing::info!("UDP socket buffers: recv={}KB send={}KB", actual_recv / 1024, actual_send / 1024);
-        sock.bind(&bind_addr.into())?;
-        sock.set_nonblocking(true)?;
-        let socket = UdpSocket::from_std(sock.into())?;
-
-        let connect_addr = std::net::SocketAddr::new(target_ip, port);
-        socket.connect(connect_addr).await.with_context(|| format!("failed to connect udp to {}", connect_addr))?;
-        Ok(socket)
     }
 }
 

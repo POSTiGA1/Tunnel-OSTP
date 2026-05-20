@@ -498,6 +498,13 @@ async fn run_app() -> Result<()> {
     "access_key": "ostppassword"
   }},
   
+  // Transport Mode: "udp" (default) or "uot" (xHTTP Stealth / UDP over TCP)
+  "transport": {{
+    "mode": "udp",
+    "stealth_sni": "vk.com",
+    "stealth_port": 443
+  }},
+  
   "mux": {{
     "enabled": false,
     "sessions": 1

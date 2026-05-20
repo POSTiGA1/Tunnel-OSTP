@@ -42,6 +42,7 @@ Download pre-built binaries for your platform from [GitHub Releases](https://git
 | **Fallback Server** | TCP fallback proxy to a web server — makes OSTP indistinguishable from nginx during active probing. |
 | **Multi-Listener** | Bind to multiple addresses simultaneously (dual-stack IPv4/IPv6, multi-port). |
 | **TUN Mode** | Full-system VPN via `tun2socks` integration. All traffic transparently routed through the tunnel. |
+| **xHTTP Stealth (UoT)** | UDP-over-TCP tunnel disguised as standard HTTP/1.1 or TLS traffic to bypass Level 1 Deep Packet Inspection (DPI) whitelists. |
 | **TURN Relay** | RFC 5766 TURN support for environments where direct UDP is blocked. |
 | **Hot-Reload** | Runtime config reload without restart (access keys, exclusions, mux settings). |
 | **Structured Logging** | `tracing`-based logging with `RUST_LOG` filtering. JSON/file/syslog output support. |
@@ -121,6 +122,7 @@ Download pre-built binaries for your platform from [GitHub Releases](https://git
   "server": "YOUR_SERVER_IP:50000",
   "access_key": "YOUR_SECRET_KEY",
   "socks5_bind": "127.0.0.1:1088",
+  "transport": { "mode": "udp", "stealth_sni": "vk.com", "stealth_port": 443 },
   "tun": { "enable": false, "dns": "1.1.1.1" }
 }
 ```
