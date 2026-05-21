@@ -285,7 +285,7 @@ async fn run_server_loop(
                         let tx = udp_tx_clone.clone();
                         tokio::spawn(async move {
                             if let Err(e) = crate::transport::uot::handle_tcp_connection(stream, peer_addr, keys, tx, tm).await {
-                                tracing::debug!("UoT connection from {} failed: {}", peer_addr, e);
+                                tracing::warn!("UoT connection from {} closed: {}", peer_addr, e);
                             }
                         });
                     }

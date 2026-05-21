@@ -70,6 +70,7 @@ jobs:
             artifact_name: ostp
             release_name: ostp-linux-386.tar.gz
             tun2socks_arch: linux-386
+            use_cross: true
 
           # ── Linux cross ───────────────────────────────────────────────────
           - os: ubuntu-latest
