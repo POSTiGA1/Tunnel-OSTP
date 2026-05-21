@@ -240,8 +240,11 @@ impl ProtocolMachine {
                     noise_len, raw_vec.len() - 6
                 )));
             }
+            tracing::info!("handle_inbound: raw_vec.len()={}, noise_len={}, raw_vec[0..6]={:?}", raw_vec.len(), noise_len, &raw_vec[0..6]);
+            
             let mut read_out = vec![0_u8; 1024];
             let n = self.noise.read_handshake(&raw_vec[6..6 + noise_len], &mut read_out)?;
+            read_out.truncate(n);
 
             let response = match self.role {
                 NoiseRole::Responder => {
@@ -775,6 +778,7 @@ mod tests {
             max_sent_history: 1024,
             handshake_pad_min: 8,
             handshake_pad_max: 32,
+            mtu: 1400,
         }
     }
 

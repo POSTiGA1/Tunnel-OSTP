@@ -52,7 +52,7 @@ impl NoiseSession {
         match self {
             NoiseSession::Handshake(hs) => hs
                 .read_message(input, out)
-                .map_err(|_| ProtocolError::Crypto("noise-read".to_string())),
+                .map_err(|e| ProtocolError::Crypto(format!("noise-read: {:?}", e))),
             NoiseSession::Transport(_) => Err(ProtocolError::State("noise already in transport".to_string())),
         }
     }
