@@ -208,8 +208,13 @@ pub extern "system" fn Java_net_ostp_client_OstpClientSdk_startClient(
     cmd.arg("-device")
        .arg(&fd_str)
        .arg("-proxy")
-       .arg(&proxy_str)
-       .stdout(std::process::Stdio::piped())
+       .arg(&proxy_str);
+    
+    if config.ostp.mtu > 0 {
+        cmd.arg("-mtu").arg(config.ostp.mtu.to_string());
+    }
+    
+    cmd.stdout(std::process::Stdio::piped())
        .stderr(std::process::Stdio::piped());
 
     let mut child = match cmd.spawn() {
