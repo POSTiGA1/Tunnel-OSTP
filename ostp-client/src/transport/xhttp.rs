@@ -88,10 +88,9 @@ pub async fn connect_xhttp(
     let http_host = if sni.is_empty() { target_ip.to_string() } else { sni.to_string() };
     
     let req = format!(
-        "POST /stream HTTP/1.1\r\n\
+        "GET /stream HTTP/1.1\r\n\
          Host: {}\r\n\
          Authorization: Bearer {}\r\n\
-         Content-Length: 99999999999\r\n\
          Connection: keep-alive\r\n\
          \r\n",
         http_host, auth_token
