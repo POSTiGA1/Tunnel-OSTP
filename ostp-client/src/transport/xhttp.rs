@@ -90,8 +90,11 @@ pub async fn connect_xhttp(
     let req = format!(
         "GET /stream HTTP/1.1\r\n\
          Host: {}\r\n\
+         Upgrade: websocket\r\n\
+         Connection: upgrade\r\n\
+         Sec-WebSocket-Key: dGhlIHNhbXBsZSBub25jZQ==\r\n\
+         Sec-WebSocket-Version: 13\r\n\
          Authorization: Bearer {}\r\n\
-         Connection: keep-alive\r\n\
          \r\n",
         http_host, auth_token
     );
@@ -124,8 +127,8 @@ pub async fn connect_xhttp(
             if buf[..header_len].windows(4).any(|w| w == b"\r\n\r\n") { break; }
         }
         let resp = String::from_utf8_lossy(&buf[..header_len]);
-        if !resp.starts_with("HTTP/1.1 200 OK") {
-            anyhow::bail!("xHTTP handshake failed: expected 200 OK, got: {}", resp.lines().next().unwrap_or(""));
+        if !resp.starts_with("HTTP/1.1 101 ") && !resp.starts_with("HTTP/1.1 200 ") {
+            anyhow::bail!("xHTTP handshake failed: expected 101 or 200, got: {}", resp.lines().next().unwrap_or(""));
         }
         if !resp.to_ascii_lowercase().contains("x-ostp-server:") {
             anyhow::bail!("xHTTP handshake failed: endpoint is not an OSTP server (missing X-Ostp-Server header)");
@@ -152,8 +155,8 @@ pub async fn connect_xhttp(
             if buf[..header_len].windows(4).any(|w| w == b"\r\n\r\n") { break; }
         }
         let resp = String::from_utf8_lossy(&buf[..header_len]);
-        if !resp.starts_with("HTTP/1.1 200 OK") {
-            anyhow::bail!("xHTTP handshake failed: expected 200 OK, got: {}", resp.lines().next().unwrap_or(""));
+        if !resp.starts_with("HTTP/1.1 101 ") && !resp.starts_with("HTTP/1.1 200 ") {
+            anyhow::bail!("xHTTP handshake failed: expected 101 or 200, got: {}", resp.lines().next().unwrap_or(""));
         }
         if !resp.to_ascii_lowercase().contains("x-ostp-server:") {
             anyhow::bail!("xHTTP handshake failed: endpoint is not an OSTP server (missing X-Ostp-Server header)");

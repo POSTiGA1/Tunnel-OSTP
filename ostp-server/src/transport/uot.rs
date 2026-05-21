@@ -107,8 +107,8 @@ pub async fn handle_tcp_connection(
         anyhow::bail!("unauthorized (invalid HMAC)");
     }
 
-    // Reply 200 OK
-    let response = "HTTP/1.1 200 OK\r\nX-Ostp-Server: 1\r\nConnection: keep-alive\r\n\r\n";
+    // Reply 101 Switching Protocols
+    let response = "HTTP/1.1 101 Switching Protocols\r\nUpgrade: websocket\r\nConnection: Upgrade\r\nSec-WebSocket-Accept: s3pPLMBiTxaQ9kYGzzhZRbK+xOo=\r\nX-Ostp-Server: 1\r\n\r\n";
     stream.write_all(response.as_bytes()).await?;
 
     info!("UoT client authenticated from {}", peer_addr);
