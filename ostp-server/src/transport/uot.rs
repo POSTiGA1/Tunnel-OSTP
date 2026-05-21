@@ -108,7 +108,7 @@ pub async fn handle_tcp_connection(
     }
 
     // Reply 200 OK
-    let response = "HTTP/1.1 200 OK\r\nContent-Length: 99999999999\r\nConnection: keep-alive\r\n\r\n";
+    let response = "HTTP/1.1 200 OK\r\nX-Ostp-Server: 1\r\nContent-Length: 99999999999\r\nConnection: keep-alive\r\n\r\n";
     stream.write_all(response.as_bytes()).await?;
 
     info!("UoT client authenticated from {}", peer_addr);
