@@ -153,6 +153,35 @@ pub async fn run_client_core(
 
     log_to_core_file(&format!("[core] Starting run_client_core in mode: {}", config.mode));
 
+    #[cfg(target_os = "linux")]
+    if config.mode == "tun" {
+        println!("\n[ostp] ===========================================================================");
+        println!("[ostp] WARNING: You are starting TUN mode on a Linux system.");
+        println!("[ostp] If this is a remote headless server, routing all traffic through the TUN");
+        println!("[ostp] interface WILL DROP your SSH connection and lock you out!");
+        println!("[ostp] ");
+        println!("[ostp] SOLUTION: Add a static route for your client IP to bypass the TUN.");
+        println!("[ostp] Find your default gateway (ip route | grep default) and run:");
+        println!("[ostp]   sudo ip route add <your-client-ip> via <default-gateway-ip>");
+        println!("[ostp] ===========================================================================\n");
+    }
+
+    #[cfg(target_os = "linux")]
+    if config.mode == "proxy" {
+        println!("\n[ostp] ===========================================================================");
+        println!("[ostp] Proxy mode initialized on {}:{}", config.local_proxy.bind_host, config.local_proxy.bind_port);
+        println!("[ostp] To use this proxy in your current terminal session, run:");
+        println!("[ostp]   export http_proxy=\"http://{}:{}\"", config.local_proxy.bind_host, config.local_proxy.bind_port);
+        println!("[ostp]   export https_proxy=\"http://{}:{}\"", config.local_proxy.bind_host, config.local_proxy.bind_port);
+        println!("[ostp]   export all_proxy=\"socks5://{}:{}\"", config.local_proxy.bind_host, config.local_proxy.bind_port);
+        println!("[ostp] ");
+        println!("[ostp] For GNOME desktop system-wide proxy, you can use:");
+        println!("[ostp]   gsettings set org.gnome.system.proxy mode 'manual'");
+        println!("[ostp]   gsettings set org.gnome.system.proxy.http host '{}'", config.local_proxy.bind_host);
+        println!("[ostp]   gsettings set org.gnome.system.proxy.http port {}", config.local_proxy.bind_port);
+        println!("[ostp] ===========================================================================\n");
+    }
+
     if config.mode == "tun" && !config.exclusions.processes.is_empty() {
         println!("[ostp] Process exclusions are not supported in TUN mode");
     }
