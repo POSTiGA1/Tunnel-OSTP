@@ -987,8 +987,16 @@ impl Bridge {
     ) -> Result<crate::transport::Transport> {
         let mode = self.transport_mode.to_lowercase();
         if mode == "uot" || mode == "tcp" {
+            // For UoT, use the stealth_port if it's configured and differs from default 443;
+            // otherwise fall back to the actual server port so the user doesn't need two separate
+            // port fields for the same destination.
+            let uot_port = if self.stealth_port != 443 {
+                self.stealth_port
+            } else {
+                port
+            };
             let (tx, rx) = crate::transport::xhttp::connect_xhttp(
-                target_ip, self.stealth_port, &self.stealth_sni, &self.access_key
+                target_ip, uot_port, &self.stealth_sni, &self.access_key
             ).await?;
             Ok(crate::transport::Transport::Uot { tx, rx })
         } else {
