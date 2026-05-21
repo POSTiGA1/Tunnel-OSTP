@@ -985,7 +985,8 @@ impl Bridge {
         target_ip: std::net::IpAddr,
         port: u16,
     ) -> Result<crate::transport::Transport> {
-        if self.transport_mode == "uot" {
+        let mode = self.transport_mode.to_lowercase();
+        if mode == "uot" || mode == "tcp" {
             let (tx, rx) = crate::transport::xhttp::connect_xhttp(
                 target_ip, self.stealth_port, &self.stealth_sni, &self.access_key
             ).await?;
