@@ -174,8 +174,9 @@ pub async fn run_wintun_tunnel(
     tracing::info!("Applying network configuration...");
     let mut net_setup = format!(
         "netsh interface ipv4 set address name=\"{TUN_NAME}\" static 10.1.0.2 255.255.255.0 10.1.0.1\n\
-         netsh interface ipv4 set subinterface \"{TUN_NAME}\" mtu=1300 store=persistent\n\
-         netsh interface ipv4 set interface name=\"{TUN_NAME}\" metric=5\n"
+         netsh interface ipv4 set subinterface \"{TUN_NAME}\" mtu={} store=persistent\n\
+         netsh interface ipv4 set interface name=\"{TUN_NAME}\" metric=5\n",
+         config.ostp.mtu
     );
     
     if let Some(ref dns) = config.dns_server {

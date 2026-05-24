@@ -38,11 +38,16 @@ pub struct BridgeMetrics {
     pub connection_state: AtomicU8,
 }
 
-async fn send_datagram(socket: &crate::transport::Transport, frame: &Bytes, turn_enabled: bool) -> std::io::Result<usize> {
-    if turn_enabled {
-        let mut out = bytes::BytesMut::with_capacity(4 + frame.len());
-        bytes::BufMut::put_u16(&mut out, 0x4000);
-        bytes::BufMut::put_u16(&mut out, frame.len() as u16);
+async fn send_datagram(socket: &crate::transport::Transport, frame: &Bytes, webrtc_masquerade: bool) -> std::io::Result<usize> {
+    if webrtc_masquerade {
+        let mut out = bytes::BytesMut::with_capacity(12 + frame.len());
+        // Fake SRTP Header:
+        // [0] 0x80 (Version 2)
+        // [1] 0x60 (Payload Type 96 - dynamic video)
+        // [2..3] Sequence number (dummy 0x1234)
+        // [4..7] Timestamp (dummy)
+        // [8..11] SSRC (dummy)
+        out.extend_from_slice(&[0x80, 0x60, 0x12, 0x34, 0x00, 0x00, 0x00, 0x00, 0x11, 0x22, 0x33, 0x44]);
         out.extend_from_slice(frame);
         socket.send(&out.freeze()).await
     } else {
@@ -66,10 +71,7 @@ pub struct Bridge {
     handshake_timeout_ms: u64,
     io_timeout_ms: u64,
 
-    pub turn_enabled: bool,
-    pub turn_server: String,
-    pub turn_username: String,
-    pub turn_password: String,
+    pub keepalive_interval_sec: u64,
     pub mode: String,
     pub mux_enabled: bool,
     pub mux_sessions: usize,
@@ -78,6 +80,7 @@ pub struct Bridge {
     pub stealth_sni: String,
     pub stealth_port: u16,
     pub mtu: usize,
+    pub reality_enabled: bool,
 
     metrics: Arc<BridgeMetrics>,
     sample_sent: u64,
@@ -100,10 +103,7 @@ impl Bridge {
             handshake_timeout_ms: config.ostp.handshake_timeout_ms,
             io_timeout_ms: config.ostp.io_timeout_ms,
 
-            turn_enabled: config.turn.enabled,
-            turn_server: config.turn.server_addr.clone(),
-            turn_username: config.turn.username.clone(),
-            turn_password: config.turn.access_key.clone(),
+            keepalive_interval_sec: config.ostp.keepalive_interval_sec,
             mode: config.mode.clone(),
             mux_enabled: config.multiplex.enabled,
             mux_sessions: config.multiplex.sessions.max(1),
@@ -112,6 +112,7 @@ impl Bridge {
             stealth_sni: config.transport.stealth_sni.clone(),
             stealth_port: config.transport.stealth_port,
             mtu: config.ostp.mtu,
+            reality_enabled: !config.reality.pbk.is_empty(),
 
             metrics,
             sample_sent: 0,
@@ -131,7 +132,7 @@ impl Bridge {
         proxy_tx: mpsc::UnboundedSender<(u16, ProxyToClientMsg)>,
     ) -> Result<()> {
         let mut metrics_tick = interval(Duration::from_millis(500));
-        let mut keepalive_tick = tokio::time::interval(Duration::from_secs(5));
+        let mut keepalive_tick = tokio::time::interval(Duration::from_secs(self.keepalive_interval_sec.max(1)));
         let mut retransmit_tick = tokio::time::interval(Duration::from_millis(50));
         let init_msg = if self.mode == "tun" {
             "Bridge initialized (TUN mode)".to_string()
@@ -220,7 +221,7 @@ impl Bridge {
                                                 }
                                             }
                                             ProtocolAction::SendDatagram(frame) => {
-                                                let _ = send_datagram(&session.socket, &frame, self.turn_enabled).await;
+                                                let _ = send_datagram(&session.socket, &frame, (self.transport_mode == "udp")).await;
                                                 self.metrics.bytes_sent.fetch_add(frame.len() as u64, Ordering::Relaxed);
                                             }
                                             _ => {}
@@ -273,19 +274,14 @@ impl Bridge {
                                             let session_index = sessions.len();
                                             let socket_clone = sock.clone();
                                             let udp_tx_clone = udp_tx.clone();
-                                            let is_turn = self.turn_enabled;
+                                            let is_webrtc = (self.transport_mode == "udp");
                                             tokio::spawn(async move {
                                                 let mut buf = vec![0_u8; 65535];
                                                 loop {
                                                      match socket_clone.recv(&mut buf).await {
                                                          Ok(n) => {
-                                                             let inbound = if is_turn && n >= 4 && buf[0] == 0x40 && buf[1] == 0x00 {
-                                                                 let len = u16::from_be_bytes([buf[2], buf[3]]) as usize;
-                                                                 if 4 + len <= n {
-                                                                     Bytes::copy_from_slice(&buf[4..4+len])
-                                                                 } else {
-                                                                     Bytes::copy_from_slice(&buf[..n])
-                                                                 }
+                                                             let inbound = if is_webrtc && n >= 12 && buf[0] == 0x80 {
+                                                                 Bytes::copy_from_slice(&buf[12..n])
                                                              } else {
                                                                  Bytes::copy_from_slice(&buf[..n])
                                                              };
@@ -368,15 +364,14 @@ impl Bridge {
                                             let session_index = new_sessions.len();
                                             let socket_clone = sock.clone();
                                             let udp_tx_clone = udp_tx.clone();
-                                            let is_turn = self.turn_enabled;
+                                            let is_webrtc = (self.transport_mode == "udp");
                                             tokio::spawn(async move {
                                                 let mut buf = vec![0_u8; 65535];
                                                 loop {
                                                     match socket_clone.recv(&mut buf).await {
                                                         Ok(n) => {
-                                                            let inbound = if is_turn && n >= 4 && buf[0] == 0x40 && buf[1] == 0x00 {
-                                                                let len = u16::from_be_bytes([buf[2], buf[3]]) as usize;
-                                                                if 4 + len <= n { Bytes::copy_from_slice(&buf[4..4+len]) } else { Bytes::copy_from_slice(&buf[..n]) }
+                                                            let inbound = if is_webrtc && n >= 12 && buf[0] == 0x80 {
+                                                                Bytes::copy_from_slice(&buf[12..n])
                                                             } else {
                                                                 Bytes::copy_from_slice(&buf[..n])
                                                             };
@@ -480,19 +475,14 @@ impl Bridge {
                                         let session_index = new_sessions.len();
                                         let socket_clone = sock.clone();
                                         let udp_tx_clone = udp_tx.clone();
-                                        let is_turn = self.turn_enabled;
+                                        let is_webrtc = (self.transport_mode == "udp");
                                         tokio::spawn(async move {
                                             let mut buf = vec![0_u8; 65535];
                                             loop {
                                                 match socket_clone.recv(&mut buf).await {
                                                     Ok(n) => {
-                                                        let inbound = if is_turn && n >= 4 && buf[0] == 0x40 && buf[1] == 0x00 {
-                                                            let len = u16::from_be_bytes([buf[2], buf[3]]) as usize;
-                                                            if 4 + len <= n {
-                                                                Bytes::copy_from_slice(&buf[4..4+len])
-                                                            } else {
-                                                                Bytes::copy_from_slice(&buf[..n])
-                                                            }
+                                                        let inbound = if is_webrtc && n >= 12 && buf[0] == 0x80 {
+                                                            Bytes::copy_from_slice(&buf[12..n])
                                                         } else {
                                                             Bytes::copy_from_slice(&buf[..n])
                                                         };
@@ -539,14 +529,14 @@ impl Bridge {
                                 if let Ok(ProtocolAction::SendDatagram(frame)) = session.machine.on_event(OstpEvent::Outbound(0, ping_payload)) {
                                     // Must go through send_datagram() for TURN-mode wrapping;
                                     // raw socket.send() bypasses the ChannelData header and breaks RTT in TURN.
-                                    let _ = send_datagram(&session.socket, &frame, self.turn_enabled).await;
+                                    let _ = send_datagram(&session.socket, &frame, (self.transport_mode == "udp")).await;
                                     self.metrics.bytes_sent.fetch_add(frame.len() as u64, Ordering::Relaxed);
                                 }
 
                                 // Send Relay KeepAlive (Force NAT/Server Persistence)
                                 let ka_payload = Bytes::from(RelayMessage::KeepAlive.encode());
                                 if let Ok(ProtocolAction::SendDatagram(frame)) = session.machine.on_event(OstpEvent::Outbound(0, ka_payload)) {
-                                    let _ = send_datagram(&session.socket, &frame, self.turn_enabled).await;
+                                    let _ = send_datagram(&session.socket, &frame, (self.transport_mode == "udp")).await;
                                     self.metrics.bytes_sent.fetch_add(frame.len() as u64, Ordering::Relaxed);
                                 }
                             }
@@ -569,7 +559,7 @@ impl Bridge {
                                                     }
                                                 }
                                                 ProtocolAction::SendDatagram(frame) => {
-                                                    let _ = send_datagram(&session.socket, &frame, self.turn_enabled).await;
+                                                    let _ = send_datagram(&session.socket, &frame, (self.transport_mode == "udp")).await;
                                                     self.metrics.bytes_sent.fetch_add(frame.len() as u64, Ordering::Relaxed);
                                                 }
                                                 _ => {}
@@ -632,7 +622,7 @@ impl Bridge {
                             let out_payload = Bytes::from(relay_msg.encode());
                             match session.machine.on_event(OstpEvent::Outbound(stream_id, out_payload)) {
                                 Ok(ProtocolAction::SendDatagram(frame)) => {
-                                    if send_datagram(&session.socket, &frame, self.turn_enabled).await.is_ok() {
+                                    if send_datagram(&session.socket, &frame, (self.transport_mode == "udp")).await.is_ok() {
                                         self.metrics.bytes_sent.fetch_add(frame.len() as u64, Ordering::Relaxed);
                                         if self.debug {
                                             let _ = tx.send(UiEvent::Log(format!(
@@ -646,7 +636,7 @@ impl Bridge {
                                     let mut sent = 0usize;
                                     for item in list {
                                         if let ProtocolAction::SendDatagram(frame) = item {
-                                            if send_datagram(&session.socket, &frame, self.turn_enabled).await.is_ok() {
+                                            if send_datagram(&session.socket, &frame, (self.transport_mode == "udp")).await.is_ok() {
                                                 self.metrics.bytes_sent.fetch_add(frame.len() as u64, Ordering::Relaxed);
                                                 sent += 1;
                                             }
@@ -817,64 +807,7 @@ impl Bridge {
             }
         };
 
-        if self.turn_enabled && self.transport_mode != "wss" {
-            let udp_socket = match &socket {
-                crate::transport::Transport::Udp(sock) => sock,
-                _ => return Err(anyhow::anyhow!("TURN requires UDP transport")),
-            };
-            let turn_addr = if self.turn_server.contains(':') {
-                self.turn_server.clone()
-            } else {
-                format!("{}:3478", self.turn_server)
-            };
-            tx.send(UiEvent::Log(format!("Allocating TURN relay via {}", turn_addr))).await.ok();
-
-            match crate::turn::perform_turn_allocation(udp_socket, &turn_addr, &self.turn_username, &self.turn_password, &self.server_addr).await {
-                Ok(relay_addr) => {
-                    tx.send(UiEvent::Log(format!("TURN relay allocated ({})", relay_addr))).await.ok();
-                    
-                    let resolved_turn: Vec<std::net::SocketAddr> = tokio::net::lookup_host(&turn_addr).await
-                        .map_err(|e| anyhow::anyhow!("failed to resolve TURN {}: {}", turn_addr, e))?
-                        .collect();
-                    let turn_target = resolved_turn.first().ok_or_else(|| anyhow::anyhow!("no IP resolved for TURN {}", turn_addr))?;
-                    
-                    let connect_ip = if udp_socket.local_addr().map(|a| a.is_ipv6()).unwrap_or(false) && turn_target.is_ipv4() {
-                        if let std::net::IpAddr::V4(ipv4) = turn_target.ip() {
-                            std::net::IpAddr::V6(synthesize_nat64(ipv4))
-                        } else {
-                            turn_target.ip()
-                        }
-                    } else {
-                        turn_target.ip()
-                    };
-                    
-                    let connect_addr = std::net::SocketAddr::new(connect_ip, turn_target.port());
-                    udp_socket
-                        .connect(connect_addr)
-                        .await
-                        .with_context(|| format!("failed to re-connect to TURN {}", connect_addr))?;
-                }
-                Err(e) => {
-                    tx.send(UiEvent::Log(format!("TURN allocation failed: {}. Using direct UDP.", e))).await.ok();
-                    let connect_ip = if udp_socket.local_addr().map(|a| a.is_ipv6()).unwrap_or(false) && target_ip.is_ipv4() {
-                        if let std::net::IpAddr::V4(ipv4) = target_ip {
-                            std::net::IpAddr::V6(synthesize_nat64(ipv4))
-                        } else {
-                            target_ip
-                        }
-                    } else {
-                        target_ip
-                    };
-                    let connect_addr = std::net::SocketAddr::new(connect_ip, port);
-                    udp_socket
-                        .connect(connect_addr)
-                        .await
-                        .with_context(|| format!("failed to connect udp to {}", connect_addr))?;
-                }
-            }
-        }
-
-        // Connection to remote is handled inside the TURN/direct branches above
+        // Connection to remote is handled inside try_connect_transport
 
         let start = Instant::now();
         let action = machine.on_event(OstpEvent::Start)?;
@@ -897,7 +830,7 @@ impl Bridge {
             if attempt > 0 {
                 tx.send(UiEvent::Log(format!("Handshake attempt {} lost. Retransmitting...", attempt))).await.ok();
             }
-            send_datagram(&socket, &handshake_frame, self.turn_enabled).await?;
+            send_datagram(&socket, &handshake_frame, (self.transport_mode == "udp")).await?;
             self.metrics.bytes_sent.fetch_add(handshake_frame.len() as u64, Ordering::Relaxed);
 
             match timeout(Duration::from_millis(attempt_timeout_ms), socket.recv(&mut buf)).await {
@@ -923,7 +856,7 @@ impl Bridge {
                             if attempt > 0 {
                                 tx.send(UiEvent::Log(format!("NAT64 handshake attempt {} lost. Retransmitting...", attempt))).await.ok();
                             }
-                            send_datagram(&fallback_socket, &handshake_frame, self.turn_enabled).await?;
+                            send_datagram(&fallback_socket, &handshake_frame, (self.transport_mode == "udp")).await?;
                             match timeout(Duration::from_millis(1200), fallback_socket.recv(&mut buf)).await {
                                 Ok(Ok(n)) => {
                                     size = n;
@@ -950,13 +883,8 @@ impl Bridge {
         self.metrics.bytes_recv.fetch_add(size as u64, Ordering::Relaxed);
         tracing::info!("Handshake response received: {} bytes", size);
 
-        let inbound = if self.turn_enabled && size >= 4 && buf[0] == 0x40 && buf[1] == 0x00 {
-            let len = u16::from_be_bytes([buf[2], buf[3]]) as usize;
-            if 4 + len <= size {
-                Bytes::copy_from_slice(&buf[4..4+len])
-            } else {
-                Bytes::copy_from_slice(&buf[..size])
-            }
+        let inbound = if (self.transport_mode == "udp") && size >= 12 && buf[0] == 0x80 {
+            Bytes::copy_from_slice(&buf[12..size])
         } else {
             Bytes::copy_from_slice(&buf[..size])
         };
@@ -975,15 +903,12 @@ impl Bridge {
         self.handshake_timeout_ms = cfg.ostp.handshake_timeout_ms;
         self.io_timeout_ms = cfg.ostp.io_timeout_ms;
         self.mode = cfg.mode.clone(); // Bug fix: mode was never updated on hot-reload
-        self.turn_enabled = cfg.turn.enabled;
-        self.turn_server = cfg.turn.server_addr.clone();
-        self.turn_username = cfg.turn.username.clone();
-        self.turn_password = cfg.turn.access_key.clone();
         self.mux_enabled = cfg.multiplex.enabled;
         self.mux_sessions = cfg.multiplex.sessions.max(1);
         self.transport_mode = cfg.transport.mode.clone();
         self.stealth_sni = cfg.transport.stealth_sni.clone();
         self.stealth_port = cfg.transport.stealth_port;
+        self.reality_enabled = !cfg.reality.pbk.is_empty();
     }
 
     async fn try_connect_transport(
@@ -1002,7 +927,7 @@ impl Bridge {
                 port
             };
             let (tx, rx) = crate::transport::xhttp::connect_xhttp(
-                target_ip, uot_port, &self.stealth_sni, &self.access_key
+                target_ip, uot_port, &self.stealth_sni, &self.access_key, self.reality_enabled
             ).await?;
             Ok(crate::transport::Transport::Uot { tx, rx })
         } else {
@@ -1052,4 +977,5 @@ fn synthesize_nat64(ip: std::net::Ipv4Addr) -> std::net::Ipv6Addr {
         ((octets[2] as u16) << 8) | octets[3] as u16,
     )
 }
+
 

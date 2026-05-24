@@ -20,3 +20,6 @@ portable-atomic.workspace = true
 hmac.workspace = true
 sha2.workspace = true
 base64 = "0.22"
+rustls = "0.23"
+tokio-rustls = "0.26"
+rcgen = "0.13"

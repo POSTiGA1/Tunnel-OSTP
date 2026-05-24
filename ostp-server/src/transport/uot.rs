@@ -11,13 +11,16 @@ use tokio::net::TcpStream;
 use tokio::sync::{mpsc, RwLock};
 use tracing::info;
 
-pub async fn handle_tcp_connection(
-    mut stream: TcpStream,
+pub async fn handle_tcp_connection<S>(
+    mut stream: S,
     peer_addr: SocketAddr,
     shared_keys: Arc<StdRwLock<HashMap<String, ()>>>,
     udp_tx: mpsc::Sender<(Bytes, SocketAddr)>,
     tcp_map: Arc<RwLock<HashMap<SocketAddr, mpsc::Sender<Bytes>>>>,
-) -> Result<()> {
+) -> Result<()>
+where
+    S: tokio::io::AsyncRead + tokio::io::AsyncWrite + Unpin + Send + 'static,
+{
     // 1. Read HTTP Handshake
     let mut buf = [0u8; 4096];
     let mut header_len = 0;
@@ -123,7 +126,7 @@ pub async fn handle_tcp_connection(
     let leftover = &buf[headers_end..header_len];
 
     // Process streams
-    let (mut read_half, mut write_half) = stream.into_split();
+    let (mut read_half, mut write_half) = tokio::io::split(stream);
 
     // Spawn writer task
     let peer_clone = peer_addr;
@@ -181,7 +184,10 @@ pub async fn handle_tcp_connection(
     Ok(())
 }
 
-async fn send_404(stream: &mut TcpStream) -> Result<()> {
+async fn send_404<S>(stream: &mut S) -> Result<()>
+where
+    S: tokio::io::AsyncRead + tokio::io::AsyncWrite + Unpin + Send + 'static,
+{
     let body = "Not Found";
     let resp = format!(
         "HTTP/1.1 404 Not Found\r\nContent-Type: text/plain\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",

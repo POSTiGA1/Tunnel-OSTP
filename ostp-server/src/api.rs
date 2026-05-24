@@ -42,8 +42,8 @@ pub struct ApiState {
     pub api_token: String,
     /// Server address for subscription links (e.g. "example.com")
     pub server_host: String,
-    /// Server listen port
     pub server_port: u16,
+    pub reality_query: String,
 }
 
 // ── API configuration ────────────────────────────────────────────────────────
@@ -137,6 +137,7 @@ pub async fn start_api_server(
     user_stats: Arc<RwLock<HashMap<String, Arc<UserStats>>>>,
     server_host: String,
     server_port: u16,
+    reality_query: String,
 ) {
     let state = ApiState {
         access_keys,
@@ -145,6 +146,7 @@ pub async fn start_api_server(
         api_token: config.token.clone(),
         server_host,
         server_port,
+        reality_query,
     };
 
     let app = create_api_router(state);
@@ -416,7 +418,7 @@ async fn handle_subscribe(
 
     // If client requests plain text, return ostp:// share link
     if accept.contains("text/plain") {
-        let link = format!("ostp://{}@{}:{}", key, state.server_host, state.server_port);
+        let link = format!("ostp://{}@{}:{}{}", key, state.server_host, state.server_port, state.reality_query);
         return (StatusCode::OK, Json(serde_json::json!({
             "ok": true,
             "data": link

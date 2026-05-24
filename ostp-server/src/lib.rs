@@ -22,6 +22,15 @@ pub use outbound::{OutboundAction, OutboundConfig, OutboundRule};
 pub use api::ApiConfig;
 pub use fallback::FallbackConfig;
 
+#[derive(Debug, Clone)]
+pub struct RealityServerConfig {
+    pub dest: String,
+    pub private_key: String,
+    pub pbk: String,
+    pub sid: String,
+    pub sni_list: Vec<String>,
+}
+
 // ── Internal event types ─────────────────────────────────────────────────────
 
 #[derive(Debug, Clone)]
@@ -59,6 +68,8 @@ pub async fn run_server(
     api_config: Option<ApiConfig>,
     fallback_config: Option<FallbackConfig>,
     debug: bool,
+    reality_query: Option<String>,
+    reality_config: Option<RealityServerConfig>,
 ) -> Result<()> {
     let mut keys_map = HashMap::new();
     for key in access_keys {
@@ -161,8 +172,9 @@ pub async fn run_server(
             let parts: Vec<&str> = primary.rsplitn(2, ':').collect();
             let server_port: u16 = parts.first().and_then(|p| p.parse().ok()).unwrap_or(50000);
             let server_host = parts.get(1).unwrap_or(&"0.0.0.0").to_string();
+            let rq = reality_query.clone().unwrap_or_default();
             tokio::spawn(async move {
-                api::start_api_server(api_cfg, api_keys, api_stats, server_host, server_port).await;
+                api::start_api_server(api_cfg, api_keys, api_stats, server_host, server_port, rq).await;
             });
         }
     }
@@ -213,8 +225,25 @@ pub async fn run_server(
     let key_count = shared_keys.read().unwrap().len();
     tracing::info!(listeners = bind_addrs.len(), keys = key_count, "server started");
     tracing::info!("ARQ config: max_reorder=16384, reorder_buf=8192, sent_history=32768, rto=100ms");
+    let tls_config = if let Some(rc) = reality_config {
+        let subject_alt_names = rc.sni_list.clone();
+        let cert = rcgen::generate_simple_self_signed(subject_alt_names)?;
+        let cert_der = cert.cert.der().to_vec();
+        let priv_key = cert.key_pair.serialize_der();
+        
+        let server_config = rustls::ServerConfig::builder()
+            .with_no_client_auth()
+            .with_single_cert(
+                vec![rustls::pki_types::CertificateDer::from(cert_der)],
+                rustls::pki_types::PrivatePkcs8KeyDer::from(priv_key).into(),
+            )?;
+        Some(std::sync::Arc::new(server_config))
+    } else {
+        None
+    };
+
     tokio::select! {
-        res = run_server_loop(bind_addrs.clone(), primary_socket, sockets, dispatcher, ui_cmd_rx, ui_event_tx, shared_keys, outbound, debug) => {
+        res = run_server_loop(bind_addrs.clone(), primary_socket, sockets, dispatcher, ui_cmd_rx, ui_event_tx, shared_keys, outbound, debug, tls_config) => {
             if let Err(e) = res {
                 tracing::error!("Server error: {e}");
             }
@@ -239,6 +268,7 @@ async fn run_server_loop(
     shared_keys: std::sync::Arc<std::sync::RwLock<HashMap<String, ()>>>,
     outbound: Option<OutboundConfig>,
     debug: bool,
+    tls_config: Option<std::sync::Arc<rustls::ServerConfig>>,
 ) -> Result<()> {
     let mut remotes: HashMap<(u32, u16), RemoteState> = HashMap::new();
     let (stream_tx, mut stream_rx) = mpsc::unbounded_channel::<(u32, u16, Vec<u8>)>();
@@ -257,7 +287,11 @@ async fn run_server_loop(
             loop {
                 match sock_clone.recv_from(&mut buf).await {
                     Ok((size, peer)) => {
-                        let packet = Bytes::copy_from_slice(&buf[..size]);
+                        let packet = if size >= 12 && buf[0] == 0x80 {
+                            Bytes::copy_from_slice(&buf[12..size])
+                        } else {
+                            Bytes::copy_from_slice(&buf[..size])
+                        };
                         if tx.send((packet, peer)).await.is_err() {
                             break;
                         }
@@ -275,6 +309,7 @@ async fn run_server_loop(
         let shared_keys_clone = shared_keys.clone();
         let udp_tx_clone = udp_tx.clone();
 
+        let tls_cfg = tls_config.clone();
         tokio::spawn(async move {
             if let Ok(listener) = tokio::net::TcpListener::bind(&addr).await {
                 tracing::info!("TCP (UoT) listener bound to {}", addr);
@@ -312,9 +347,24 @@ async fn run_server_loop(
                         let tm = tcp_map_clone.clone();
                         let keys = shared_keys_clone.clone();
                         let tx = udp_tx_clone.clone();
+                        let tls = tls_cfg.clone();
                         tokio::spawn(async move {
-                            if let Err(e) = crate::transport::uot::handle_tcp_connection(stream, peer_addr, keys, tx, tm).await {
-                                tracing::warn!("UoT connection from {} closed: {}", peer_addr, e);
+                            if let Some(cfg) = tls {
+                                let acceptor = tokio_rustls::TlsAcceptor::from(cfg);
+                                match acceptor.accept(stream).await {
+                                    Ok(tls_stream) => {
+                                        if let Err(e) = crate::transport::uot::handle_tcp_connection(tls_stream, peer_addr, keys, tx, tm).await {
+                                            tracing::warn!("UoT TLS connection from {} closed: {}", peer_addr, e);
+                                        }
+                                    }
+                                    Err(e) => {
+                                        tracing::warn!("UoT TLS handshake from {} failed: {}", peer_addr, e);
+                                    }
+                                }
+                            } else {
+                                if let Err(e) = crate::transport::uot::handle_tcp_connection(stream, peer_addr, keys, tx, tm).await {
+                                    tracing::warn!("UoT connection from {} closed: {}", peer_addr, e);
+                                }
                             }
                         });
                     }
@@ -391,7 +441,10 @@ async fn run_server_loop(
                                     }
                                 }
                                 if !sent_tcp {
-                                    let _ = socket.send_to(&resp, peer_addr).await?;
+                                    let mut out = bytes::BytesMut::with_capacity(12 + resp.len());
+                                    out.extend_from_slice(&[0x80, 0x60, 0x12, 0x34, 0x00, 0x00, 0x00, 0x00, 0x11, 0x22, 0x33, 0x44]);
+                                    out.extend_from_slice(&resp);
+                                    let _ = socket.send_to(&out.freeze(), peer_addr).await?;
                                 }
                                 let _ = ui_event_tx.send(UiEvent::Tx { peer: peer_ip, bytes: resp_len });
                             }
@@ -475,7 +528,10 @@ async fn run_server_loop(
                         }
                     }
                     if !sent_tcp {
-                        let _ = socket.send_to(&frame, peer_addr).await?;
+                        let mut out = bytes::BytesMut::with_capacity(12 + frame.len());
+                        out.extend_from_slice(&[0x80, 0x60, 0x12, 0x34, 0x00, 0x00, 0x00, 0x00, 0x11, 0x22, 0x33, 0x44]);
+                        out.extend_from_slice(&frame);
+                        let _ = socket.send_to(&out.freeze(), peer_addr).await?;
                     }
                 }
                 for sid in dropped_sessions {

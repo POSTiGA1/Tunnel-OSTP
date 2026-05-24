@@ -55,20 +55,48 @@ fn parse_ostp_link(link: &str) -> Result<ClientConfig> {
     let host = parsed.host_str().ok_or_else(|| anyhow!("Missing host in share link"))?;
     let port = parsed.port().ok_or_else(|| anyhow!("Missing port in share link"))?;
     let server = format!("{host}:{port}");
+    let mut sni = String::new();
+    let mut fp = String::new();
+    let mut pbk = String::new();
+    let mut sid = String::new();
+    let mut spx = String::new();
+    let mut transport_mode = String::from("udp");
+
+    for (k, v) in parsed.query_pairs() {
+        match k.as_ref() {
+            "sni" => sni = v.into_owned(),
+            "fp" => fp = v.into_owned(),
+            "pbk" => pbk = v.into_owned(),
+            "sid" => sid = v.into_owned(),
+            "spx" => spx = v.into_owned(),
+            "type" => transport_mode = v.into_owned(),
+            _ => {}
+        }
+    }
 
     Ok(ClientConfig {
         server,
         access_key,
         mtu: None,
-        transport: None,
-        socks5_bind: Some("127.0.0.1:1088".to_string()), // Fallback to standard SOCKS5 port
+        transport: Some(TransportConfigRaw {
+            mode: Some(transport_mode),
+            stealth_sni: Some(sni.clone()),
+            stealth_port: Some(443),
+        }),
+        socks5_bind: Some("127.0.0.1:1088".to_string()),
         tun: Some(TunConfig {
-            enable: false, // Default to proxy, configurable via settings GUI
+            enable: false,
             wintun_path: Some("./wintun.dll".to_string()),
             ipv4_address: Some("10.1.0.2/24".to_string()),
             dns: None,
         }),
-        turn: None,
+        reality: Some(RealityConfigRaw {
+            sni,
+            fp,
+            pbk,
+            sid,
+            spx,
+        }),
         debug: Some(false),
         exclude: None,
         mux: None,
@@ -141,7 +169,7 @@ impl UnifiedConfig {
 struct ServerConfig {
     listen: ListenConfig,
     access_keys: Vec<String>,
-    turn_server: Option<String>,
+    reality: Option<RealityServerConfigRaw>,
     debug: Option<bool>,
     outbound: Option<OutboundConfig>,
     api: Option<ApiConfig>,
@@ -193,7 +221,7 @@ struct ClientConfig {
     mtu: Option<usize>,
     socks5_bind: Option<String>,
     tun: Option<TunConfig>,
-    turn: Option<TurnConfigRaw>,
+    reality: Option<RealityConfigRaw>,
     debug: Option<bool>,
     exclude: Option<ExcludeConfig>,
     mux: Option<MuxConfig>,
@@ -215,12 +243,24 @@ struct TunConfig {
     dns: Option<String>,
 }
 
-#[derive(Debug, Deserialize, Serialize)]
-struct TurnConfigRaw {
+#[derive(Debug, Deserialize, Serialize, Clone)]
+struct RealityConfigRaw {
+    sni: String,
+    fp: String,
+    pbk: String,
+    sid: String,
+    spx: String,
+}
+
+#[derive(Debug, Deserialize, Serialize, Clone)]
+struct RealityServerConfigRaw {
+    #[serde(default)]
     enabled: bool,
-    server_addr: String,
-    username: Option<String>,
-    access_key: Option<String>,
+    dest: String,
+    private_key: String,
+    pbk: String,
+    sid: String,
+    sni_list: Vec<String>,
 }
 
 #[derive(Debug, Deserialize, Serialize)]
@@ -469,6 +509,16 @@ async fn run_app() -> Result<()> {
     // Target web server (e.g., local nginx or caddy)
     "target": "127.0.0.1:8080"
   }},
+
+  // Reality (XTLS) / UoT Masquerade parameters
+  "reality": {{
+    "enabled": false,
+    "dest": "www.microsoft.com:443",
+    "private_key": "",
+    "pbk": "",
+    "sid": "",
+    "sni_list": ["www.microsoft.com"]
+  }},
   "debug": false
 }}"#, key)
         } else {
@@ -501,18 +551,19 @@ async fn run_app() -> Result<()> {
     "processes": []
   }},
   
-  // STUN/TURN server settings to bypass UDP blocks by mimicking WebRTC call traffic
-  "turn": {{
-    "enabled": false,
-    "server_addr": "127.0.0.1:3478",
-    "username": "ostpuser",
-    "access_key": "ostppassword"
+  // Reality (XTLS) / WebRTC Masquerade parameters
+  "reality": {{
+    "dest": "www.microsoft.com:443",
+    "private_key": "",
+    "pbk": "",
+    "sid": "",
+    "sni_list": ["www.microsoft.com"]
   }},
   
-  // Transport Mode: "udp" (default) or "uot" (xHTTP Stealth / UDP over TCP)
+  // Transport Mode: "udp" (default WebRTC masquerade) or "uot" (TCP XTLS-Reality)
   "transport": {{
     "mode": "udp",
-    "stealth_sni": "vk.com",
+    "stealth_sni": "www.microsoft.com",
     "stealth_port": 443
   }},
   
@@ -529,11 +580,15 @@ async fn run_app() -> Result<()> {
         if is_server {
             let mut stripped = json_comments::StripComments::new(content.as_bytes());
             if let Ok(config) = serde_json::from_reader::<_, UnifiedConfig>(&mut stripped) {
-                if let AppMode::Server(s) = config.mode {
+                if let AppMode::Server(s) = &config.mode {
                     let key = &s.access_keys[0];
                     let host = get_or_ask_public_ip(&args.config);
+                    let mut link = format!("ostp://{}@{}:50000", key, host);
+                    if let Some(r) = &s.reality {
+                        link = format!("{}?security=reality&sni={}&pbk={}&sid={}&type=udp", link, r.sni_list.first().unwrap_or(&String::new()), r.pbk, r.sid);
+                    }
                     println!("\n  Share link for client distribution:");
-                    println!("  ostp://{}@{}:50000", key, host);
+                    println!("  {}", link);
                 }
             }
         }
@@ -575,7 +630,11 @@ async fn run_app() -> Result<()> {
                 
                 println!("\n  Client share links from {:?}:", args.config);
                 for (idx, key) in server_cfg.access_keys.iter().enumerate() {
-                    println!("  [{}] ostp://{}@{}:{}", idx + 1, key, host, port);
+                    let mut link = format!("ostp://{}@{}:{}", key, host, port);
+                    if let Some(r) = &server_cfg.reality {
+                        link = format!("{}?security=reality&sni={}&pbk={}&sid={}&type=udp", link, r.sni_list.first().unwrap_or(&String::new()), r.pbk, r.sid);
+                    }
+                    println!("  [{}] {}", idx + 1, link);
                 }
                 return Ok(());
             }
@@ -589,8 +648,10 @@ async fn run_app() -> Result<()> {
         AppMode::Server(server_cfg) => {
             let listen_addrs = server_cfg.listen.addresses();
             println!("[ostp] Starting server on {:?}", listen_addrs);
-            if let Some(turn) = server_cfg.turn_server {
-                println!("[ostp] TURN relay enabled: {}", turn);
+            if let Some(ref reality) = server_cfg.reality {
+                if reality.enabled {
+                    println!("[ostp] Reality mode enabled (dest: {})", reality.dest);
+                }
             }
             let debug = server_cfg.debug.unwrap_or(false);
             let outbound = server_cfg.outbound.map(|o| ostp_server::OutboundConfig {
@@ -619,8 +680,22 @@ async fn run_app() -> Result<()> {
                 listen: f.listen.unwrap_or_else(|| "0.0.0.0:443".to_string()),
                 target: f.target.unwrap_or_else(|| "127.0.0.1:8080".to_string()),
             });
+            let mut rq = None;
+            let mut rc = None;
+            if let Some(r) = server_cfg.reality {
+                if r.enabled {
+                    rq = Some(format!("?security=reality&sni={}&pbk={}&sid={}&type=udp", r.sni_list.first().unwrap_or(&String::new()), r.pbk, r.sid));
+                    rc = Some(ostp_server::RealityServerConfig {
+                        sni_list: r.sni_list.clone(),
+                        dest: r.dest,
+                        private_key: r.private_key,
+                        pbk: r.pbk,
+                        sid: r.sid,
+                    });
+                }
+            }
             // Pass all listen addresses for multi-listener support
-            ostp_server::run_server(listen_addrs, server_cfg.access_keys, outbound, api_config, fallback_config, debug).await?;
+            ostp_server::run_server(listen_addrs, server_cfg.access_keys, outbound, api_config, fallback_config, debug, rq, rc).await?;
         }
         AppMode::Client(client_cfg) => {
             run_client_directly(client_cfg).await?;
@@ -635,7 +710,7 @@ async fn run_client_directly(client_cfg: ClientConfig) -> Result<()> {
     let is_tun_enabled = client_cfg.tun.as_ref().map(|t| t.enable).unwrap_or(false);
     let mode_str = if is_tun_enabled { "tun" } else { "proxy" };
     println!("[ostp] Starting client (mode={}, server={})", mode_str, client_cfg.server);
-    let turn_cfg = client_cfg.turn.as_ref();
+    let reality_cfg = client_cfg.reality.as_ref();
     let client_conf = ostp_client::config::ClientConfig {
         mode: if is_tun_enabled { "tun".to_string() } else { "proxy".to_string() },
         debug: client_cfg.debug.unwrap_or(false),
@@ -644,18 +719,20 @@ async fn run_client_directly(client_cfg: ClientConfig) -> Result<()> {
             local_bind_addr: "0.0.0.0:0".to_string(),
             access_key: client_cfg.access_key.clone(),
             handshake_timeout_ms: 5000,
-            io_timeout_ms: 5000,
+            io_timeout_ms: 2500,
             mtu: client_cfg.mtu.unwrap_or(1350),
+            keepalive_interval_sec: 5,
         },
         local_proxy: ostp_client::config::LocalProxyConfig {
             bind_addr: client_cfg.socks5_bind.clone().unwrap_or_else(|| "127.0.0.1:1088".to_string()),
             connect_timeout_ms: 5000,
         },
-        turn: ostp_client::config::TurnConfig {
-            enabled: turn_cfg.map(|t| t.enabled).unwrap_or(false),
-            server_addr: turn_cfg.map(|t| t.server_addr.clone()).unwrap_or_default(),
-            username: turn_cfg.and_then(|t| t.username.clone()).unwrap_or_default(),
-            access_key: turn_cfg.and_then(|t| t.access_key.clone()).unwrap_or_default(),
+        reality: ostp_client::config::RealityConfig {
+            sni: reality_cfg.map(|t| t.sni.clone()).unwrap_or_default(),
+            fp: reality_cfg.map(|t| t.fp.clone()).unwrap_or_default(),
+            pbk: reality_cfg.map(|t| t.pbk.clone()).unwrap_or_default(),
+            sid: reality_cfg.map(|t| t.sid.clone()).unwrap_or_default(),
+            spx: reality_cfg.map(|t| t.spx.clone()).unwrap_or_default(),
         },
         exclusions: ostp_client::config::ExclusionConfig {
             domains: client_cfg.exclude.as_ref().and_then(|e| e.domains.clone()).unwrap_or_default(),

@@ -12,7 +12,7 @@ pub struct ClientConfig {
     pub debug: bool,
     pub ostp: OstpConfig,
     pub local_proxy: LocalProxyConfig,
-    pub turn: TurnConfig,
+    pub reality: RealityConfig,
     #[serde(default)]
     pub transport: TransportConfig,
     #[serde(default)]
@@ -48,7 +48,11 @@ pub struct OstpConfig {
     pub io_timeout_ms: u64,
     #[serde(default = "default_mtu")]
     pub mtu: usize,
+    #[serde(default = "default_keepalive")]
+    pub keepalive_interval_sec: u64,
 }
+
+fn default_keepalive() -> u64 { 5 }
 
 fn default_mtu() -> usize { 1350 }
 
@@ -88,11 +92,17 @@ impl Default for TransportConfig {
 
 
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
-pub struct TurnConfig {
-    pub enabled: bool,
-    pub server_addr: String,
-    pub username: String,
-    pub access_key: String,
+pub struct RealityConfig {
+    #[serde(default)]
+    pub sni: String,
+    #[serde(default)]
+    pub fp: String,
+    #[serde(default)]
+    pub pbk: String,
+    #[serde(default)]
+    pub sid: String,
+    #[serde(default)]
+    pub spx: String,
 }
 
 
@@ -105,6 +115,7 @@ impl Default for OstpConfig {
             handshake_timeout_ms: 5000,
             io_timeout_ms: 2500,
             mtu: default_mtu(),
+            keepalive_interval_sec: default_keepalive(),
         }
     }
 }
@@ -126,7 +137,7 @@ impl Default for ClientConfig {
             debug: false,
             ostp: OstpConfig::default(),
             local_proxy: LocalProxyConfig::default(),
-            turn: TurnConfig::default(),
+            reality: RealityConfig::default(),
             transport: TransportConfig::default(),
             exclusions: ExclusionConfig::default(),
             multiplex: MultiplexConfig::default(),
@@ -158,7 +169,7 @@ struct RawUnifiedConfig {
     tun: Option<RawTunSection>,
     exclude: Option<RawExcludeSection>,
     mux: Option<RawMuxSection>,
-    turn: Option<RawTurnSection>,
+    reality: Option<RawRealitySection>,
     transport: Option<RawTransportSection>,
 }
 
@@ -189,11 +200,12 @@ struct RawMuxSection {
 }
 
 #[derive(Debug, Deserialize)]
-struct RawTurnSection {
-    enabled: Option<bool>,
-    server_addr: Option<String>,
-    username: Option<String>,
-    access_key: Option<String>,
+struct RawRealitySection {
+    sni: Option<String>,
+    fp: Option<String>,
+    pbk: Option<String>,
+    sid: Option<String>,
+    spx: Option<String>,
 }
 
 impl ClientConfig {
@@ -235,16 +247,18 @@ impl ClientConfig {
                 handshake_timeout_ms: 5000,
                 io_timeout_ms: 2500,
                 mtu,
+                keepalive_interval_sec: default_keepalive(),
             },
             local_proxy: LocalProxyConfig {
                 bind_addr: socks5,
                 connect_timeout_ms: 15000,
             },
-            turn: TurnConfig {
-                enabled: raw.turn.as_ref().and_then(|t| t.enabled).unwrap_or(false),
-                server_addr: raw.turn.as_ref().and_then(|t| t.server_addr.clone()).unwrap_or_default(),
-                username: raw.turn.as_ref().and_then(|t| t.username.clone()).unwrap_or_default(),
-                access_key: raw.turn.as_ref().and_then(|t| t.access_key.clone()).unwrap_or_default(),
+            reality: RealityConfig {
+                sni: raw.reality.as_ref().and_then(|t| t.sni.clone()).unwrap_or_default(),
+                fp: raw.reality.as_ref().and_then(|t| t.fp.clone()).unwrap_or_default(),
+                pbk: raw.reality.as_ref().and_then(|t| t.pbk.clone()).unwrap_or_default(),
+                sid: raw.reality.as_ref().and_then(|t| t.sid.clone()).unwrap_or_default(),
+                spx: raw.reality.as_ref().and_then(|t| t.spx.clone()).unwrap_or_default(),
             },
             transport: TransportConfig {
                 mode: raw.transport.as_ref().and_then(|t| t.mode.clone()).unwrap_or_else(|| "udp".to_string()),
