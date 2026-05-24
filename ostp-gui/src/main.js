@@ -43,6 +43,9 @@ const inKey          = $('in-key');
 const inSocks        = $('in-socks');
 const inDns          = $('in-dns');
 const inTransport    = $('in-transport');
+const inSni          = $('in-stealth-sni');
+const inPbk          = $('in-pbk');
+const inSid          = $('in-sid');
 const inMtu          = $('in-mtu');
 const inTun          = $('in-tun-mode');
 const inDebug        = $('in-debug');
@@ -225,6 +228,9 @@ async function loadConfigIntoForm() {
     inKey.value     = c.access_key    || '';
     inSocks.value   = c.socks5_bind   || '127.0.0.1:1088';
     inTransport.value = c.transport?.mode || 'udp';
+    inSni.value     = c.transport?.stealth_sni || '';
+    inPbk.value     = c.reality?.pbk           || '';
+    inSid.value     = c.reality?.sid           || '';
     inMtu.value     = c.mtu           || '';
     inTun.checked   = !!c.tun?.enable;
     inDns.value     = c.tun?.dns      || '';
@@ -257,6 +263,21 @@ async function handleSave() {
 
   rawConfig.transport = rawConfig.transport || {};
   rawConfig.transport.mode = inTransport.value;
+  rawConfig.transport.stealth_sni = inSni.value.trim() || undefined;
+
+  const pbk = inPbk.value.trim();
+  if (pbk) {
+    rawConfig.reality = {
+      enabled: true,
+      dest: '',
+      private_key: '',
+      pbk: pbk,
+      sid: inSid.value.trim(),
+      sni_list: []
+    };
+  } else {
+    delete rawConfig.reality;
+  }
 
   const mtuStr = inMtu.value.trim();
   if (mtuStr) rawConfig.mtu = parseInt(mtuStr, 10);
@@ -299,6 +320,14 @@ function handleImport() {
     if (!key || !host) throw new Error('Incomplete link parameters');
     inServer.value = host;
     inKey.value    = key;
+    inSni.value    = url.searchParams.get('sni') || '';
+    inPbk.value    = url.searchParams.get('pbk') || '';
+    inSid.value    = url.searchParams.get('sid') || '';
+    
+    const type = url.searchParams.get('type');
+    if (type === 'tcp' || type === 'http') inTransport.value = 'uot';
+    else inTransport.value = 'udp';
+    
     importInput.value = '';
     showToast(t('toast_imported'), 'ok');
   } catch (err) {
