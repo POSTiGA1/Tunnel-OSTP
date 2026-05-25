@@ -117,6 +117,22 @@ fn generate_secure_key(format_type: &str) -> String {
     }
 }
 
+fn generate_reality_keys() -> (String, String, String) {
+    use rand::RngCore;
+    use base64::Engine;
+    
+    let builder = snow::Builder::new("Noise_NN_25519_ChaChaPoly_BLAKE2s".parse().unwrap());
+    let keypair = builder.generate_keypair().expect("failed to generate reality keys");
+    let priv_b64 = base64::engine::general_purpose::URL_SAFE_NO_PAD.encode(&keypair.private);
+    let pub_b64 = base64::engine::general_purpose::URL_SAFE_NO_PAD.encode(&keypair.public);
+    
+    let mut sid_bytes = [0u8; 8];
+    rand::thread_rng().fill_bytes(&mut sid_bytes);
+    let sid_hex = sid_bytes.iter().map(|b| format!("{:02x}", b)).collect::<String>();
+    
+    (priv_b64, pub_b64, sid_hex)
+}
+
 fn parse_outbound_action(value: Option<String>) -> ostp_server::OutboundAction {
     match value.as_deref() {
         Some("direct") => ostp_server::OutboundAction::Direct,
@@ -467,6 +483,7 @@ async fn run_app() -> Result<()> {
         let is_server = mode_str == "server";
         let key = generate_secure_key("hex");
         let content = if is_server {
+            let (priv_key, pub_key, sid) = generate_reality_keys();
             format!(r#"{{
   // OSTP Server Configuration
   "mode": "server",
@@ -516,13 +533,13 @@ async fn run_app() -> Result<()> {
   "reality": {{
     "enabled": false,
     "dest": "www.microsoft.com:443",
-    "private_key": "",
-    "pbk": "",
-    "sid": "",
+    "private_key": "{}",
+    "pbk": "{}",
+    "sid": "{}",
     "sni_list": ["www.microsoft.com"]
   }},
   "debug": false
-}}"#, key)
+}}"#, key, priv_key, pub_key, sid)
         } else {
             format!(r#"{{
   // OSTP Client Configuration
