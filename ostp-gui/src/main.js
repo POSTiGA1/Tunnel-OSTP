@@ -48,6 +48,8 @@ const inPbk          = $('in-pbk');
 const inSid          = $('in-sid');
 const inMtu          = $('in-mtu');
 const inTun          = $('in-tun-mode');
+const inMux          = $('in-mux-mode');
+const inMuxSessions  = $('in-mux-sessions');
 const inDebug        = $('in-debug');
 const inDomains      = $('in-ex-domains');
 const inIps          = $('in-ex-ips');
@@ -233,6 +235,8 @@ async function loadConfigIntoForm() {
     inSid.value     = c.reality?.sid           || '';
     inMtu.value     = c.mtu           || '';
     inTun.checked   = !!c.tun?.enable;
+    inMux.checked   = !!c.mux?.enabled;
+    inMuxSessions.value = c.mux?.sessions || '';
     inDns.value     = c.tun?.dns      || '';
     inDebug.checked = !!c.debug;
 
@@ -282,6 +286,13 @@ async function handleSave() {
   const mtuStr = inMtu.value.trim();
   if (mtuStr) rawConfig.mtu = parseInt(mtuStr, 10);
   else delete rawConfig.mtu;
+
+  if (inMux.checked) {
+    const s = parseInt(inMuxSessions.value.trim(), 10);
+    rawConfig.mux = { enabled: true, sessions: isNaN(s) ? 1 : s };
+  } else {
+    delete rawConfig.mux;
+  }
 
   if (!rawConfig.tun) {
     rawConfig.tun = { wintun_path: './wintun.dll', ipv4_address: '10.1.0.2/24' };

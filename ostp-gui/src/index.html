@@ -210,6 +210,11 @@
             <input id="in-mtu" class="field-input" type="number" placeholder="1350" />
           </div>
 
+          <div class="field-group">
+            <label class="field-label" for="in-mux-sessions" data-i18n="label_mux_sessions">Mux Sessions</label>
+            <input id="in-mux-sessions" class="field-input" type="number" placeholder="1" />
+          </div>
+
           <!-- Toggles -->
           <div class="toggle-row">
             <div class="toggle-text">
@@ -218,6 +223,19 @@
             </div>
             <label class="toggle">
               <input type="checkbox" id="in-tun-mode" />
+              <span class="toggle-track">
+                <span class="toggle-thumb"></span>
+              </span>
+            </label>
+          </div>
+
+          <div class="toggle-row">
+            <div class="toggle-text">
+              <span class="toggle-name" data-i18n="label_mux">Multiplexing (Mux)</span>
+              <span class="toggle-hint" data-i18n="mux_hint">Run multiple streams over one connection</span>
+            </div>
+            <label class="toggle">
+              <input type="checkbox" id="in-mux-mode" />
               <span class="toggle-track">
                 <span class="toggle-thumb"></span>
               </span>
