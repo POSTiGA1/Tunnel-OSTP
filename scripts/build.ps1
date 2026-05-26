@@ -42,6 +42,14 @@ if (Test-Path $CargoToml) {
     }
 }
 
+# --- Pre-flight: frontend build ---
+Write-Output ""
+Write-Output "Building frontend control panel..."
+Push-Location (Join-Path $ProjectRoot "ostp-control")
+& npm install | Out-Null
+& npm run build | Out-Null
+Pop-Location
+
 # --- Pre-flight: cargo check ---
 Write-Output ""
 Write-Output "Running pre-flight cargo check..."

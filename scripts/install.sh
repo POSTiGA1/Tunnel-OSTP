@@ -199,8 +199,9 @@ echo "Select mode:"
 echo "  1) Server"
 echo "  2) Client"
 echo "  3) Relay"
+echo "  4) Server + Web Panel"
 echo "--------------------------------------------------------"
-read -p "Choice [1-3]: " NODE_MODE
+read -p "Choice [1-4]: " NODE_MODE
 
 cd "$INSTALL_DIR"
 
@@ -241,6 +242,59 @@ with open('$CONFIG_FILE', 'w') as f:
     done
     echo ""
     echo "Server configuration saved: $CONFIG_FILE"
+
+elif [ "$NODE_MODE" == "4" ]; then
+    echo "Initializing server configuration..."
+    ./ostp --init server --config "$CONFIG_FILE"
+
+    read -p "Listen address [default: 0.0.0.0:50000]: " LISTEN_ADDR
+    if [ -n "$LISTEN_ADDR" ]; then
+        sed -i "s/\"listen\": \".*\"/\"listen\": \"$LISTEN_ADDR\"/g" "$CONFIG_FILE"
+    fi
+
+    # Panel Setup
+    echo "--- Web Panel Setup ---"
+    read -p "Panel port [default: 9090]: " PANEL_PORT
+    PANEL_PORT=${PANEL_PORT:-9090}
+    
+    RANDOM_PATH=$(tr -dc 'a-zA-Z0-9' < /dev/urandom | head -c 8)
+    read -p "WebPath (leave empty for random: /$RANDOM_PATH/): " WEBPATH
+    WEBPATH=${WEBPATH:-$RANDOM_PATH}
+    
+    read -p "Username [default: admin]: " USERNAME
+    USERNAME=${USERNAME:-admin}
+    
+    RANDOM_PASS=$(tr -dc 'a-zA-Z0-9' < /dev/urandom | head -c 12)
+    read -p "Password (leave empty for random: $RANDOM_PASS): " PASSWORD
+    PASSWORD=${PASSWORD:-$RANDOM_PASS}
+    
+    # Hash password with python
+    PASS_HASH=$(python3 -c "import hashlib; print(hashlib.sha256('$PASSWORD'.encode()).hexdigest())")
+    
+    # Inject into config
+    python3 -c "
+import json
+with open('$CONFIG_FILE') as f:
+    lines = [l for l in f.read().split('\n') if not l.strip().startswith('//')]
+    cfg = json.loads('\n'.join(lines))
+if 'api' not in cfg:
+    cfg['api'] = {}
+cfg['api']['enabled'] = True
+cfg['api']['bind'] = '0.0.0.0:' + str('$PANEL_PORT')
+cfg['api']['webpath'] = '$WEBPATH'
+cfg['api']['username'] = '$USERNAME'
+cfg['api']['password_hash'] = '$PASS_HASH'
+with open('$CONFIG_FILE', 'w') as f:
+    json.dump(cfg, f, indent=2)
+" 2>/dev/null || echo "[warn] Failed to configure panel via python. Edit config manually."
+
+    echo ""
+    echo "========================================================"
+    echo "Panel installed successfully!"
+    echo "URL: http://<your_server_ip>:$PANEL_PORT/$WEBPATH/"
+    echo "Username: $USERNAME"
+    echo "Password: $PASSWORD"
+    echo "========================================================"
 
 elif [ "$NODE_MODE" == "2" ]; then
     echo "Initializing client configuration..."

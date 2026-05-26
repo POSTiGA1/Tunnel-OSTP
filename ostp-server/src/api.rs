@@ -20,12 +20,15 @@ use portable_atomic::AtomicU64;
 use std::time::Instant;
 
 use axum::{
+    body::Body,
     extract::{Path, State},
-    http::StatusCode,
-    response::IntoResponse,
+    http::{header, Request, StatusCode, Uri},
+    response::{IntoResponse, Response},
     routing::{get, post, put},
     Json, Router,
 };
+use rust_embed::RustEmbed;
+use sha2::Digest;
 use serde::{Deserialize, Serialize};
 use tower_http::cors::{Any, CorsLayer};
 
@@ -39,7 +42,10 @@ pub struct ApiState {
     pub access_keys: Arc<RwLock<HashMap<String, UserMeta>>>,
     pub user_stats: Arc<RwLock<HashMap<String, Arc<UserStats>>>>,
     pub start_time: Instant,
-    pub api_token: String,
+    pub session_token: Arc<RwLock<Option<String>>>,
+    pub webpath: String,
+    pub username: String,
+    pub password_hash: String,
     /// Server address for subscription links (e.g. "example.com")
     pub server_host: String,
     pub server_port: u16,
@@ -53,7 +59,12 @@ pub struct ApiState {
 pub struct ApiConfig {
     pub enabled: bool,
     pub bind: String,
-    pub token: String,
+    #[serde(default)]
+    pub webpath: String,
+    #[serde(default)]
+    pub username: String,
+    #[serde(default)]
+    pub password_hash: String,
 }
 
 impl Default for ApiConfig {
@@ -61,7 +72,9 @@ impl Default for ApiConfig {
         Self {
             enabled: false,
             bind: "127.0.0.1:9090".to_string(),
-            token: String::new(),
+            webpath: String::new(),
+            username: String::new(),
+            password_hash: String::new(),
         }
     }
 }
@@ -100,6 +113,17 @@ pub struct SetLimitRequest {
     pub limit_bytes: Option<u64>,
 }
 
+#[derive(Deserialize)]
+pub struct LoginRequest {
+    pub username: String,
+    pub password: Option<String>, // We'll accept raw password and hash it
+}
+
+#[derive(Serialize)]
+pub struct LoginResponse {
+    pub token: String,
+}
+
 #[derive(Serialize)]
 struct ApiResponse<T: Serialize> {
     ok: bool,
@@ -123,6 +147,37 @@ fn api_unauthorized<T: Serialize>() -> (StatusCode, Json<ApiResponse<T>>) {
     (StatusCode::UNAUTHORIZED, Json(ApiResponse { ok: false, data: None, error: Some("unauthorized".to_string()) }))
 }
 
+#[derive(RustEmbed)]
+#[folder = "../ostp-control/dist/"]
+struct Assets;
+
+async fn static_handler(State(state): State<ApiState>, uri: Uri) -> impl IntoResponse {
+    let mut path = uri.path();
+    let prefix = format!("/{}", state.webpath);
+    if path.starts_with(&prefix) {
+        path = &path[prefix.len()..];
+    }
+    path = path.trim_start_matches('/');
+    
+    if path.is_empty() || path == "index.html" {
+        path = "index.html";
+    }
+
+    match Assets::get(path) {
+        Some(content) => {
+            let mime = mime_guess::from_path(path).first_or_octet_stream();
+            ([(header::CONTENT_TYPE, mime.as_ref())], content.data).into_response()
+        }
+        None => {
+            if let Some(index) = Assets::get("index.html") {
+                ([(header::CONTENT_TYPE, "text/html")], index.data).into_response()
+            } else {
+                (StatusCode::NOT_FOUND, "404 Not Found").into_response()
+            }
+        }
+    }
+}
+
 // ── API router ───────────────────────────────────────────────────────────────
 
 pub fn create_api_router(state: ApiState) -> Router {
@@ -131,22 +186,37 @@ pub fn create_api_router(state: ApiState) -> Router {
         .allow_methods(Any)
         .allow_headers(Any);
 
-    Router::new()
-        .route("/api/server/status", get(handle_status))
-        .route("/api/server/config", get(handle_get_config).put(handle_put_config))
+    let api_router = Router::new()
+        .route("/server/status", get(handle_status))
+        .route("/server/config", get(handle_get_config).put(handle_put_config))
         .route(
-            "/api/users",
+            "/users",
             get(handle_list_users).post(handle_create_user),
         )
         .route(
-            "/api/users/{key}",
+            "/users/{key}",
             get(handle_get_user)
                 .put(update_user)
                 .delete(delete_user),
         )
-        .route("/api/users/{key}/limit", put(handle_set_limit))
-        .route("/api/users/{key}/reset", post(handle_reset_stats))
-        .route("/api/subscribe/{key}", get(handle_subscribe))
+        .route("/users/{key}/limit", put(handle_set_limit))
+        .route("/users/{key}/reset", post(handle_reset_stats))
+        .route("/subscribe/{key}", get(handle_subscribe))
+        .route("/login", post(handle_login));
+
+    let webpath = state.webpath.clone();
+    let webpath = webpath.trim_matches('/');
+    
+    // If no webpath is provided, default to random path to hide panel
+    let base_route = if webpath.is_empty() {
+        "/panel".to_string()
+    } else {
+        format!("/{}", webpath)
+    };
+
+    Router::new()
+        .nest(&format!("{}/api", base_route), api_router)
+        .nest(&base_route, Router::new().fallback(get(static_handler)))
         .layer(cors)
         .with_state(state)
 }
@@ -165,7 +235,10 @@ pub async fn start_api_server(
         access_keys,
         user_stats,
         start_time: Instant::now(),
-        api_token: config.token.clone(),
+        session_token: Arc::new(RwLock::new(None)),
+        webpath: config.webpath.clone(),
+        username: config.username.clone(),
+        password_hash: config.password_hash.clone(),
         server_host,
         server_port,
         reality_query,
@@ -192,15 +265,50 @@ pub async fn start_api_server(
 // ── Middleware: token check ──────────────────────────────────────────────────
 
 fn check_token(state: &ApiState, headers: &axum::http::HeaderMap) -> bool {
-    if state.api_token.is_empty() {
-        return true; // No auth required if token is empty
+    // If no credentials configured, panel is open (unsafe but possible)
+    if state.username.is_empty() && state.password_hash.is_empty() {
+        return true;
     }
+    
     match headers.get("authorization") {
         Some(value) => {
             let val = value.to_str().unwrap_or("");
-            val == format!("Bearer {}", state.api_token) || val == state.api_token
+            if let Some(token) = val.strip_prefix("Bearer ") {
+                let current_session = state.session_token.read().unwrap().clone();
+                if let Some(session) = current_session {
+                    if token == session {
+                        return true;
+                    }
+                }
+            }
+            false
         }
         None => false,
+    }
+}
+
+async fn handle_login(
+    State(state): State<ApiState>,
+    Json(payload): Json<LoginRequest>,
+) -> impl IntoResponse {
+    if state.username.is_empty() || state.password_hash.is_empty() {
+        return api_error("Auth not configured");
+    }
+
+    if payload.username != state.username {
+        return api_unauthorized::<LoginResponse>();
+    }
+
+    let password = payload.password.unwrap_or_default();
+    let hash = sha2::Sha256::digest(password.as_bytes());
+    let hash_hex = format!("{:x}", hash);
+
+    if hash_hex == state.password_hash {
+        let token = uuid::Uuid::new_v4().to_string();
+        *state.session_token.write().unwrap() = Some(token.clone());
+        (StatusCode::OK, ApiResponse::success(LoginResponse { token }))
+    } else {
+        api_unauthorized::<LoginResponse>()
     }
 }
 

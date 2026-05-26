@@ -293,7 +293,9 @@ impl ListenConfig {
 struct ApiConfig {
     enabled: Option<bool>,
     bind: Option<String>,
-    token: Option<String>,
+    webpath: Option<String>,
+    username: Option<String>,
+    password_hash: Option<String>,
 }
 
 #[derive(Debug, Deserialize, Serialize)]
@@ -861,7 +863,9 @@ async fn run_app() -> Result<()> {
             let api_config = server_cfg.api.map(|a| ostp_server::ApiConfig {
                 enabled: a.enabled.unwrap_or(false),
                 bind: a.bind.unwrap_or_else(|| "127.0.0.1:9090".to_string()),
-                token: a.token.unwrap_or_default(),
+                webpath: a.webpath.unwrap_or_default(),
+                username: a.username.unwrap_or_default(),
+                password_hash: a.password_hash.unwrap_or_default(),
             });
             let fallback_config = server_cfg.fallback.map(|f| ostp_server::FallbackConfig {
                 enabled: f.enabled.unwrap_or(false),
