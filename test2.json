@@ -1,0 +1,56 @@
+{
+  // OSTP Server Configuration
+  "mode": "server",
+  "log_level": "info",
+  
+  // The address and port the server listens on for incoming OSTP connections.
+  "listen": "0.0.0.0:50000",
+  
+  // List of valid keys. Clients must use one of these to connect.
+  "access_keys": [
+    "faa4ed2bb00f5df012f5708d86f9541c"
+  ],
+  
+  // Optional proxy for outbound traffic.
+  "outbound": {
+    "enabled": false,
+    "protocol": "socks5",
+    "address": "127.0.0.1",
+    "port": 9050,
+    // default_action: 'proxy' (all through proxy) or 'direct' (bypass proxy by default).
+    "default_action": "proxy",
+    "rules": [
+      {
+        "domain_suffix": [".onion"],
+        "action": "proxy"
+      }
+    ]
+  },
+  
+  // Management REST API for third-party panels.
+  "api": {
+    "enabled": false,
+    "bind": "127.0.0.1:9090",
+    // Set a strong token for authentication. Leave empty to disable auth.
+    "token": ""
+  },
+  
+  // Fallback TCP proxy: unrecognized connections are proxied to a web server (anti-DPI).
+  "fallback": {
+    "enabled": false,
+    "listen": "0.0.0.0:443",
+    // Target web server (e.g., local nginx or caddy)
+    "target": "127.0.0.1:8080"
+  },
+
+  // Reality (XTLS) / UoT Masquerade parameters
+  "reality": {
+    "enabled": false,
+    "dest": "www.microsoft.com:443",
+    "private_key": "lAapk0V5dG1xSD3CWZ0Ac3c_GKbJU0hVsRjiQ6VrCEY",
+    "pbk": "Md5jDEfpPmaMW5ggNSL7jA0LZi4eKsyfgMwseFQ0TyQ",
+    "sid": "db806ac3c8bf9417",
+    "sni_list": ["www.microsoft.com"]
+  },
+  "debug": false
+}

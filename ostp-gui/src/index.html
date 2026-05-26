@@ -112,10 +112,24 @@
         <div class="metric-sep"></div>
 
         <div class="metric">
-          <div class="metric-icon ping-icon">
+          <div class="metric-icon ping-icon" id="ping-icon-block">
             <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round">
-              <path d="M1 6l5.5 5.5L12 6l5.5 5.5L23 6"/>
-              <path d="M1 18l5.5-5.5L12 18l5.5-5.5L23 18"/>
+              <path d="M22 12h-4l-3 9L9 3l-3 9H2"/>
+            </svg>
+          </div>
+          <div class="metric-body">
+            <span class="metric-label">Ping</span>
+            <span id="metric-ping" class="metric-value">— ms</span>
+          </div>
+        </div>
+
+        <div class="metric-sep"></div>
+
+        <div class="metric">
+          <div class="metric-icon mode-icon">
+            <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round">
+              <rect x="2" y="3" width="20" height="14" rx="2"/>
+              <path d="M8 21h8M12 17v4"/>
             </svg>
           </div>
           <div class="metric-body">

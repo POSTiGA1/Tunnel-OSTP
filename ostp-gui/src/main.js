@@ -29,6 +29,8 @@ const serverBadgeTxt = $('server-badge-text');
 const metricDown     = $('metric-down');
 const metricUp       = $('metric-up');
 const metricMode     = $('metric-mode');
+const metricPing     = $('metric-ping');
+const pingIconBlock  = $('ping-icon-block');
 const toast          = $('toast');
 
 const btnGoSettings  = $('btn-go-settings');
@@ -159,11 +161,29 @@ async function poll() {
     if (metrics) {
       metricDown.textContent = fmtBytes(metrics.bytes_recv);
       metricUp.textContent   = fmtBytes(metrics.bytes_sent);
-      
+
       const isTun = rawConfig?.tun?.enable;
-      const modeStr = isTun ? 'TUN' : 'SOCKS5';
-      const pingStr = metrics.rtt_ms > 0 ? ` (${metrics.rtt_ms} ms)` : '';
-      metricMode.textContent = modeStr + pingStr;
+      metricMode.textContent = isTun ? 'TUN' : 'SOCKS5';
+
+      const rtt = metrics.rtt_ms || 0;
+      if (rtt > 0) {
+        metricPing.textContent = rtt + ' ms';
+        // Color code: green < 80ms, yellow < 200ms, red >= 200ms
+        if (rtt < 80) {
+          metricPing.style.color = 'var(--ping-good, #4ade80)';
+          pingIconBlock.style.color = 'var(--ping-good, #4ade80)';
+        } else if (rtt < 200) {
+          metricPing.style.color = 'var(--ping-mid, #facc15)';
+          pingIconBlock.style.color = 'var(--ping-mid, #facc15)';
+        } else {
+          metricPing.style.color = 'var(--ping-bad, #f87171)';
+          pingIconBlock.style.color = 'var(--ping-bad, #f87171)';
+        }
+      } else {
+        metricPing.textContent = '— ms';
+        metricPing.style.color = '';
+        pingIconBlock.style.color = '';
+      }
     }
   } catch {
     setState('disconnected');
