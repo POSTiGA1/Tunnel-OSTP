@@ -352,23 +352,25 @@ async fn handle_list_users(
     let keys = state.access_keys.read().unwrap();
     let stats = state.user_stats.read().unwrap();
 
-    let mut users: Vec<UserStatsSnapshot> = keys.keys().map(|key| {
+    let mut users: Vec<UserStatsSnapshot> = keys.iter().map(|(key, meta)| {
         if let Some(us) = stats.get(key) {
             UserStatsSnapshot {
                 access_key: key.clone(),
+                name: meta.name.clone(),
                 bytes_up: us.bytes_up.load(Ordering::Relaxed),
                 bytes_down: us.bytes_down.load(Ordering::Relaxed),
                 connections: us.connections.load(Ordering::Relaxed),
                 limit_bytes: us.limit_bytes,
-                online: true, // Simplified; real check requires session map
+                online: true,
             }
         } else {
             UserStatsSnapshot {
                 access_key: key.clone(),
+                name: meta.name.clone(),
                 bytes_up: 0,
                 bytes_down: 0,
                 connections: 0,
-                limit_bytes: None,
+                limit_bytes: meta.limit_bytes,
                 online: false,
             }
         }
@@ -389,14 +391,16 @@ async fn handle_get_user(
     }
 
     let keys = state.access_keys.read().unwrap();
-    if !keys.contains_key(&key) {
-        return api_error("user not found");
-    }
+    let meta = match keys.get(&key) {
+        Some(m) => m.clone(),
+        None => return api_error("user not found"),
+    };
 
     let stats = state.user_stats.read().unwrap();
     let snapshot = if let Some(us) = stats.get(&key) {
         UserStatsSnapshot {
             access_key: key.clone(),
+            name: meta.name.clone(),
             bytes_up: us.bytes_up.load(Ordering::Relaxed),
             bytes_down: us.bytes_down.load(Ordering::Relaxed),
             connections: us.connections.load(Ordering::Relaxed),
@@ -406,10 +410,11 @@ async fn handle_get_user(
     } else {
         UserStatsSnapshot {
             access_key: key.clone(),
+            name: meta.name.clone(),
             bytes_up: 0,
             bytes_down: 0,
             connections: 0,
-            limit_bytes: None,
+            limit_bytes: meta.limit_bytes,
             online: false,
         }
     };

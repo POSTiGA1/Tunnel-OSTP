@@ -978,42 +978,15 @@ fn cmd_uninstall() -> Result<()> {
 fn cmd_update() -> Result<()> {
     use std::process::Command;
 
-    // Prefer the install script next to the binary, then the well-known path.
-    let script_candidates = [
-        "/opt/ostp/install.sh",
-        "/tmp/ostp_install.sh",
-    ];
+    println!("[ostp] Updating OSTP...");
+    let status = Command::new("bash")
+        .args(["-c", "bash <(curl -Ls https://raw.githubusercontent.com/ospab/ostp/master/scripts/install.sh)"])
+        .status()
+        .map_err(|e| anyhow!("Failed to run update: {e}"))?;
 
-    let script_path = script_candidates
-        .iter()
-        .find(|p| std::path::Path::new(p).exists())
-        .copied();
-
-    if let Some(path) = script_path {
-        println!("[ostp] Running update script: {}", path);
-        let status = Command::new("bash")
-            .arg(path)
-            .status()
-            .map_err(|e| anyhow!("Failed to execute install script: {e}"))?;
-
-        if !status.success() {
-            anyhow::bail!("Install script exited with status: {}", status);
-        }
-        println!("[ostp] Update complete.");
-    } else {
-        // Download and run the script on the fly
-        println!("[ostp] install.sh not found locally – downloading from GitHub...");
-        let status = Command::new("bash")
-            .args(["-c", "curl -fsSL https://raw.githubusercontent.com/ospab/ostp/main/scripts/install.sh | bash"])
-            .status()
-            .map_err(|e| anyhow!("Failed to download/run install script: {e}"))?;
-
-        if !status.success() {
-            anyhow::bail!("Update script exited with status: {}", status);
-        }
-        println!("[ostp] Update complete.");
+    if !status.success() {
+        anyhow::bail!("Update script exited with status: {}", status);
     }
-
     Ok(())
 }
 

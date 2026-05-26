@@ -55,6 +55,7 @@ impl UserStats {
 #[derive(Debug, Clone, serde::Serialize)]
 pub struct UserStatsSnapshot {
     pub access_key: String,
+    pub name: Option<String>,
     pub bytes_up: u64,
     pub bytes_down: u64,
     pub connections: u64,
@@ -113,6 +114,7 @@ impl Dispatcher {
             .collect();
         stats.iter().map(|(key, us)| UserStatsSnapshot {
             access_key: key.clone(),
+            name: None,
             bytes_up: us.bytes_up.load(Ordering::Relaxed),
             bytes_down: us.bytes_down.load(Ordering::Relaxed),
             connections: us.connections.load(Ordering::Relaxed),
