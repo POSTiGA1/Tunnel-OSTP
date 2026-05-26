@@ -191,10 +191,42 @@ impl UnifiedConfig {
     }
 }
 
+#[derive(Debug, Deserialize, Serialize, Clone)]
+#[serde(untagged)]
+pub enum UserConfig {
+    Detailed {
+        access_key: String,
+        name: Option<String>,
+        limit_bytes: Option<u64>,
+    },
+    KeyOnly(String),
+}
+
+impl UserConfig {
+    pub fn key(&self) -> String {
+        match self {
+            UserConfig::KeyOnly(k) => k.clone(),
+            UserConfig::Detailed { access_key, .. } => access_key.clone(),
+        }
+    }
+    pub fn name(&self) -> Option<String> {
+        match self {
+            UserConfig::KeyOnly(_) => None,
+            UserConfig::Detailed { name, .. } => name.clone(),
+        }
+    }
+    pub fn limit(&self) -> Option<u64> {
+        match self {
+            UserConfig::KeyOnly(_) => None,
+            UserConfig::Detailed { limit_bytes, .. } => limit_bytes.clone(),
+        }
+    }
+}
+
 #[derive(Debug, Deserialize, Serialize)]
 struct ServerConfig {
     listen: ListenConfig,
-    access_keys: Vec<String>,
+    access_keys: Vec<UserConfig>,
     reality: Option<RealityServerConfigRaw>,
     debug: Option<bool>,
     outbound: Option<OutboundConfig>,
@@ -450,8 +482,37 @@ async fn run_app() -> Result<()> {
     let args = Args::parse();
     
     if args.generate_key {
+        let mut new_keys = Vec::new();
         for _ in 0..args.count {
-            println!("{}", generate_secure_key(&args.format));
+            let key = generate_secure_key(&args.format);
+            println!("{}", key);
+            new_keys.push(key);
+        }
+
+        // Автоматическое добавление ключа в config.json если это сервер
+        if args.config.exists() {
+            if let Ok(content) = fs::read_to_string(&args.config) {
+                let mut stripped = json_comments::StripComments::new(content.as_bytes());
+                let mut content_str = String::new();
+                use std::io::Read;
+                if stripped.read_to_string(&mut content_str).is_ok() {
+                    if let Ok(mut json_val) = serde_json::from_str::<serde_json::Value>(&content_str) {
+                        if let Some(mode) = json_val.get("mode").and_then(|m| m.as_str()) {
+                            if mode == "server" {
+                                if let Some(access_keys) = json_val.get_mut("access_keys").and_then(|a| a.as_array_mut()) {
+                                    for key in new_keys {
+                                        access_keys.push(serde_json::Value::String(key));
+                                    }
+                                    if let Ok(new_content) = serde_json::to_string_pretty(&json_val) {
+                                        let _ = fs::write(&args.config, new_content);
+                                        println!("[ostp] Key(s) automatically added to {:?}", args.config);
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+            }
         }
         return Ok(());
     }
@@ -522,6 +583,7 @@ async fn run_app() -> Result<()> {
         let key = generate_secure_key("hex");
         let content = if is_server {
             let (priv_key, pub_key, sid) = generate_reality_keys();
+            let api_token = generate_secure_key("hex");
             format!(r#"{{
   // OSTP Server Configuration
   "mode": "server",
@@ -556,7 +618,7 @@ async fn run_app() -> Result<()> {
     "enabled": false,
     "bind": "127.0.0.1:9090",
     // Set a strong token for authentication. Leave empty to disable auth.
-    "token": ""
+    "token": "{}"
   }},
   
   // Fallback TCP proxy: unrecognized connections are proxied to a web server (anti-DPI).
@@ -577,7 +639,19 @@ async fn run_app() -> Result<()> {
     "sni_list": ["www.microsoft.com"]
   }},
   "debug": false
-}}"#, key, priv_key, pub_key, sid)
+}}"#, key, api_token, priv_key, pub_key, sid)
+        } else if mode_str == "relay" {
+            r#"{
+  // OSTP Relay Node Configuration
+  "mode": "relay",
+  "listen": "0.0.0.0:50000",
+  "upstream_tcp": "TARGET_SERVER_IP:50000",
+  "upstream_udp": "TARGET_SERVER_IP:50000",
+  "upstream_api_url": "http://TARGET_SERVER_IP:9090",
+  "upstream_api_token": "YOUR_API_TOKEN_HERE",
+  "sync_interval_secs": 30,
+  "debug": false
+}"#.to_string()
         } else {
             format!(r#"{{
   // OSTP Client Configuration
@@ -645,7 +719,7 @@ async fn run_app() -> Result<()> {
                 if let AppMode::Server(s) = &config.mode {
                     let key = &s.access_keys[0];
                     let host = get_or_ask_public_ip(&args.config);
-                    let mut link = format!("ostp://{}@{}:50000", key, host);
+                    let mut link = format!("ostp://{}@{}:50000", key.key(), host);
                     let mut query_params = Vec::new();
                     
                     if let Some(r) = &s.reality {
@@ -725,7 +799,7 @@ async fn run_app() -> Result<()> {
                 
                 println!("\n  Client share links from {:?}:", args.config);
                 for (idx, key) in server_cfg.access_keys.iter().enumerate() {
-                    let mut link = format!("ostp://{}@{}:{}", key, host, port);
+                    let mut link = format!("ostp://{}@{}:{}", key.key(), host, port);
                     if let Some(r) = &server_cfg.reality {
                         link = format!("{}?security=reality&sni={}&pbk={}&sid={}&type=udp", link, r.sni_list.first().unwrap_or(&String::new()), r.pbk, r.sid);
                     }
@@ -792,8 +866,14 @@ async fn run_app() -> Result<()> {
                     });
                 }
             }
+            let access_keys_meta = server_cfg.access_keys.into_iter().map(|uc| {
+                (uc.key(), ostp_server::api::UserMeta {
+                    name: uc.name(),
+                    limit_bytes: uc.limit(),
+                })
+            }).collect::<Vec<_>>();
             // Pass all listen addresses for multi-listener support
-            ostp_server::run_server(listen_addrs, server_cfg.access_keys, outbound, api_config, fallback_config, debug, rq, rc).await?;
+            ostp_server::run_server(listen_addrs, access_keys_meta, outbound, api_config, fallback_config, debug, rq, rc, Some(args.config)).await?;
         }
         AppMode::Client(client_cfg) => {
             run_client_directly(client_cfg).await?;

@@ -74,7 +74,7 @@ pub struct Dispatcher {
     peer_machines: HashMap<u32, PeerState>,
     addr_to_session: HashMap<SocketAddr, u32>,
     machine_config: ProtocolConfig,
-    access_keys: Arc<RwLock<HashMap<String, ()>>>,
+    access_keys: Arc<RwLock<HashMap<String, crate::api::UserMeta>>>,
     user_stats: Arc<RwLock<HashMap<String, Arc<UserStats>>>>,
     replay_cache: std::collections::HashMap<Vec<u8>, u64>,
     roaming_tokens: f64,
@@ -83,13 +83,17 @@ pub struct Dispatcher {
 
 #[allow(dead_code)]
 impl Dispatcher {
-    pub fn new(machine_config: ProtocolConfig, access_keys: Arc<RwLock<HashMap<String, ()>>>) -> Self {
+    pub fn new(machine_config: ProtocolConfig, access_keys: Arc<RwLock<HashMap<String, crate::api::UserMeta>>>) -> Self {
+        let mut initial_stats = HashMap::new();
+        for (key, meta) in access_keys.read().unwrap().iter() {
+            initial_stats.insert(key.clone(), Arc::new(UserStats::new(meta.limit_bytes)));
+        }
         Self {
             peer_machines: HashMap::new(),
             addr_to_session: HashMap::new(),
             machine_config,
             access_keys,
-            user_stats: Arc::new(RwLock::new(HashMap::new())),
+            user_stats: Arc::new(RwLock::new(initial_stats)),
             replay_cache: std::collections::HashMap::new(),
             roaming_tokens: 50.0,
             last_token_regen: std::time::Instant::now(),
@@ -124,9 +128,12 @@ impl Dispatcher {
             return existing.clone();
         }
         drop(stats);
+        
+        let limit_bytes = self.access_keys.read().unwrap().get(key).and_then(|m| m.limit_bytes);
+        
         let mut stats = self.user_stats.write().unwrap();
         stats.entry(key.to_string())
-            .or_insert_with(|| Arc::new(UserStats::new(None)))
+            .or_insert_with(|| Arc::new(UserStats::new(limit_bytes)))
             .clone()
     }
 
@@ -200,7 +207,21 @@ impl Dispatcher {
         }
 
         if let Some(session_id) = session_id_opt {
+            let key_opt = self.peer_machines.get(&session_id).map(|ps| ps.access_key.clone());
+            if let Some(access_key) = key_opt {
+                // Check if key is still valid and not over limit
+                let key_valid = self.access_keys.read().unwrap().contains_key(&access_key);
+                let user_stats = self.get_or_create_user_stats(&access_key);
+                if !key_valid || user_stats.is_over_limit() {
+                    tracing::info!("Dropping session {} for key {} (valid={}, over_limit={})",
+                        session_id, access_key, key_valid, user_stats.is_over_limit());
+                    self.drop_session(session_id);
+                    return Ok(DispatchOutcome::Unauthorized);
+                }
+            }
+
             if let Some(peer_state) = self.peer_machines.get_mut(&session_id) {
+
                 if peer_state.last_addr != peer {
                     tracing::info!("Client roamed: session {} from {} to {}", session_id, peer_state.last_addr, peer);
                     self.addr_to_session.remove(&peer_state.last_addr);
@@ -211,7 +232,7 @@ impl Dispatcher {
                 
                 // Track inbound bytes per user
                 let key = peer_state.access_key.clone();
-                track_user_bytes_up(&self.user_stats, &key, packet.len() as u64);
+                track_user_bytes_up(&self.user_stats, &self.access_keys, &key, packet.len() as u64);
 
                 let action = match peer_state.machine.on_event(OstpEvent::Inbound(packet)) {
                     Ok(a) => a,
@@ -385,7 +406,7 @@ impl Dispatcher {
         match peer_state.machine.on_event(OstpEvent::Outbound(stream_id, payload))? {
             ProtocolAction::SendDatagram(frame) => {
                 // Track outbound bytes per user
-                track_user_bytes_down(&self.user_stats, &key, frame.len() as u64);
+                track_user_bytes_down(&self.user_stats, &self.access_keys, &key, frame.len() as u64);
                 Ok(Some((frame, addr)))
             }
             _ => Ok(None),
@@ -405,16 +426,34 @@ impl Dispatcher {
         let now = std::time::Instant::now();
         let timeout_dur = std::time::Duration::from_secs(300); // 5 minutes session timeout
 
-        // Gather expired sessions
+        // Gather expired or invalid sessions
         for (&sid, peer_state) in &self.peer_machines {
-            if now.duration_since(peer_state.last_seen) > timeout_dur {
+            let key_valid = self.access_keys.read().unwrap().contains_key(&peer_state.access_key);
+            let user_stats = self.get_or_create_user_stats(&peer_state.access_key);
+            if now.duration_since(peer_state.last_seen) > timeout_dur || !key_valid || user_stats.is_over_limit() {
                 expired.push(sid);
             }
         }
 
-        // Clear expired sessions from internal state
+        // Clear expired/invalid sessions from internal state
         for sid in &expired {
-            tracing::info!("Session {} expired (inactive >5min), releasing", sid);
+            let peer_state_opt = self.peer_machines.get(sid);
+            let reason = if let Some(ps) = peer_state_opt {
+                let key_valid = self.access_keys.read().unwrap().contains_key(&ps.access_key);
+                let user_stats = self.get_or_create_user_stats(&ps.access_key);
+                if now.duration_since(ps.last_seen) > timeout_dur {
+                    "inactive >5min"
+                } else if !key_valid {
+                    "key deleted"
+                } else if user_stats.is_over_limit() {
+                    "traffic limit exceeded"
+                } else {
+                    "unknown"
+                }
+            } else {
+                "unknown"
+            };
+            tracing::info!("Session {} closed ({}), releasing", sid, reason);
             self.drop_session(*sid);
         }
 
@@ -459,6 +498,7 @@ impl Dispatcher {
 
 fn get_or_create_stats(
     user_stats: &Arc<RwLock<HashMap<String, Arc<UserStats>>>>,
+    access_keys: &Arc<RwLock<HashMap<String, crate::api::UserMeta>>>,
     key: &str,
 ) -> Arc<UserStats> {
     {
@@ -467,26 +507,31 @@ fn get_or_create_stats(
             return existing.clone();
         }
     }
+    
+    let limit_bytes = access_keys.read().unwrap().get(key).and_then(|m| m.limit_bytes);
+    
     let mut stats = user_stats.write().unwrap();
     stats.entry(key.to_string())
-        .or_insert_with(|| Arc::new(UserStats::new(None)))
+        .or_insert_with(|| Arc::new(UserStats::new(limit_bytes)))
         .clone()
 }
 
 fn track_user_bytes_up(
     user_stats: &Arc<RwLock<HashMap<String, Arc<UserStats>>>>,
+    access_keys: &Arc<RwLock<HashMap<String, crate::api::UserMeta>>>,
     key: &str,
     bytes: u64,
 ) {
-    let stats = get_or_create_stats(user_stats, key);
+    let stats = get_or_create_stats(user_stats, access_keys, key);
     stats.bytes_up.fetch_add(bytes, Ordering::Relaxed);
 }
 
 fn track_user_bytes_down(
     user_stats: &Arc<RwLock<HashMap<String, Arc<UserStats>>>>,
+    access_keys: &Arc<RwLock<HashMap<String, crate::api::UserMeta>>>,
     key: &str,
     bytes: u64,
 ) {
-    let stats = get_or_create_stats(user_stats, key);
+    let stats = get_or_create_stats(user_stats, access_keys, key);
     stats.bytes_down.fetch_add(bytes, Ordering::Relaxed);
 }

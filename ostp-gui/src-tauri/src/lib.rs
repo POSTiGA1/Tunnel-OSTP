@@ -365,6 +365,16 @@ async fn start_tun_via_helper(
     guard: &mut AppStateInner,
     raw: &ClientConfigRaw,
 ) -> Result<bool, String> {
+    #[cfg(target_os = "windows")]
+    {
+        // Kill any existing helper processes to prevent os error 10048 (port already in use)
+        use std::os::windows::process::CommandExt;
+        let _ = std::process::Command::new("taskkill")
+            .args(["/F", "/IM", "ostp-tun-helper.exe"])
+            .creation_flags(0x08000000)
+            .output();
+    }
+
     let helper_exe = find_helper_exe().ok_or_else(|| "ostp-tun-helper.exe not found.".to_string())?;
     launch_as_admin(&helper_exe).map_err(|e| format!("Failed to launch helper: {}", e))?;
     tokio::time::sleep(std::time::Duration::from_millis(1500)).await;

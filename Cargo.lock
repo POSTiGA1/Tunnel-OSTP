@@ -1097,6 +1097,7 @@ dependencies = [
  "bytes",
  "futures-util",
  "hmac",
+ "json_comments",
  "ostp-core",
  "portable-atomic",
  "rand 0.8.5",

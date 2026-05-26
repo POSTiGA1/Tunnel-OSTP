@@ -82,7 +82,7 @@ pub async fn run_relay_node(cfg: RelayConfig) -> Result<()> {
 
 /// Синхронизация access_keys с upstream API.
 async fn sync_keys(cfg: &RelayConfig, shared_keys: &SharedKeys) -> Result<usize> {
-    let url = format!("{}/api/keys", cfg.upstream_api_url.trim_end_matches('/'));
+    let url = format!("{}/api/users", cfg.upstream_api_url.trim_end_matches('/'));
 
     let client = reqwest::Client::builder()
         .timeout(Duration::from_secs(10))
@@ -99,15 +99,26 @@ async fn sync_keys(cfg: &RelayConfig, shared_keys: &SharedKeys) -> Result<usize>
     }
 
     #[derive(serde::Deserialize)]
-    struct KeysResponse {
-        keys: Vec<String>,
+    struct UserStatsSnapshot {
+        access_key: String,
     }
 
-    let body: KeysResponse = resp.json().await?;
-    let count = body.keys.len();
+    #[derive(serde::Deserialize)]
+    struct ApiResponse {
+        ok: bool,
+        data: Option<Vec<UserStatsSnapshot>>,
+    }
+
+    let body: ApiResponse = resp.json().await?;
+    if !body.ok {
+        anyhow::bail!("API returned error ok=false");
+    }
+
+    let keys: Vec<String> = body.data.unwrap_or_default().into_iter().map(|u| u.access_key).collect();
+    let count = keys.len();
     {
         let mut lock = shared_keys.write().unwrap();
-        *lock = body.keys;
+        *lock = keys;
     }
     Ok(count)
 }

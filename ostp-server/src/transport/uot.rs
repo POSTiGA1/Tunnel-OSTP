@@ -13,7 +13,7 @@ use tracing::info;
 pub async fn handle_tcp_connection<S>(
     mut stream: S,
     peer_addr: SocketAddr,
-    shared_keys: Arc<StdRwLock<HashMap<String, ()>>>,
+    shared_keys: Arc<StdRwLock<HashMap<String, crate::api::UserMeta>>>,
     udp_tx: mpsc::Sender<(Bytes, SocketAddr)>,
     tcp_map: Arc<RwLock<HashMap<SocketAddr, mpsc::Sender<Bytes>>>>,
 ) -> Result<()>

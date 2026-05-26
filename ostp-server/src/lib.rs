@@ -65,64 +65,20 @@ pub(crate) struct RemoteState {
 
 pub async fn run_server(
     bind_addrs: Vec<String>,
-    access_keys: Vec<String>,
+    access_keys: Vec<(String, crate::api::UserMeta)>,
     outbound: Option<OutboundConfig>,
     api_config: Option<ApiConfig>,
     fallback_config: Option<FallbackConfig>,
     debug: bool,
     reality_query: Option<String>,
     reality_config: Option<RealityServerConfig>,
+    config_path: Option<std::path::PathBuf>,
 ) -> Result<()> {
     let mut keys_map = HashMap::new();
-    for key in access_keys {
-        keys_map.insert(key, ());
+    for (key, meta) in access_keys {
+        keys_map.insert(key, meta);
     }
     let shared_keys = std::sync::Arc::new(std::sync::RwLock::new(keys_map));
-
-    // Background config hot-reloader for access keys
-    let shared_keys_clone = shared_keys.clone();
-    tokio::spawn(async move {
-        let mut last_mtime = None;
-        let exe = match std::env::current_exe() {
-            Ok(e) => e,
-            Err(_) => return,
-        };
-        let dir = match exe.parent() {
-            Some(d) => d,
-            None => return,
-        };
-        let config_path = dir.join("config.json");
-
-        loop {
-            tokio::time::sleep(tokio::time::Duration::from_secs(5)).await;
-            if let Ok(metadata) = std::fs::metadata(&config_path) {
-                if let Ok(mtime) = metadata.modified() {
-                    if last_mtime != Some(mtime) {
-                        last_mtime = Some(mtime);
-                        if let Ok(content) = std::fs::read_to_string(&config_path) {
-                            #[derive(serde::Deserialize)]
-                            struct ServerReloadConfig {
-                                mode: String,
-                                #[serde(default)]
-                                access_keys: Vec<String>,
-                            }
-                            if let Ok(cfg) = serde_json::from_str::<ServerReloadConfig>(&content) {
-                                if cfg.mode == "server" {
-                                    let mut new_keys = HashMap::new();
-                                    for key in cfg.access_keys {
-                                        new_keys.insert(key, ());
-                                    }
-                                    let mut keys_lock = shared_keys_clone.write().unwrap();
-                                    *keys_lock = new_keys;
-                                    tracing::info!("Hot-reloaded {} access keys from config.json", keys_lock.len());
-                                }
-                            }
-                        }
-                    }
-                }
-            }
-        }
-    });
 
     let mut sockets = Vec::new();
     for bind_addr in &bind_addrs {
@@ -164,6 +120,125 @@ pub async fn run_server(
 
     let dispatcher = Dispatcher::new(protocol_config, shared_keys.clone());
 
+    // Background config hot-reloader for access keys
+    let shared_keys_clone = shared_keys.clone();
+    let user_stats_clone = dispatcher.user_stats_ref();
+    let config_path_clone = config_path.clone();
+    tokio::spawn(async move {
+        let path_to_watch = if let Some(p) = config_path_clone {
+            p
+        } else {
+            let exe = match std::env::current_exe() {
+                Ok(e) => e,
+                Err(_) => return,
+            };
+            let dir = match exe.parent() {
+                Some(d) => d,
+                None => return,
+            };
+            dir.join("config.json")
+        };
+        
+        let path_to_watch = match std::fs::canonicalize(&path_to_watch) {
+            Ok(p) => p,
+            Err(_) => path_to_watch,
+        };
+
+        tracing::info!("Watching configuration file for hot-reload: {:?}", path_to_watch);
+
+        let mut last_mtime = None;
+        loop {
+            tokio::time::sleep(tokio::time::Duration::from_secs(5)).await;
+            if let Ok(metadata) = std::fs::metadata(&path_to_watch) {
+                if let Ok(mtime) = metadata.modified() {
+                    if last_mtime != Some(mtime) {
+                        last_mtime = Some(mtime);
+                        match std::fs::read_to_string(&path_to_watch) {
+                            Ok(content) => {
+                                #[derive(serde::Deserialize)]
+                                #[serde(untagged)]
+                                enum ReloadUser {
+                                    Detailed { access_key: String, name: Option<String>, limit_bytes: Option<u64> },
+                                    KeyOnly(String),
+                                }
+                                #[derive(serde::Deserialize)]
+                                struct ServerReloadConfig {
+                                    mode: String,
+                                    #[serde(default)]
+                                    access_keys: Vec<ReloadUser>,
+                                }
+                                
+                                let mut stripped = json_comments::StripComments::new(content.as_bytes());
+                                let mut content_str = String::new();
+                                use std::io::Read;
+                                if let Err(e) = stripped.read_to_string(&mut content_str) {
+                                    tracing::error!("Failed to strip comments from config during hot-reload: {}", e);
+                                    continue;
+                                }
+
+                                match serde_json::from_str::<ServerReloadConfig>(&content_str) {
+                                    Ok(cfg) => {
+                                        if cfg.mode == "server" {
+                                            let mut new_keys = HashMap::new();
+                                            for uc in cfg.access_keys {
+                                                let (k, m) = match uc {
+                                                    ReloadUser::Detailed { access_key, name, limit_bytes } => (access_key, crate::api::UserMeta { name, limit_bytes }),
+                                                    ReloadUser::KeyOnly(k) => (k, crate::api::UserMeta { name: None, limit_bytes: None }),
+                                                };
+                                                new_keys.insert(k, m);
+                                            }
+                                            
+                                            // 1. Update shared_keys
+                                            let mut keys_lock = shared_keys_clone.write().unwrap();
+                                            *keys_lock = new_keys.clone();
+                                            
+                                            // 2. Synchronize user_stats limits & cleanup deleted keys
+                                            let mut stats_lock = user_stats_clone.write().unwrap();
+                                            stats_lock.retain(|k, _| new_keys.contains_key(k));
+                                            
+                                            for (k, meta) in &new_keys {
+                                                let entry_info = stats_lock.get(k).map(|e| {
+                                                    (
+                                                        e.limit_bytes,
+                                                        e.bytes_up.load(std::sync::atomic::Ordering::Relaxed),
+                                                        e.bytes_down.load(std::sync::atomic::Ordering::Relaxed),
+                                                        e.connections.load(std::sync::atomic::Ordering::Relaxed),
+                                                        e.created_at,
+                                                    )
+                                                });
+                                                if let Some((limit_bytes, bytes_up, bytes_down, connections, created_at)) = entry_info {
+                                                    if limit_bytes != meta.limit_bytes {
+                                                        stats_lock.insert(k.clone(), std::sync::Arc::new(dispatcher::UserStats {
+                                                            bytes_up: portable_atomic::AtomicU64::new(bytes_up),
+                                                            bytes_down: portable_atomic::AtomicU64::new(bytes_down),
+                                                            connections: portable_atomic::AtomicU64::new(connections),
+                                                            limit_bytes: meta.limit_bytes,
+                                                            created_at,
+                                                        }));
+                                                    }
+                                                } else {
+                                                    stats_lock.insert(k.clone(), std::sync::Arc::new(dispatcher::UserStats::new(meta.limit_bytes)));
+                                                }
+                                            }
+                                            
+                                            tracing::info!("Hot-reloaded {} access keys from {:?}", keys_lock.len(), path_to_watch);
+                                        }
+                                    }
+                                    Err(e) => {
+                                        tracing::error!("Failed to parse config file during hot-reload: {}", e);
+                                    }
+                                }
+                            }
+                            Err(e) => {
+                                tracing::error!("Failed to read config file during hot-reload: {}", e);
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    });
+
     // Spawn Management API if configured
     if let Some(api_cfg) = api_config {
         if api_cfg.enabled {
@@ -175,8 +250,9 @@ pub async fn run_server(
             let server_port: u16 = parts.first().and_then(|p| p.parse().ok()).unwrap_or(50000);
             let server_host = parts.get(1).unwrap_or(&"0.0.0.0").to_string();
             let rq = reality_query.clone().unwrap_or_default();
+            let config_path_api = config_path.clone();
             tokio::spawn(async move {
-                api::start_api_server(api_cfg, api_keys, api_stats, server_host, server_port, rq).await;
+                api::start_api_server(api_cfg, api_keys, api_stats, server_host, server_port, rq, config_path_api).await;
             });
         }
     }
@@ -267,7 +343,7 @@ async fn run_server_loop(
     mut dispatcher: Dispatcher,
     mut ui_cmd_rx: mpsc::UnboundedReceiver<UiCommand>,
     ui_event_tx: mpsc::UnboundedSender<UiEvent>,
-    shared_keys: std::sync::Arc<std::sync::RwLock<HashMap<String, ()>>>,
+    shared_keys: std::sync::Arc<std::sync::RwLock<HashMap<String, crate::api::UserMeta>>>,
     outbound: Option<OutboundConfig>,
     debug: bool,
     tls_config: Option<std::sync::Arc<rustls::ServerConfig>>,
@@ -396,7 +472,7 @@ async fn run_server_loop(
                 match cmd {
                     Some(UiCommand::CreateClientKey) => {
                         let key = format!("ostp_key_{}", std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_secs());
-                        shared_keys.write().unwrap().insert(key.clone(), ());
+                        shared_keys.write().unwrap().insert(key.clone(), crate::api::UserMeta { name: None, limit_bytes: None });
                         let _ = ui_event_tx.send(UiEvent::KeyCreated { key });
                     }
                     Some(UiCommand::Shutdown) | None => {
