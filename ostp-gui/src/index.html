@@ -314,25 +314,49 @@
           </div>
 
 
-          <!-- Exclusions -->
+          <!-- Split Tunneling / Exclusions -->
           <div class="section-head">
             <span data-i18n="excl_title">Exclusions</span>
-            <span class="section-hint" data-i18n="excl_hint">one per line</span>
+            <span class="section-hint" data-i18n="excl_hint">traffic that bypasses the tunnel</span>
           </div>
 
           <div class="field-group">
-            <label class="field-label" for="in-ex-domains" data-i18n="excl_domains">Bypass Domains</label>
-            <textarea id="in-ex-domains" class="field-input mono" placeholder="example.com&#10;*.google.com" rows="2"></textarea>
+            <label class="field-label" for="tag-input-domains" data-i18n="excl_domains">Bypass Domains</label>
+            <div class="tag-input-wrap" id="tag-wrap-domains">
+              <div class="tag-list" id="tag-list-domains"></div>
+              <input id="tag-input-domains" class="tag-input-field" type="text"
+                     placeholder="example.com" spellcheck="false" autocomplete="off" />
+            </div>
+            <span class="field-hint">Enter domain suffix and press Enter. Example: google.com, *.local</span>
           </div>
 
           <div class="field-group">
-            <label class="field-label" for="in-ex-ips" data-i18n="excl_ips">Bypass IPs / CIDR</label>
-            <textarea id="in-ex-ips" class="field-input mono" placeholder="192.168.1.0/24&#10;10.0.0.1" rows="2"></textarea>
+            <label class="field-label" for="tag-input-ips" data-i18n="excl_ips">Bypass IPs / CIDR</label>
+            <div class="tag-input-wrap" id="tag-wrap-ips">
+              <div class="tag-list" id="tag-list-ips"></div>
+              <input id="tag-input-ips" class="tag-input-field" type="text"
+                     placeholder="192.168.1.0/24" spellcheck="false" autocomplete="off" />
+            </div>
+            <span class="field-hint">Local network ranges bypass the tunnel automatically</span>
           </div>
 
           <div class="field-group">
-            <label class="field-label" for="in-ex-processes" data-i18n="excl_processes">Bypass Processes</label>
-            <textarea id="in-ex-processes" class="field-input mono" placeholder="chrome.exe&#10;firefox.exe" rows="2"></textarea>
+            <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:6px">
+              <label class="field-label" style="margin-bottom:0" for="tag-input-processes" data-i18n="excl_processes">Bypass Processes</label>
+              <div style="display:flex;gap:6px;align-items:center">
+                <span class="tun-badge" id="proc-tun-badge">TUN only</span>
+                <button id="btn-pick-process" class="pick-proc-btn" type="button">
+                  <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><circle cx="11" cy="11" r="8"/><path d="m21 21-4.35-4.35"/></svg>
+                  Pick
+                </button>
+              </div>
+            </div>
+            <div class="tag-input-wrap" id="tag-wrap-processes">
+              <div class="tag-list" id="tag-list-processes"></div>
+              <input id="tag-input-processes" class="tag-input-field" type="text"
+                     placeholder="chrome.exe" spellcheck="false" autocomplete="off" />
+            </div>
+            <span class="field-hint" id="proc-hint">Only works in TUN mode. Excluded apps bypass the VPN.</span>
           </div>
         </div>
 
@@ -343,6 +367,24 @@
 
     <!-- Toast -->
     <div id="toast" class="toast" role="status" aria-live="polite"></div>
+
+    <!-- Process Picker Modal -->
+    <div id="proc-picker-modal" class="modal-overlay hidden">
+      <div class="modal-content proc-picker-content">
+        <div class="proc-picker-header">
+          <h3 class="modal-title">Running Processes</h3>
+          <div class="proc-search-wrap">
+            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><circle cx="11" cy="11" r="8"/><path d="m21 21-4.35-4.35"/></svg>
+            <input id="proc-search" class="proc-search-input" type="text" placeholder="Search..." autocomplete="off" />
+          </div>
+        </div>
+        <div id="proc-list" class="proc-list"></div>
+        <div class="modal-actions">
+          <button id="btn-proc-cancel" class="btn secondary">Cancel</button>
+          <button id="btn-proc-add" class="btn primary">Add Selected</button>
+        </div>
+      </div>
+    </div>
 
     <!-- Wintun Modal -->
     <div id="wintun-modal" class="modal-overlay hidden">

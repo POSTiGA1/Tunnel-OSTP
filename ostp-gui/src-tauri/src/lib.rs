@@ -242,6 +242,67 @@ fn get_autostart() -> bool {
     false
 }
 
+/// Returns a sorted, deduplicated list of currently running process names.
+#[tauri::command]
+fn list_running_processes() -> Vec<String> {
+    #[cfg(target_os = "windows")]
+    {
+        use std::process::Command;
+        if let Ok(out) = Command::new("tasklist")
+            .args(["/FO", "CSV", "/NH"])
+            .output()
+        {
+            let text = String::from_utf8_lossy(&out.stdout);
+            let mut names: std::collections::BTreeSet<String> = std::collections::BTreeSet::new();
+            for line in text.lines() {
+                // CSV format: "chrome.exe","1234","Console","1","123,456 K"
+                let name = line.trim_matches('"').split('"').next().unwrap_or("");
+                if !name.is_empty() && name.ends_with(".exe") {
+                    names.insert(name.to_string());
+                }
+            }
+            return names.into_iter().collect();
+        }
+    }
+    #[cfg(target_os = "linux")]
+    {
+        use std::process::Command;
+        if let Ok(out) = Command::new("ps")
+            .args(["-e", "-o", "comm="])
+            .output()
+        {
+            let text = String::from_utf8_lossy(&out.stdout);
+            let mut names: std::collections::BTreeSet<String> = std::collections::BTreeSet::new();
+            for line in text.lines() {
+                let name = line.trim();
+                if !name.is_empty() {
+                    names.insert(name.to_string());
+                }
+            }
+            return names.into_iter().collect();
+        }
+    }
+    #[cfg(target_os = "macos")]
+    {
+        use std::process::Command;
+        if let Ok(out) = Command::new("ps")
+            .args(["-e", "-o", "comm="])
+            .output()
+        {
+            let text = String::from_utf8_lossy(&out.stdout);
+            let mut names: std::collections::BTreeSet<String> = std::collections::BTreeSet::new();
+            for line in text.lines() {
+                let name = line.trim().split('/').last().unwrap_or("");
+                if !name.is_empty() {
+                    names.insert(name.to_string());
+                }
+            }
+            return names.into_iter().collect();
+        }
+    }
+    vec![]
+}
+
 #[tauri::command]
 async fn get_config() -> Result<String, String> {
     let path = get_config_path();
@@ -785,7 +846,7 @@ pub fn run() {
             }
             _ => {}
         })
-        .invoke_handler(tauri::generate_handler![start_tunnel, stop_tunnel, reload_tunnel, get_tunnel_status, get_metrics, get_config, save_config, get_wintun_install_path, set_autostart, get_autostart])
+        .invoke_handler(tauri::generate_handler![start_tunnel, stop_tunnel, reload_tunnel, get_tunnel_status, get_metrics, get_config, save_config, get_wintun_install_path, set_autostart, get_autostart, list_running_processes])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");
 }

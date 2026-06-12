@@ -47,8 +47,6 @@ const groupCustomDns = $('group-custom-dns');
 const inTransport    = $('in-transport');
 const inSni          = $('in-stealth-sni');
 const inWss          = $('in-wss');
-const inPbk          = $('in-pbk');
-const inSid          = $('in-sid');
 const inMtu          = $('in-mtu');
 const inTun          = $('in-tun-mode');
 const inKillSwitch   = $('in-kill-switch');
@@ -57,14 +55,69 @@ const inMuxSessions  = $('in-mux-sessions');
 const inDebug          = $('in-debug');
 const inAutoconnect    = $('in-autoconnect');
 const inLaunchStartup  = $('in-launch-startup');
-const inDomains      = $('in-ex-domains');
-const inIps          = $('in-ex-ips');
-const inProcesses    = $('in-ex-processes');
 
 const wintunModal        = $('wintun-modal');
 const btnWintunCancel    = $('btn-wintun-cancel');
 const btnWintunOpen      = $('btn-wintun-open');
 const wintunInstallPath  = $('wintun-install-path');
+
+// ── Tag-input state ───────────────────────────────────────────────────────────
+// Map of tagId -> Set<string>
+const tagState = {
+  domains:   new Set(),
+  ips:       new Set(),
+  processes: new Set(),
+};
+
+function renderTagList(key) {
+  const list = $('tag-list-' + key);
+  if (!list) return;
+  list.innerHTML = '';
+  for (const val of tagState[key]) {
+    const chip = document.createElement('span');
+    chip.className = 'tag-chip';
+    chip.innerHTML = `${val}<button class="tag-chip-remove" title="Remove" tabindex="-1"><svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3" stroke-linecap="round"><path d="M18 6 6 18M6 6l12 12"/></svg></button>`;
+    chip.querySelector('.tag-chip-remove').addEventListener('click', () => {
+      tagState[key].delete(val);
+      renderTagList(key);
+      scheduleAutoSave();
+    });
+    list.appendChild(chip);
+  }
+}
+
+function addTag(key, raw) {
+  const vals = raw.split(/[\s,;]+/).map(v => v.trim()).filter(Boolean);
+  let added = false;
+  for (const v of vals) {
+    if (!tagState[key].has(v)) { tagState[key].add(v); added = true; }
+  }
+  if (added) { renderTagList(key); scheduleAutoSave(); }
+}
+
+function wireTagInput(key) {
+  const input = $('tag-input-' + key);
+  const wrap  = $('tag-wrap-' + key);
+  if (!input) return;
+  input.addEventListener('keydown', e => {
+    if (e.key === 'Enter' || e.key === ',') {
+      e.preventDefault();
+      const v = input.value.trim();
+      if (v) { addTag(key, v); input.value = ''; }
+    } else if (e.key === 'Backspace' && !input.value) {
+      const arr = [...tagState[key]];
+      if (arr.length) { tagState[key].delete(arr[arr.length - 1]); renderTagList(key); scheduleAutoSave(); }
+    }
+  });
+  input.addEventListener('paste', e => {
+    e.preventDefault();
+    const text = (e.clipboardData || window.clipboardData).getData('text');
+    addTag(key, text);
+    input.value = '';
+  });
+  // click on wrap focuses input
+  if (wrap) wrap.addEventListener('click', () => input.focus());
+}
 
 // ── Utilities ────────────────────────────────────────────────────────────────
 function fmtBytes(b) {
@@ -300,9 +353,12 @@ async function loadConfigIntoForm() {
 
 
     const ex = c.exclude || {};
-    inDomains.value   = (ex.domains   || []).join('\n');
-    inIps.value       = (ex.ips       || []).join('\n');
-    inProcesses.value = (ex.processes || []).join('\n');
+    tagState.domains   = new Set(ex.domains   || []);
+    tagState.ips       = new Set(ex.ips       || []);
+    tagState.processes = new Set(ex.processes || []);
+    renderTagList('domains');
+    renderTagList('ips');
+    renderTagList('processes');
   } catch (err) {
     showToast(String(err), 'error');
   }
@@ -366,9 +422,9 @@ async function handleSave(silent = false) {
   rawConfig.tun.dns    = inDns.value.trim() || null;
 
   rawConfig.exclude = {
-    domains:   splitLines(inDomains.value),
-    ips:       splitLines(inIps.value),
-    processes: splitLines(inProcesses.value),
+    domains:   [...tagState.domains],
+    ips:       [...tagState.ips],
+    processes: [...tagState.processes],
   };
 
   try {
@@ -394,8 +450,6 @@ function handleImport() {
     inServer.value = host;
     inKey.value    = key;
     inSni.value    = url.searchParams.get('sni') || '';
-    inPbk.value    = url.searchParams.get('pbk') || '';
-    inSid.value    = url.searchParams.get('sid') || '';
     
     const type = url.searchParams.get('type');
     if (type === 'tcp' || type === 'http') inTransport.value = 'uot';
@@ -541,8 +595,8 @@ window.addEventListener('DOMContentLoaded', async () => {
   });
   importInput.addEventListener('keydown', e => { if (e.key === 'Enter') handleImport(); });
 
-  // Auto-save wiring
-  const formInputs = document.querySelectorAll('#settings-screen input:not(#in-import-url), #settings-screen textarea, #settings-screen select');
+  // Auto-save wiring for standard form elements (excluding tag-inputs which wire themselves)
+  const formInputs = document.querySelectorAll('#settings-screen input:not(#in-import-url):not(.tag-input-field), #settings-screen select');
   formInputs.forEach(el => {
     el.addEventListener('input', () => {
       scheduleAutoSave();
@@ -554,6 +608,85 @@ window.addEventListener('DOMContentLoaded', async () => {
     });
     el.addEventListener('change', scheduleAutoSave);
   });
+
+  // Wire tag inputs
+  wireTagInput('domains');
+  wireTagInput('ips');
+  wireTagInput('processes');
+
+  // Process picker
+  const procPickerModal  = $('proc-picker-modal');
+  const btnPickProcess   = $('btn-pick-process');
+  const btnProcCancel    = $('btn-proc-cancel');
+  const btnProcAdd       = $('btn-proc-add');
+  const procList         = $('proc-list');
+  const procSearch       = $('proc-search');
+  let allProcs = [];
+  let selectedProcs = new Set();
+
+  function renderProcList(filter) {
+    if (!procList) return;
+    const q = (filter || '').toLowerCase();
+    const filtered = q ? allProcs.filter(p => p.toLowerCase().includes(q)) : allProcs;
+    if (!filtered.length) {
+      procList.innerHTML = `<div class="proc-empty">${q ? 'No matches' : 'No processes found'}</div>`;
+      return;
+    }
+    procList.innerHTML = filtered.map(p => {
+      const sel = selectedProcs.has(p) ? 'selected' : '';
+      return `<div class="proc-item ${sel}" data-name="${p}"><div class="proc-item-check"></div><span class="proc-item-name">${p}</span></div>`;
+    }).join('');
+    procList.querySelectorAll('.proc-item').forEach(el => {
+      el.addEventListener('click', () => {
+        const name = el.dataset.name;
+        if (selectedProcs.has(name)) selectedProcs.delete(name);
+        else selectedProcs.add(name);
+        el.classList.toggle('selected');
+        el.querySelector('.proc-item-check') // rerender
+        renderProcList(procSearch ? procSearch.value : '');
+      });
+    });
+  }
+
+  if (btnPickProcess && procPickerModal) {
+    btnPickProcess.addEventListener('click', async () => {
+      selectedProcs = new Set([...tagState.processes]);
+      procPickerModal.classList.remove('hidden');
+      procList.innerHTML = '<div class="proc-loading"><span>Loading...</span></div>';
+      if (procSearch) procSearch.value = '';
+      try {
+        allProcs = await invoke('list_running_processes');
+      } catch {
+        allProcs = [];
+      }
+      renderProcList('');
+      if (procSearch) procSearch.focus();
+    });
+  }
+
+  if (procSearch) {
+    procSearch.addEventListener('input', () => renderProcList(procSearch.value));
+  }
+
+  if (btnProcCancel) {
+    btnProcCancel.addEventListener('click', () => procPickerModal.classList.add('hidden'));
+  }
+
+  if (btnProcAdd) {
+    btnProcAdd.addEventListener('click', () => {
+      for (const p of selectedProcs) tagState.processes.add(p);
+      renderTagList('processes');
+      scheduleAutoSave();
+      procPickerModal.classList.add('hidden');
+    });
+  }
+
+  // Close picker on backdrop click
+  if (procPickerModal) {
+    procPickerModal.addEventListener('click', e => {
+      if (e.target === procPickerModal) procPickerModal.classList.add('hidden');
+    });
+  }
 
   btnTestPing.addEventListener('click', runPingTest);
 
