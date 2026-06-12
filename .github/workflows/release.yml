@@ -44,6 +44,9 @@ jobs:
       - name: Install musl-tools
         run: sudo apt-get update && sudo apt-get install -y musl-tools
 
+      - name: Create dummy dist for rust-embed
+        run: mkdir -p ostp-control/dist && touch ostp-control/dist/index.html
+
       - name: cargo check
         run: cargo check --workspace
 
