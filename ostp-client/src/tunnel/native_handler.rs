@@ -230,7 +230,7 @@ pub async fn run_native_tunnel(
 
             tokio::spawn(async move {
                 let matcher = matcher_arc.read().await.clone();
-                if true {
+                if debug {
                     tracing::debug!("TUN TCP {local} → {remote}");
                 }
 
@@ -254,15 +254,19 @@ pub async fn run_native_tunnel(
                 #[cfg(target_os = "windows")]
                 if !should_bypass {
                     if let Some(proc_name) = crate::tunnel::process_lookup::get_process_name_from_port(local.port()) {
-                        tracing::info!("TUN TCP lookup: port {} -> process {}", local.port(), proc_name);
+                        if debug {
+                            tracing::info!("TUN TCP lookup: port {} -> process {}", local.port(), proc_name);
+                        }
                         if matcher.match_process(&proc_name) {
-                            if true {
+                            if debug {
                                 tracing::info!("TUN TCP BYPASS (Process match): {} → {remote}", proc_name);
                             }
                             should_bypass = true;
                         }
                     } else {
-                        tracing::info!("TUN TCP lookup: port {} -> no process found", local.port());
+                        if debug {
+                            tracing::info!("TUN TCP lookup: port {} -> no process found", local.port());
+                        }
                     }
                 }
 
@@ -271,11 +275,11 @@ pub async fn run_native_tunnel(
                     if let Some(sni) =
                         crate::tunnel::sni_sniff::extract_sni(&sniff_buf[..sniff_len])
                     {
-                        if true {
+                        if debug {
                             tracing::debug!("TUN SNI: {sni}");
                         }
                         if matcher.match_domain(&sni) {
-                            if true {
+                            if debug {
                                 tracing::info!("TUN TCP BYPASS (SNI domain): {sni} → {remote}");
                             }
                             should_bypass = true;
@@ -285,7 +289,7 @@ pub async fn run_native_tunnel(
 
                 // 3. Destination IP CIDR check (for IPs not in routing table / IPv6)
                 if !should_bypass && matcher.match_ip(&remote.ip()) {
-                    if true {
+                    if debug {
                         tracing::info!("TUN TCP BYPASS (IP match): {remote}");
                     }
                     should_bypass = true;
@@ -308,8 +312,14 @@ pub async fn run_native_tunnel(
                             remote.is_ipv6(),
                             idx,
                         ) {
-                            tracing::warn!("bind_socket_to_interface failed: {e}");
+                            tracing::error!("TUN TCP BYPASS failed to bind to physical interface {}: {}", idx, e);
+                        } else {
+                            if debug {
+                                tracing::info!("TUN TCP BYPASS bound to physical interface {}", idx);
+                            }
                         }
+                    } else {
+                        tracing::warn!("TUN TCP BYPASS has no physical interface index!");
                     }
                     #[cfg(target_os = "linux")]
                     if let Some(ref name) = lin_name {

@@ -9,7 +9,7 @@ use futures::StreamExt;
 pub async fn run_udp_nat(
     udp_socket: netstack_smoltcp::UdpSocket,
     proxy_addr: String,
-    _debug: bool,
+    debug: bool,
     matcher: std::sync::Arc<tokio::sync::RwLock<crate::tunnel::exclusion::ExclusionMatcher>>,
     phys_if_index: Option<u32>,
     phys_if_name: Option<String>,
@@ -41,19 +41,27 @@ pub async fn run_udp_nat(
                                 let matcher_guard = matcher.read().await;
                                 if matcher_guard.match_ip(&dst.ip()) {
                                     should_bypass = true;
-                                    tracing::info!("TUN UDP BYPASS (IP match): {} → {}", src, dst);
+                                    if debug {
+                                        tracing::info!("TUN UDP BYPASS (IP match): {} → {}", src, dst);
+                                    }
                                 }
 
                                 #[cfg(target_os = "windows")]
                                 if !should_bypass {
                                     if let Some(proc_name) = crate::tunnel::process_lookup::get_process_name_from_port_udp(src.port()) {
-                                        tracing::info!("TUN UDP lookup: port {} -> process {}", src.port(), proc_name);
+                                        if debug {
+                                            tracing::info!("TUN UDP lookup: port {} -> process {}", src.port(), proc_name);
+                                        }
                                         if matcher_guard.match_process(&proc_name) {
                                             should_bypass = true;
-                                            tracing::info!("TUN UDP BYPASS (Process match): {} ({} → {})", proc_name, src, dst);
+                                            if debug {
+                                                tracing::info!("TUN UDP BYPASS (Process match): {} ({} → {})", proc_name, src, dst);
+                                            }
                                         }
                                     } else {
-                                        tracing::info!("TUN UDP lookup: port {} -> no process found", src.port());
+                                        if debug {
+                                            tracing::info!("TUN UDP lookup: port {} -> no process found", src.port());
+                                        }
                                     }
                                 }
                             }
@@ -63,7 +71,9 @@ pub async fn run_udp_nat(
 
                             tokio::spawn(async move {
                                 if should_bypass {
-                                    tracing::info!("Starting UDP BYPASS session for {}", src);
+                                    if debug {
+                                        tracing::info!("Starting UDP BYPASS session for {}", src);
+                                    }
                                     let res = start_udp_bypass_session(src, p_if_idx, p_if_name, &mut session_rx, tx_clone).await;
                                     if res.is_err() {
                                         tracing::debug!("UDP BYPASS session for {} ended: {:?}", src, res.err());
@@ -111,7 +121,7 @@ async fn start_udp_bypass_session(
         if let Err(e) = crate::tunnel::proxy::bind_socket_to_interface(&socket, client_src.is_ipv6(), idx) {
             tracing::error!("TUN UDP BYPASS failed to bind to physical interface {}: {}", idx, e);
         } else {
-            tracing::info!("TUN UDP BYPASS bound to physical interface {}", idx);
+            // Keep debug log
         }
     } else {
         tracing::warn!("TUN UDP BYPASS has no physical interface index!");
