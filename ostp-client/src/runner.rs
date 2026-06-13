@@ -239,7 +239,13 @@ pub async fn run_client_core(
     }
 
     let _sysproxy_guard = if config.mode == "proxy" {
-        Some(crate::sysproxy::SystemProxyGuard::enable(&config.local_proxy.bind_addr))
+        // Enable system proxy and set initial ProxyOverride with user exclusions
+        let guard = Some(crate::sysproxy::SystemProxyGuard::enable(&config.local_proxy.bind_addr));
+        crate::sysproxy::update_proxy_bypass_list(
+            &config.exclusions.domains,
+            &config.exclusions.ips,
+        );
+        guard
     } else {
         None
     };
@@ -355,6 +361,12 @@ pub async fn run_client_core(
                 } => {
                     if let Some(ref rx) = config_rx {
                         let new_cfg = rx.borrow().clone();
+                        // Update Windows ProxyOverride so excluded domains/IPs
+                        // bypass the system proxy immediately (proxy mode only).
+                        crate::sysproxy::update_proxy_bypass_list(
+                            &new_cfg.exclusions.domains,
+                            &new_cfg.exclusions.ips,
+                        );
                         let _ = reload_tx.send(new_cfg.exclusions);
                     }
                 }

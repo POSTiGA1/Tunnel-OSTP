@@ -64,7 +64,79 @@ pub fn enable_windows_proxy(proxy_addr: &str) {
         _ => {}
     }
 
-    // Set bypass list to prevent proxy loop for localhost traffic
+    // Set initial bypass list (will be expanded by update_proxy_bypass_list)
+    update_proxy_bypass_list_windows(&[], &[]);
+
+    refresh_wininet();
+    tracing::info!("System proxy enabled successfully");
+}
+
+/// Update the Windows ProxyOverride registry value to include user-configured
+/// excluded domains and IPs. This makes excluded hosts bypass the OSTP proxy
+/// entirely at the OS level — the most reliable split-tunneling mechanism.
+///
+/// For each domain `d`, adds both `d` and `*.d` so both the root and all
+/// subdomains bypass the proxy.
+/// For IPs, adds them verbatim (Windows supports exact IPs and wildcards like
+/// `192.168.*`).
+#[cfg(target_os = "windows")]
+pub fn update_proxy_bypass_list(domains: &[String], ips: &[String]) {
+    update_proxy_bypass_list_windows(domains, ips);
+    refresh_wininet();
+}
+
+#[cfg(not(target_os = "windows"))]
+pub fn update_proxy_bypass_list(_domains: &[String], _ips: &[String]) {
+    // Linux/macOS: no-op (gnome/kde proxy bypass list update not implemented)
+}
+
+#[cfg(target_os = "windows")]
+fn update_proxy_bypass_list_windows(domains: &[String], ips: &[String]) {
+    // Base list: always bypass local addresses
+    let mut parts: Vec<String> = vec![
+        "localhost".into(),
+        "127.*".into(),
+        "10.*".into(),
+        "172.16.*".into(),
+        "172.17.*".into(),
+        "172.18.*".into(),
+        "172.19.*".into(),
+        "172.20.*".into(),
+        "172.21.*".into(),
+        "172.22.*".into(),
+        "172.23.*".into(),
+        "172.24.*".into(),
+        "172.25.*".into(),
+        "172.26.*".into(),
+        "172.27.*".into(),
+        "172.28.*".into(),
+        "172.29.*".into(),
+        "172.30.*".into(),
+        "172.31.*".into(),
+        "192.168.*".into(),
+        "<local>".into(),
+    ];
+
+    // Add excluded domains: both exact and wildcard subdomain form
+    for d in domains {
+        let d = d.trim().trim_start_matches('.').to_lowercase();
+        if d.is_empty() { continue; }
+        parts.push(d.clone());
+        parts.push(format!("*.{}", d));
+    }
+
+    // Add excluded IPs verbatim
+    for ip in ips {
+        let ip = ip.trim();
+        if ip.is_empty() { continue; }
+        // Strip CIDR suffix if present — Windows ProxyOverride doesn't support CIDR
+        let host = ip.split('/').next().unwrap_or(ip);
+        parts.push(host.to_string());
+    }
+
+    let override_value = parts.join(";");
+    tracing::info!("Updating ProxyOverride: {}", override_value);
+
     let _ = Command::new("reg")
         .creation_flags(CREATE_NO_WINDOW)
         .args([
@@ -72,13 +144,10 @@ pub fn enable_windows_proxy(proxy_addr: &str) {
             "HKCU\\Software\\Microsoft\\Windows\\CurrentVersion\\Internet Settings",
             "/v", "ProxyOverride",
             "/t", "REG_SZ",
-            "/d", "localhost;127.*;10.*;192.168.*;<local>",
+            "/d", &override_value,
             "/f",
         ])
         .output();
-
-    refresh_wininet();
-    tracing::info!("System proxy enabled successfully");
 }
 
 #[cfg(target_os = "windows")]

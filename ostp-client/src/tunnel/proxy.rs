@@ -32,6 +32,7 @@ extern "system" {
 pub fn bind_socket_to_interface(socket: &impl AsRawSocket, is_ipv6: bool, if_index: u32) -> std::io::Result<()> {
     let s = socket.as_raw_socket() as usize;
     if is_ipv6 {
+        // IPV6_UNICAST_IF expects interface index in host byte order
         let optval = if_index;
         let ret = unsafe {
             setsockopt(
@@ -46,7 +47,8 @@ pub fn bind_socket_to_interface(socket: &impl AsRawSocket, is_ipv6: bool, if_ind
             return Err(std::io::Error::last_os_error());
         }
     } else {
-        let optval = if_index.to_be();
+        // IP_UNICAST_IF expects interface index in host byte order (NOT big-endian)
+        let optval = if_index;
         let ret = unsafe {
             setsockopt(
                 s,

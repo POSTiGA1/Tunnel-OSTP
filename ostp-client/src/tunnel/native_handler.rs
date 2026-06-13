@@ -40,6 +40,12 @@ pub async fn run_native_tunnel(
     let debug = config.debug;
     tracing::info!("Initializing NATIVE TUN tunnel (smoltcp)...");
 
+    // Capture physical interface index for bypass BEFORE we create the TUN device and alter routes.
+    #[cfg(target_os = "windows")]
+    let phys_if_for_bypass: Option<u32> = ostp_tun::windows::windows_route::sys::get_default_ipv4_route().map(|(_, idx)| idx);
+    #[cfg(not(target_os = "windows"))]
+    let phys_if_for_bypass: Option<u32> = None;
+
     // ── 1. Resolve server IP ──────────────────────────────────────────────────
     let server_ip = config
         .ostp
@@ -204,11 +210,7 @@ pub async fn run_native_tunnel(
         }
     });
 
-    // Physical interface index — Some on Windows, None everywhere else
-    #[cfg(target_os = "windows")]
-    let phys_if_for_bypass: Option<u32> = ostp_tun::windows::windows_route::sys::get_default_ipv4_route().map(|(_, idx)| idx);
-    #[cfg(not(target_os = "windows"))]
-    let phys_if_for_bypass: Option<u32> = None;
+    // Physical interface index was captured at the start of the function.
 
     // Linux: physical interface name for SO_BINDTODEVICE
     #[cfg(target_os = "linux")]

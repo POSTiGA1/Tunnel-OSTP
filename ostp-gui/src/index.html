@@ -341,22 +341,13 @@
           </div>
 
           <div class="field-group">
-            <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:6px">
-              <label class="field-label" style="margin-bottom:0" for="tag-input-processes" data-i18n="excl_processes">Bypass Processes</label>
-              <div style="display:flex;gap:6px;align-items:center">
-                <span class="tun-badge" id="proc-tun-badge">TUN only</span>
-                <button id="btn-pick-process" class="pick-proc-btn" type="button">
-                  <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><circle cx="11" cy="11" r="8"/><path d="m21 21-4.35-4.35"/></svg>
-                  Pick
-                </button>
-              </div>
-            </div>
+            <label class="field-label" for="tag-input-processes" data-i18n="excl_processes">Bypass Processes</label>
             <div class="tag-input-wrap" id="tag-wrap-processes">
               <div class="tag-list" id="tag-list-processes"></div>
               <input id="tag-input-processes" class="tag-input-field" type="text"
                      placeholder="chrome.exe" spellcheck="false" autocomplete="off" />
             </div>
-            <span class="field-hint" id="proc-hint">Only works in TUN mode. Excluded apps bypass the VPN.</span>
+            <span class="field-hint" id="proc-hint">Only works in TUN mode. Type process name and press Enter.</span>
           </div>
         </div>
 
@@ -367,24 +358,6 @@
 
     <!-- Toast -->
     <div id="toast" class="toast" role="status" aria-live="polite"></div>
-
-    <!-- Process Picker Modal -->
-    <div id="proc-picker-modal" class="modal-overlay hidden">
-      <div class="modal-content proc-picker-content">
-        <div class="proc-picker-header">
-          <h3 class="modal-title">Running Processes</h3>
-          <div class="proc-search-wrap">
-            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><circle cx="11" cy="11" r="8"/><path d="m21 21-4.35-4.35"/></svg>
-            <input id="proc-search" class="proc-search-input" type="text" placeholder="Search..." autocomplete="off" />
-          </div>
-        </div>
-        <div id="proc-list" class="proc-list"></div>
-        <div class="modal-actions">
-          <button id="btn-proc-cancel" class="btn secondary">Cancel</button>
-          <button id="btn-proc-add" class="btn primary">Add Selected</button>
-        </div>
-      </div>
-    </div>
 
     <!-- Wintun Modal -->
     <div id="wintun-modal" class="modal-overlay hidden">
