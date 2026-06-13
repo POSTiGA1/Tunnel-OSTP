@@ -47,8 +47,8 @@ pub fn bind_socket_to_interface(socket: &impl AsRawSocket, is_ipv6: bool, if_ind
             return Err(std::io::Error::last_os_error());
         }
     } else {
-        // IP_UNICAST_IF expects interface index in host byte order (NOT big-endian)
-        let optval = if_index;
+        // IP_UNICAST_IF expects interface index in NETWORK byte order (big-endian)
+        let optval = if_index.to_be();
         let ret = unsafe {
             setsockopt(
                 s,
