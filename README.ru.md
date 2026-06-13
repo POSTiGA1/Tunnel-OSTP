@@ -8,7 +8,7 @@
 ![Crypto](https://img.shields.io/badge/Crypto-Noise__NNpsk0-blueviolet?style=for-the-badge)
 ![Transport](https://img.shields.io/badge/Transport-UDP%20ARQ-informational?style=for-the-badge)
 
-**OSTP** (Ospab Stealth Transport Protocol) — высокопроизводительный транспортный протокол, устойчивый к цензуре. Туннелирует TCP-трафик поверх UDP с полной обфускацией. Устойчив к Deep Packet Inspection (DPI), активному зондированию и статистическому анализу трафика.
+**OSTP** (Ospab Stealth Transport Protocol) — высокопроизводительный, устойчивый к цензуре zero-signature транспортный протокол. Реализует собственный надёжный ARQ-транспорт поверх UDP, а также режим UoT (UDP-over-TCP). Каждый байт, включая заголовки пакетов, криптографически неотличим от случайного шума. Полностью устойчив к Deep Packet Inspection (DPI), активному зондированию и статистическому анализу трафика.
 
 ---
 
@@ -21,9 +21,9 @@
 | **Reliable UDP (ARQ)** | Selective ACK/NACK с rate-limited ретрансмиссией, настраиваемым reorder-буфером и exponential backoff. Разработан для 10 Гбит/с. |
 | **Мультиплексирование** | Несколько логических TCP-потоков поверх одной зашифрованной UDP-сессии с per-stream flow control. |
 | **Бесшовный роуминг** | Клиент может менять сети (WiFi ↔ 4G) без разрыва сессии — сервер отслеживает session-ID, а не IP-адрес. |
-| **TUN-режим** | Полносистемный VPN через интеграцию с `tun2socks` на Windows и Linux. |
-| **xHTTP Стелс (UoT)** | Туннель UDP-over-TCP, замаскированный под обычный HTTP/1.1 или TLS трафик для обхода белых списков ТСПУ (DPI). |
-| **XTLS-Reality** | Собственная реализация протокола Reality (без зависимостей) с использованием ChaCha20Poly1305 и X25519 для идеальной маскировки под TLS 1.3. |
+| **TUN-режим** | Полносистемный VPN без внешних зависимостей (встроенный network stack на базе `smoltcp`). |
+| **xHTTP Стелс (UoT)** | Туннель UDP-over-TCP, который полностью скрывает трафик. Поскольку все данные полностью зашифрованы и имеют префикс длины, он обходит DPI фильтры, блокирующие неизвестный UDP трафик, передавая всё по обычному TCP соединению. |
+| **Мобильные и Web приложения** | Красивый кроссплатформенный мобильный клиент (Flutter) и современная Web панель управления (React/Vite) для удобного администрирования. |
 | **TURN Relay** | RFC 5766 TURN для окружений, где прямой UDP заблокирован. |
 | **Hot-Reload** | Перезагрузка конфига в рантайме без перезапуска (ключи, исключения, mux, TURN). |
 | **Кросс-платформа** | Windows, Linux, macOS, Android. Один бинарник, без зависимостей. |
@@ -155,10 +155,10 @@ irm https://raw.githubusercontent.com/ospab/ostp/master/scripts/install.ps1 | ie
 ```
 
 ### TUN-режим (Windows)
-Требуется `tun2socks.exe` в той же директории. Автоматически запрашивает права Администратора.
+Использует встроенный сетевой стек `smoltcp` и виртуальный адаптер `wintun` (необходима `wintun.dll`). Требует запуска с правами Администратора.
 
 ### TUN-режим (Linux)
-Требуется root. Нужен бинарник `tun2socks` (рядом или в `$PATH`).
+Использует встроенный сетевой стек `smoltcp` и `/dev/net/tun`. Требует запуска от имени `root` (или наличия `CAP_NET_ADMIN`).
 
 ---
 
@@ -166,8 +166,7 @@ irm https://raw.githubusercontent.com/ospab/ostp/master/scripts/install.ps1 | ie
 
 | Уровень | Механизм |
 |---------|----------|
-| XTLS-Reality | Поддельный TLS 1.3 ClientHello, X25519 обмен ключами, ChaCha20-Poly1305 AEAD |
-| Обмен ключами | Noise NNpsk0 (X25519 + ChaChaPoly + BLAKE2s) |
+| Обмен ключами | Noise NNpsk0 (X25519 + ChaChaPoly + BLAKE2s) zero-RTT |
 | Шифрование | ChaCha20-Poly1305 AEAD на каждый пакет |
 | Обфускация заголовков | HMAC-SHA256 маска session_id + nonce, уникальная для каждого пакета |
 | Надёжность | Selective ACK с cumulative + SACK диапазонами |

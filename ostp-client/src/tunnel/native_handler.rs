@@ -254,12 +254,15 @@ pub async fn run_native_tunnel(
                 #[cfg(target_os = "windows")]
                 if !should_bypass {
                     if let Some(proc_name) = crate::tunnel::process_lookup::get_process_name_from_port(local.port()) {
+                        tracing::info!("TUN TCP lookup: port {} -> process {}", local.port(), proc_name);
                         if matcher.match_process(&proc_name) {
                             if true {
-                                tracing::debug!("TUN BYPASS (Process match): {} → {remote}", proc_name);
+                                tracing::info!("TUN TCP BYPASS (Process match): {} → {remote}", proc_name);
                             }
                             should_bypass = true;
                         }
+                    } else {
+                        tracing::info!("TUN TCP lookup: port {} -> no process found", local.port());
                     }
                 }
 
@@ -273,7 +276,7 @@ pub async fn run_native_tunnel(
                         }
                         if matcher.match_domain(&sni) {
                             if true {
-                                tracing::debug!("TUN BYPASS (SNI domain): {sni} → {remote}");
+                                tracing::info!("TUN TCP BYPASS (SNI domain): {sni} → {remote}");
                             }
                             should_bypass = true;
                         }
@@ -283,7 +286,7 @@ pub async fn run_native_tunnel(
                 // 3. Destination IP CIDR check (for IPs not in routing table / IPv6)
                 if !should_bypass && matcher.match_ip(&remote.ip()) {
                     if true {
-                        tracing::debug!("TUN BYPASS (IP match): {remote}");
+                        tracing::info!("TUN TCP BYPASS (IP match): {remote}");
                     }
                     should_bypass = true;
                 }

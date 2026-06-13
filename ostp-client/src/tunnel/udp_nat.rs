@@ -41,16 +41,19 @@ pub async fn run_udp_nat(
                                 let matcher_guard = matcher.read().await;
                                 if matcher_guard.match_ip(&dst.ip()) {
                                     should_bypass = true;
-                                    tracing::debug!("TUN UDP BYPASS (IP match): {} → {}", src, dst);
+                                    tracing::info!("TUN UDP BYPASS (IP match): {} → {}", src, dst);
                                 }
 
                                 #[cfg(target_os = "windows")]
                                 if !should_bypass {
                                     if let Some(proc_name) = crate::tunnel::process_lookup::get_process_name_from_port_udp(src.port()) {
+                                        tracing::info!("TUN UDP lookup: port {} -> process {}", src.port(), proc_name);
                                         if matcher_guard.match_process(&proc_name) {
                                             should_bypass = true;
-                                            tracing::debug!("TUN UDP BYPASS (Process match): {} ({} → {})", proc_name, src, dst);
+                                            tracing::info!("TUN UDP BYPASS (Process match): {} ({} → {})", proc_name, src, dst);
                                         }
+                                    } else {
+                                        tracing::info!("TUN UDP lookup: port {} -> no process found", src.port());
                                     }
                                 }
                             }
@@ -60,7 +63,7 @@ pub async fn run_udp_nat(
 
                             tokio::spawn(async move {
                                 if should_bypass {
-                                    tracing::debug!("Starting UDP BYPASS session for {}", src);
+                                    tracing::info!("Starting UDP BYPASS session for {}", src);
                                     let res = start_udp_bypass_session(src, p_if_idx, p_if_name, &mut session_rx, tx_clone).await;
                                     if res.is_err() {
                                         tracing::debug!("UDP BYPASS session for {} ended: {:?}", src, res.err());
@@ -105,7 +108,13 @@ async fn start_udp_bypass_session(
 
     #[cfg(target_os = "windows")]
     if let Some(idx) = phys_if_index {
-        let _ = crate::tunnel::proxy::bind_socket_to_interface(&socket, client_src.is_ipv6(), idx);
+        if let Err(e) = crate::tunnel::proxy::bind_socket_to_interface(&socket, client_src.is_ipv6(), idx) {
+            tracing::error!("TUN UDP BYPASS failed to bind to physical interface {}: {}", idx, e);
+        } else {
+            tracing::info!("TUN UDP BYPASS bound to physical interface {}", idx);
+        }
+    } else {
+        tracing::warn!("TUN UDP BYPASS has no physical interface index!");
     }
     
     #[cfg(target_os = "linux")]
