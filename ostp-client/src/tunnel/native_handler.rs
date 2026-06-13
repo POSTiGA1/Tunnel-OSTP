@@ -737,6 +737,7 @@ pub async fn run_native_tunnel_from_fd(
 pub async fn run_native_tunnel_from_fd(
     _config: crate::config::ClientConfig,
     _shutdown: watch::Receiver<bool>,
+    _exclusions_rx: watch::Receiver<crate::config::ExclusionConfig>,
     _fd: i32,
 ) -> Result<()> {
     Err(anyhow!("Native TUN from FD is only supported on Android"))
