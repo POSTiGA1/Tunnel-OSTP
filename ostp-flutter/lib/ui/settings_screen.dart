@@ -389,13 +389,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
                             },
                           );
                         }),
-                        const SizedBox(height: 16),
-                        _buildToggle('XTLS-Reality', 'Подделка TLS-сессии (Stealth-домен должен быть TLS 1.3)', _realityEnabled, (val) {
-                          setState(() {
-                            _realityEnabled = val;
-                          });
-                        }),
-                        const SizedBox(height: 16),
+
                       ],
                     ),
                   ),

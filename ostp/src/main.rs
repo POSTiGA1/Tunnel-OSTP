@@ -1300,8 +1300,6 @@ async fn run_app() -> Result<()> {
     "target": "127.0.0.1:8080"
   }},
 
-  // Reality (XTLS) / UoT Masquerade parameters
-
 
   "debug": false
 }}"#, key)
@@ -1347,9 +1345,7 @@ async fn run_app() -> Result<()> {
     "processes": []
   }},
   
-  // Reality (XTLS) / WebRTC Masquerade parameters
-  
-  // Transport Mode: "udp" (default WebRTC masquerade) or "uot" (TCP XTLS-Reality)
+  // Transport Mode: "udp" (default WebRTC masquerade) or "uot" (TCP UoT)
   "transport": {{
     "mode": "udp",
     "stealth_sni": "www.microsoft.com",

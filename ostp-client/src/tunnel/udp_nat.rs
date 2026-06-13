@@ -10,6 +10,9 @@ pub async fn run_udp_nat(
     udp_socket: netstack_smoltcp::UdpSocket,
     proxy_addr: String,
     _debug: bool,
+    matcher: std::sync::Arc<tokio::sync::RwLock<crate::tunnel::exclusion::ExclusionMatcher>>,
+    phys_if_index: Option<u32>,
+    phys_if_name: Option<String>,
 ) {
     let (mut rx, tx) = udp_socket.split();
     let tx = Arc::new(Mutex::new(tx));
@@ -33,11 +36,41 @@ pub async fn run_udp_nat(
                             let proxy_addr_clone = proxy_addr.clone();
                             let tx_clone = tx.clone();
                             
+                            let mut should_bypass = false;
+                            {
+                                let matcher_guard = matcher.read().await;
+                                if matcher_guard.match_ip(&dst.ip()) {
+                                    should_bypass = true;
+                                    tracing::debug!("TUN UDP BYPASS (IP match): {} → {}", src, dst);
+                                }
+
+                                #[cfg(target_os = "windows")]
+                                if !should_bypass {
+                                    if let Some(proc_name) = crate::tunnel::process_lookup::get_process_name_from_port_udp(src.port()) {
+                                        if matcher_guard.match_process(&proc_name) {
+                                            should_bypass = true;
+                                            tracing::debug!("TUN UDP BYPASS (Process match): {} ({} → {})", proc_name, src, dst);
+                                        }
+                                    }
+                                }
+                            }
+
+                            let p_if_idx = phys_if_index;
+                            let p_if_name = phys_if_name.clone();
+
                             tokio::spawn(async move {
-                                tracing::debug!("Starting UDP NAT session for {}", src);
-                                let res = start_udp_session(src, proxy_addr_clone, &mut session_rx, tx_clone).await;
-                                if res.is_err() {
-                                    tracing::debug!("UDP NAT session for {} ended: {:?}", src, res.err());
+                                if should_bypass {
+                                    tracing::debug!("Starting UDP BYPASS session for {}", src);
+                                    let res = start_udp_bypass_session(src, p_if_idx, p_if_name, &mut session_rx, tx_clone).await;
+                                    if res.is_err() {
+                                        tracing::debug!("UDP BYPASS session for {} ended: {:?}", src, res.err());
+                                    }
+                                } else {
+                                    tracing::debug!("Starting UDP NAT session for {}", src);
+                                    let res = start_udp_session(src, proxy_addr_clone, &mut session_rx, tx_clone).await;
+                                    if res.is_err() {
+                                        tracing::debug!("UDP NAT session for {} ended: {:?}", src, res.err());
+                                    }
                                 }
                             });
                         }
@@ -57,6 +90,55 @@ pub async fn run_udp_nat(
         }
     }
 }
+
+async fn start_udp_bypass_session(
+    client_src: SocketAddr,
+    phys_if_index: Option<u32>,
+    phys_if_name: Option<String>,
+    session_rx: &mut mpsc::Receiver<(Vec<u8>, SocketAddr)>,
+    smoltcp_tx: Arc<Mutex<netstack_smoltcp::udp::WriteHalf>>,
+) -> anyhow::Result<()> {
+    let socket = match client_src {
+        SocketAddr::V4(_) => UdpSocket::bind("0.0.0.0:0").await?,
+        SocketAddr::V6(_) => UdpSocket::bind("[::]:0").await?,
+    };
+
+    #[cfg(target_os = "windows")]
+    if let Some(idx) = phys_if_index {
+        let _ = crate::tunnel::proxy::bind_socket_to_interface(&socket, client_src.is_ipv6(), idx);
+    }
+    
+    #[cfg(target_os = "linux")]
+    if let Some(ref name) = phys_if_name {
+        let _ = crate::tunnel::proxy::bind_socket_to_interface(&socket, name);
+    }
+
+    let socket = Arc::new(socket);
+    let socket_rx = socket.clone();
+
+    // Spawn a task to read from physical socket and send back to smoltcp
+    let tx_clone = smoltcp_tx.clone();
+    tokio::spawn(async move {
+        use futures::SinkExt;
+        let mut buf = [0u8; 65536];
+        loop {
+            match socket_rx.recv_from(&mut buf).await {
+                Ok((n, peer)) => {
+                    let mut lock = tx_clone.lock().await;
+                    let _ = lock.send((buf[..n].to_vec(), peer, client_src)).await;
+                }
+                Err(_) => break,
+            }
+        }
+    });
+
+    while let Some((payload, dst)) = session_rx.recv().await {
+        socket.send_to(&payload, dst).await?;
+    }
+
+    Ok(())
+}
+
 
 async fn start_udp_session(
     client_src: SocketAddr,

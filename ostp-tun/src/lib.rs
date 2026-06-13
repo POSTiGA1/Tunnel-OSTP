@@ -24,6 +24,7 @@ pub mod linux;
 pub mod macos;
 
 impl OstpTunInterface {
+    #[allow(unused_variables)]
     pub async fn create(opts: OstpTunOptions) -> Result<Self> {
         #[cfg(target_os = "windows")]
         return windows::create(opts).await;

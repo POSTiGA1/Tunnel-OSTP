@@ -84,13 +84,6 @@ pub async fn run_native_tunnel(
         }
     }
 
-    if !config.exclusions.processes.is_empty() {
-        tracing::warn!(
-            "Process-based split tunneling is not fully supported in TUN mode on all platforms \
-             without WFP/eBPF. Processes in the exclusion list will still be tunneled. \
-             Use IP or domain exclusions instead."
-        );
-    }
 
     // ── 3. Create TUN device via ostp-tun crate ───────────────────────────────
     let opts = ostp_tun::OstpTunOptions {
@@ -167,10 +160,41 @@ pub async fn run_native_tunnel(
         }
         a
     };
+    // Build exclusion matcher for dynamic bypass
+    let current_exclusions = exclusions_rx.borrow().clone();
+    let matcher = crate::tunnel::exclusion::ExclusionMatcher::new(&current_exclusions, None, None);
+    let matcher_arc = std::sync::Arc::new(tokio::sync::RwLock::new(matcher));
+    
+    let matcher_clone = matcher_arc.clone();
+    tokio::spawn(async move {
+        while let Ok(_) = exclusions_rx.changed().await {
+            let current = exclusions_rx.borrow().clone();
+            let new_matcher = crate::tunnel::exclusion::ExclusionMatcher::new(&current, None, None);
+            *matcher_clone.write().await = new_matcher;
+            if true {
+                tracing::debug!("Desktop TUN exclusions hot-reloaded");
+            }
+        }
+    });
+
+    // Linux: physical interface name for SO_BINDTODEVICE
+    #[cfg(target_os = "linux")]
+    let linux_phys_name = crate::tunnel::proxy::get_linux_physical_if_name();
+    #[cfg(not(target_os = "linux"))]
+    let linux_phys_name: Option<String> = None;
+    let _ = &linux_phys_name; // suppress unused warning on Windows
+
     let debug_udp = debug;
+    let udp_matcher = matcher_arc.clone();
+    #[cfg(target_os = "linux")]
+    let udp_lin_name = linux_phys_name.clone();
+
     let mut udp_proxy_task = tokio::spawn(async move {
         if let Some(udp_sock) = udp_socket {
-            super::udp_nat::run_udp_nat(udp_sock, udp_proxy_addr, debug_udp).await;
+            #[cfg(target_os = "linux")]
+            super::udp_nat::run_udp_nat(udp_sock, udp_proxy_addr, debug_udp, udp_matcher, phys_if_for_bypass, udp_lin_name).await;
+            #[cfg(not(target_os = "linux"))]
+            super::udp_nat::run_udp_nat(udp_sock, udp_proxy_addr, debug_udp, udp_matcher, phys_if_for_bypass, None).await;
         }
     });
 
@@ -193,31 +217,7 @@ pub async fn run_native_tunnel(
         a
     };
 
-    // Build exclusion matcher for SNI-based domain bypass (fallback / CDN handling)
-    let current_exclusions = exclusions_rx.borrow().clone();
-    let matcher = crate::tunnel::exclusion::ExclusionMatcher::new(&current_exclusions, None, None);
-    let matcher_arc = std::sync::Arc::new(tokio::sync::RwLock::new(matcher));
-    
-    let matcher_clone = matcher_arc.clone();
-    tokio::spawn(async move {
-        while let Ok(_) = exclusions_rx.changed().await {
-            let current = exclusions_rx.borrow().clone();
-            let new_matcher = crate::tunnel::exclusion::ExclusionMatcher::new(&current, None, None);
-            *matcher_clone.write().await = new_matcher;
-            if true {
-                tracing::debug!("Desktop TUN exclusions hot-reloaded");
-            }
-        }
-    });
-
     // Physical interface index was captured at the start of the function.
-
-    // Linux: physical interface name for SO_BINDTODEVICE
-    #[cfg(target_os = "linux")]
-    let linux_phys_name = crate::tunnel::proxy::get_linux_physical_if_name();
-    #[cfg(not(target_os = "linux"))]
-    let linux_phys_name: Option<String> = None;
-    let _ = &linux_phys_name; // suppress unused warning on Windows
 
     let mut tcp_accept_task = tokio::spawn(async move {
         let Some(mut listener) = tcp_listener else { return; };
@@ -250,8 +250,21 @@ pub async fn run_native_tunnel(
                 // ── Decide: bypass or tunnel? ─────────────────────────────────
                 let mut should_bypass = false;
 
-                // 1. SNI domain check (belt-and-suspenders for CDNs / late-resolved IPs)
-                if sniff_len > 0 {
+                // 1. Process match via OS Extended TCP Table (Windows)
+                #[cfg(target_os = "windows")]
+                if !should_bypass {
+                    if let Some(proc_name) = crate::tunnel::process_lookup::get_process_name_from_port(local.port()) {
+                        if matcher.match_process(&proc_name) {
+                            if true {
+                                tracing::debug!("TUN BYPASS (Process match): {} → {remote}", proc_name);
+                            }
+                            should_bypass = true;
+                        }
+                    }
+                }
+
+                // 2. SNI domain check (belt-and-suspenders for CDNs / late-resolved IPs)
+                if !should_bypass && sniff_len > 0 {
                     if let Some(sni) =
                         crate::tunnel::sni_sniff::extract_sni(&sniff_buf[..sniff_len])
                     {
@@ -267,7 +280,7 @@ pub async fn run_native_tunnel(
                     }
                 }
 
-                // 2. Destination IP CIDR check (for IPs not in routing table / IPv6)
+                // 3. Destination IP CIDR check (for IPs not in routing table / IPv6)
                 if !should_bypass && matcher.match_ip(&remote.ip()) {
                     if true {
                         tracing::debug!("TUN BYPASS (IP match): {remote}");
@@ -540,14 +553,6 @@ pub async fn run_native_tunnel_from_fd(
         proxy_addr = proxy_addr.replace("0.0.0.0:", "127.0.0.1:");
     }
 
-    let udp_proxy_addr = proxy_addr.clone();
-    let debug_udp = debug;
-    let mut udp_proxy_task = tokio::spawn(async move {
-        if let Some(udp_sock) = udp_socket {
-            super::udp_nat::run_udp_nat(udp_sock, udp_proxy_addr, debug_udp).await;
-        }
-    });
-
     let current_exclusions = exclusions_rx.borrow().clone();
     let matcher = crate::tunnel::exclusion::ExclusionMatcher::new(&current_exclusions, None, None);
     let matcher_arc = std::sync::Arc::new(tokio::sync::RwLock::new(matcher));
@@ -563,6 +568,17 @@ pub async fn run_native_tunnel_from_fd(
             }
         }
     });
+
+    let udp_proxy_addr = proxy_addr.clone();
+    let debug_udp = debug;
+    let udp_matcher = matcher_arc.clone();
+    let mut udp_proxy_task = tokio::spawn(async move {
+        if let Some(udp_sock) = udp_socket {
+            super::udp_nat::run_udp_nat(udp_sock, udp_proxy_addr, debug_udp, udp_matcher, None, None).await;
+        }
+    });
+
+
 
     let mut tcp_accept_task = tokio::spawn(async move {
         let Some(mut listener) = tcp_listener else { return; };

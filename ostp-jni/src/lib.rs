@@ -333,8 +333,10 @@ pub extern "system" fn Java_net_ostp_client_OstpClientSdk_nativeStartClient(
         }
         let shutdown_rx_clone = shutdown_tx.subscribe();
         let config_clone = config.clone();
+        let (exclusions_tx, exclusions_rx) = tokio::sync::watch::channel(config.exclusions.clone());
         rt.spawn(async move {
-            if let Err(e) = tunnel::native_handler::run_native_tunnel_from_fd(config_clone, shutdown_rx_clone, fd).await {
+            let _tx = exclusions_tx; // keep tx alive
+            if let Err(e) = tunnel::native_handler::run_native_tunnel_from_fd(config_clone, shutdown_rx_clone, exclusions_rx, fd).await {
                 add_log(format!("Native TUN exited with error: {}", e));
             }
         });
