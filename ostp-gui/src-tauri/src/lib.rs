@@ -95,6 +95,7 @@ enum HelperMsg {
 
 struct InProcessState {
     shutdown_tx: Option<tokio::sync::watch::Sender<bool>>,
+    config_tx:   Option<tokio::sync::watch::Sender<ostp_client::config::ClientConfig>>,
     metrics: Arc<ostp_client::bridge::BridgeMetrics>,
     handle: tokio::task::JoinHandle<Result<(), String>>,
     error_msg: Arc<tokio::sync::Mutex<Option<String>>>,
@@ -443,10 +444,13 @@ async fn reload_tunnel(state: tauri::State<'_, AppState>) -> Result<bool, String
             );
             let _ = h.cmd_tx.send(cmd).await;
         }
-        Some(TunnelHandle::InProcess(_s)) => {
-            // Restarting in-process tunnel is not supported without re-calling start_tunnel,
-            // but we can just abort and we should really call start_tunnel again.
-            // For now, return false.
+        Some(TunnelHandle::InProcess(s)) => {
+            // Hot-reload exclusions by pushing new config into the watch channel.
+            // If config_tx is None (old tunnel without this feature), return false.
+            if let Some(ref tx) = s.config_tx {
+                let _ = tx.send(core_cfg);
+                return Ok(true);
+            }
             return Ok(false);
         }
         None => {}
@@ -557,12 +561,14 @@ async fn start_proxy_in_process(
     });
 
     let (shutdown_tx, shutdown_rx) = watch::channel(false);
+    // Config hot-reload channel: allows updating exclusions while tunnel is running.
+    let (config_tx, config_rx) = watch::channel(mapped.clone());
     let metrics_clone = metrics.clone();
     let error_msg = Arc::new(tokio::sync::Mutex::new(None));
     let error_msg_clone = error_msg.clone();
 
     let handle = tokio::spawn(async move {
-        match ostp_client::runner::run_client_core(mapped, metrics_clone, shutdown_rx, None).await {
+        match ostp_client::runner::run_client_core(mapped, metrics_clone, shutdown_rx, Some(config_rx)).await {
             Ok(_) => Ok(()),
             Err(e) => {
                 let mut err_guard = error_msg_clone.lock().await;
@@ -575,6 +581,7 @@ async fn start_proxy_in_process(
 
     guard.tunnel = Some(TunnelHandle::InProcess(InProcessState {
         shutdown_tx: Some(shutdown_tx),
+        config_tx: Some(config_tx),
         metrics,
         handle,
         error_msg,

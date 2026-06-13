@@ -431,6 +431,9 @@ async function handleSave(silent = false) {
     const ok = await invoke('save_config', { jsonContent: JSON.stringify(rawConfig, null, 2) });
     if (!ok && !silent) {
       showToast(t('toast_error'), 'error');
+    } else if (ok && appState === 'connected') {
+      // Hot-reload exclusions into the running tunnel (no reconnect needed)
+      try { await invoke('reload_tunnel'); } catch { /* ignore */ }
     }
   } catch (err) {
     if (!silent) showToast(String(err), 'error');
@@ -598,14 +601,7 @@ window.addEventListener('DOMContentLoaded', async () => {
   // Auto-save wiring for standard form elements (excluding tag-inputs which wire themselves)
   const formInputs = document.querySelectorAll('#settings-screen input:not(#in-import-url):not(.tag-input-field), #settings-screen select');
   formInputs.forEach(el => {
-    el.addEventListener('input', () => {
-      scheduleAutoSave();
-      if (appState === 'connected') {
-        if (window.__TAURI__ && window.__TAURI__.invoke) {
-          window.__TAURI__.invoke('reload_tunnel');
-        }
-      }
-    });
+    el.addEventListener('input', scheduleAutoSave);
     el.addEventListener('change', scheduleAutoSave);
   });
 
