@@ -315,7 +315,7 @@ impl Bridge {
                     self.metrics.connection_state.store(1, Ordering::Relaxed);
                     
                     let session_count = if self.mux_enabled { self.mux_sessions.max(1) } else { 1 };
-                    let (udp_tx, udp_rx) = mpsc::channel(100000);
+                    let (udp_tx, udp_rx) = mpsc::channel(1024);
                     let mut sessions = Vec::with_capacity(session_count);
                     let mut rtt_sum = 0.0;
                     let mut successful_sessions = 0;
@@ -412,7 +412,7 @@ impl Bridge {
                     self.last_valid_recv = Instant::now() - Duration::from_secs(100);
 
                     let session_count = if self.mux_enabled { self.mux_sessions.max(1) } else { 1 };
-                    let (udp_tx, udp_rx) = mpsc::channel(100000);
+                    let (udp_tx, udp_rx) = mpsc::channel(1024);
                     let mut new_sessions = Vec::with_capacity(session_count);
                     let mut successful_sessions = 0;
                     let mut rtt_sum = 0.0;
@@ -548,7 +548,7 @@ impl Bridge {
             self.metrics.connection_state.store(1, Ordering::Relaxed);
 
             let session_count = if self.mux_enabled { self.mux_sessions.max(1) } else { 1 };
-            let (udp_tx, udp_rx) = mpsc::channel(100000);
+            let (udp_tx, udp_rx) = mpsc::channel(1024);
             let mut new_sessions = Vec::with_capacity(session_count);
             let mut successful_sessions = 0;
             let mut rtt_sum = 0.0;

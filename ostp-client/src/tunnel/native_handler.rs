@@ -104,9 +104,9 @@ pub async fn run_native_tunnel(
 
     // ── 7. Build smoltcp network stack ────────────────────────────────────────
     let (stack, tcp_runner, udp_socket, tcp_listener) = StackBuilder::default()
-        .stack_buffer_size(100_000)
-        .tcp_buffer_size(100_000)
-        .udp_buffer_size(100_000)
+        .stack_buffer_size(1024)
+        .tcp_buffer_size(1024)
+        .udp_buffer_size(1024)
         .enable_tcp(true)
         .enable_udp(true)
         .mtu(config.ostp.mtu)
@@ -454,9 +454,9 @@ pub async fn run_native_tunnel_from_fd(
     let tun_stream = tokio::io::unix::AsyncFd::new(file)?;
 
     let (stack, tcp_runner, udp_socket, tcp_listener) = StackBuilder::default()
-        .stack_buffer_size(100_000)
-        .tcp_buffer_size(100_000)
-        .udp_buffer_size(100_000)
+        .stack_buffer_size(1024)
+        .tcp_buffer_size(1024)
+        .udp_buffer_size(1024)
         .enable_tcp(true)
         .enable_udp(true)
         .mtu(config.ostp.mtu)

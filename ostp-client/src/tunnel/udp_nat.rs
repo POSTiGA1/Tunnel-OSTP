@@ -30,7 +30,7 @@ pub async fn run_udp_nat(
                         if payload.is_empty() { continue; }
 
                         if !sessions.contains_key(&src) {
-                            let (session_tx, mut session_rx) = mpsc::channel::<(Vec<u8>, SocketAddr)>(100000);
+                            let (session_tx, mut session_rx) = mpsc::channel::<(Vec<u8>, SocketAddr)>(1024);
                             sessions.insert(src, session_tx);
 
                             let proxy_addr_clone = proxy_addr.clone();
@@ -89,8 +89,14 @@ pub async fn run_udp_nat(
                         }
 
                         if let Some(sender) = sessions.get(&src) {
-                            if sender.send((payload, dst)).await.is_err() {
-                                sessions.remove(&src);
+                            match sender.try_send((payload, dst)) {
+                                Err(mpsc::error::TrySendError::Closed(_)) => {
+                                    sessions.remove(&src);
+                                }
+                                Err(mpsc::error::TrySendError::Full(_)) => {
+                                    // Drop packet to avoid blocking the TUN interface loop
+                                }
+                                Ok(_) => {}
                             }
                         }
                     }
