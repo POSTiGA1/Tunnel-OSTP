@@ -118,13 +118,34 @@ graph TD
 ```jsonc
 {
   "mode": "client",
-  "server": "YOUR_SERVER_IP:50000",
-  "access_key": "YOUR_SECRET_KEY",
-  "socks5_bind": "127.0.0.1:1088",
-  "transport": { "mode": "udp", "stealth_sni": "vk.com" },
-  "tun": { "enable": false, "dns": "1.1.1.1" }
+  "version": "0.3.1",
+  "log": { "level": "info" },
+  "inbounds": [
+    { "type": "local_proxy", "tag": "socks-in", "protocol": "socks", "listen": "127.0.0.1", "port": 1088 },
+    { "type": "tun", "tag": "tun-in", "auto_route": false, "mtu": 1140 }
+  ],
+  "outbounds": [
+    {
+      "type": "ostp",
+      "tag": "proxy",
+      "server": "YOUR_SERVER_IP",
+      "port": 50000,
+      "access_key": "YOUR_SECRET_KEY",
+      "transport": { "type": "udp" }
+    },
+    { "type": "direct", "tag": "direct" },
+    { "type": "block", "tag": "block" }
+  ],
+  "routing": {
+    "rules": [
+      { "domain_suffix": ["localhost"], "outbound": "direct" }
+    ],
+    "default_outbound": "proxy"
+  }
 }
 ```
+
+> **Note:** Upgrading from v0.2.x? Read the [v0.3.1 Migration Guide](MIGRATION_V0_3_1.md).
 
 ### 3. Run
 

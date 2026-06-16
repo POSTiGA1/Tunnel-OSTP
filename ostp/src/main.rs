@@ -65,7 +65,7 @@ struct Args {
     proxy_env_clear: bool,
 }
 
-fn parse_ostp_link(link: &str) -> Result<ClientConfig> {
+fn parse_ostp_link(link: &str) -> Result<serde_json::Value> {
     let parsed = url::Url::parse(link)
         .map_err(|e| anyhow!("Failed to parse share link URL: {e}"))?;
 
@@ -98,29 +98,55 @@ fn parse_ostp_link(link: &str) -> Result<ClientConfig> {
         }
     }
 
-    Ok(ClientConfig {
-        server,
-        access_key,
-        mtu: None,
-        transport: Some(TransportConfigRaw {
-            mode: Some(transport_mode),
-            stealth_sni: Some(sni.clone()),
-            wss: Some(wss_enabled),
-        }),
-        socks5_bind: Some("127.0.0.1:1088".to_string()),
-        tun: Some(TunConfig {
-            enable: tun_enabled,
-            wintun_path: Some("./wintun.dll".to_string()),
-            ipv4_address: Some("10.1.0.2/24".to_string()),
-            dns: tun_dns,
-            kill_switch: Some(false),
-        }),
-
-        debug: Some(false),
-        exclude: None,
-        mux: None,
-        gui: None,
-    })
+    Ok(serde_json::json!({
+        "version": "0.3.1",
+        "log": {
+            "level": "info"
+        },
+        "inbounds": [
+            {
+                "type": "tun",
+                "tag": "tun-in",
+                "auto_route": tun_enabled,
+                "mtu": 1140
+            },
+            {
+                "type": "local_proxy",
+                "tag": "socks-in",
+                "protocol": "socks",
+                "listen": "127.0.0.1",
+                "port": 1088
+            }
+        ],
+        "outbounds": [
+            {
+                "type": "ostp",
+                "tag": "proxy",
+                "server": parsed.host_str().unwrap_or(""),
+                "port": parsed.port().unwrap_or(50000),
+                "access_key": access_key,
+                "transport": {
+                    "type": transport_mode
+                },
+                "multiplex": {
+                    "enabled": false,
+                    "sessions": 1
+                }
+            },
+            {
+                "type": "direct",
+                "tag": "direct"
+            },
+            {
+                "type": "block",
+                "tag": "block"
+            }
+        ],
+        "routing": {
+            "rules": [],
+            "default_outbound": "proxy"
+        }
+    }))
 }
 
 fn generate_secure_key(format_type: &str) -> String {
@@ -148,7 +174,7 @@ fn parse_outbound_action(value: Option<String>) -> ostp_server::OutboundAction {
 #[serde(tag = "mode", rename_all = "lowercase")]
 enum AppMode {
     Server(ServerConfig),
-    Client(ClientConfig),
+    Client(serde_json::Value),
     Relay(RelayServerConfig),
 }
 
@@ -178,8 +204,11 @@ impl UnifiedConfig {
                 }
             }
             AppMode::Client(cfg) => {
-                if cfg.access_key.is_empty() {
-                    anyhow::bail!("Client configuration must contain an access_key.");
+                if let Some(outbounds) = cfg.get("outbounds").and_then(|o| o.as_array()) {
+                    let has_proxy = outbounds.iter().any(|o| o.get("type").and_then(|t| t.as_str()) == Some("ostp"));
+                    if !has_proxy {
+                        anyhow::bail!("Client configuration must contain an ostp outbound proxy.");
+                    }
                 }
             }
             AppMode::Relay(cfg) => {
@@ -222,9 +251,35 @@ impl UserConfig {
     pub fn limit(&self) -> Option<u64> {
         match self {
             UserConfig::KeyOnly(_) => None,
-            UserConfig::Detailed { limit_bytes, .. } => limit_bytes.clone(),
+            UserConfig::Detailed { limit_bytes, .. } => *limit_bytes,
         }
     }
+}
+
+#[derive(Debug, Deserialize, Serialize)]
+struct OutboundConfig {
+    enabled: bool,
+    protocol: String,
+    address: String,
+    port: u16,
+    #[serde(default)]
+    rules: Vec<OutboundRule>,
+    default_action: Option<String>,
+}
+
+#[derive(Debug, Deserialize, Serialize)]
+struct OutboundRule {
+    domain_suffix: Option<Vec<String>>,
+    ip_cidr: Option<Vec<String>>,
+    protocol: Option<String>,
+    action: Option<String>,
+}
+
+#[derive(Debug, Deserialize, Serialize, Clone)]
+struct TransportConfigRaw {
+    mode: Option<String>,
+    stealth_sni: Option<String>,
+    wss: Option<bool>,
 }
 
 #[derive(Debug, Deserialize, Serialize)]
@@ -302,68 +357,7 @@ struct FallbackCfg {
     target: Option<String>,
 }
 
-#[derive(Debug, Deserialize, Serialize)]
-struct ClientConfig {
-    server: String,
-    access_key: String,
-    mtu: Option<usize>,
-    socks5_bind: Option<String>,
-    tun: Option<TunConfig>,
-    debug: Option<bool>,
-    exclude: Option<ExcludeConfig>,
-    mux: Option<MuxConfig>,
-    transport: Option<TransportConfigRaw>,
-    gui: Option<serde_json::Value>,
-}
 
-#[derive(Debug, Deserialize, Serialize, Clone)]
-struct TransportConfigRaw {
-    mode: Option<String>,
-    stealth_sni: Option<String>,
-    wss: Option<bool>,
-}
-
-#[derive(Debug, Deserialize, Serialize, Clone)]
-struct TunConfig {
-    enable: bool,
-    wintun_path: Option<String>,
-    ipv4_address: Option<String>,
-    dns: Option<String>,
-    kill_switch: Option<bool>,
-}
-
-
-#[derive(Debug, Deserialize, Serialize)]
-struct OutboundConfig {
-    enabled: bool,
-    protocol: String,
-    address: String,
-    port: u16,
-    #[serde(default)]
-    rules: Vec<OutboundRule>,
-    default_action: Option<String>,
-}
-
-#[derive(Debug, Deserialize, Serialize)]
-struct OutboundRule {
-    domain_suffix: Option<Vec<String>>,
-    ip_cidr: Option<Vec<String>>,
-    protocol: Option<String>,
-    action: Option<String>,
-}
-
-#[derive(Debug, Deserialize, Serialize)]
-struct ExcludeConfig {
-    domains: Option<Vec<String>>,
-    ips: Option<Vec<String>>,
-    processes: Option<Vec<String>>,
-}
-
-#[derive(Debug, Deserialize, Serialize)]
-struct MuxConfig {
-    enabled: Option<bool>,
-    sessions: Option<usize>,
-}
 
 #[tokio::main]
 async fn main() -> Result<()> {
@@ -679,34 +673,68 @@ fn run_setup_wizard(config_path: &std::path::Path) -> Result<()> {
             let _ = key_for_gen;
             let _ = &sni;
 
+            let server_parts: Vec<&str> = server.split(':').collect();
+            let server_host = server_parts.get(0).unwrap_or(&"127.0.0.1");
+            let server_port = server_parts.get(1).unwrap_or(&"50000").parse::<u16>().unwrap_or(50000);
+            
+            let socks_parts: Vec<&str> = socks_bind.split(':').collect();
+            let socks_host = socks_parts.get(0).unwrap_or(&"127.0.0.1");
+            let socks_port = socks_parts.get(1).unwrap_or(&"1088").parse::<u16>().unwrap_or(1088);
+
             let client_json = serde_json::json!({
                 "mode": "client",
-                "log_level": "info",
-                "server": server,
-                "access_key": access_key,
-                "socks5_bind": socks_bind,
-                "tun": {
-                    "enable": tun_enable,
-                    "wintun_path": "./wintun.dll",
-                    "ipv4_address": "10.1.0.2/24",
-                    "dns": tun_dns,
-                    "kill_switch": kill_switch
+                "version": "0.3.1",
+                "log": {
+                    "level": "info"
                 },
-                "exclude": {
-                    "domains": ["localhost", "127.0.0.1"],
-                    "ips": [],
-                    "processes": []
-                },
-                "transport": {
-                    "mode": transport_mode,
-                    "stealth_sni": "www.microsoft.com",
-                    "wss": false
-                },
-                "mux": {
-                    "enabled": mux_enable,
-                    "sessions": mux_sessions
-                },
-                "debug": false
+                "inbounds": [
+                    {
+                        "type": "tun",
+                        "tag": "tun-in",
+                        "auto_route": tun_enable,
+                        "mtu": 1140
+                    },
+                    {
+                        "type": "local_proxy",
+                        "tag": "socks-in",
+                        "protocol": "socks",
+                        "listen": socks_host,
+                        "port": socks_port
+                    }
+                ],
+                "outbounds": [
+                    {
+                        "type": "ostp",
+                        "tag": "proxy",
+                        "server": server_host,
+                        "port": server_port,
+                        "access_key": access_key,
+                        "transport": {
+                            "type": transport_mode
+                        },
+                        "multiplex": {
+                            "enabled": mux_enable,
+                            "sessions": mux_sessions
+                        }
+                    },
+                    {
+                        "type": "direct",
+                        "tag": "direct"
+                    },
+                    {
+                        "type": "block",
+                        "tag": "block"
+                    }
+                ],
+                "routing": {
+                    "rules": [
+                        {
+                            "domain_suffix": ["localhost", "127.0.0.1"],
+                            "outbound": "direct"
+                        }
+                    ],
+                    "default_outbound": "proxy"
+                }
             });
 
             let actual_path = wizard_save_config(config_path, &client_json)?;
@@ -755,6 +783,7 @@ fn run_setup_wizard(config_path: &std::path::Path) -> Result<()> {
             // intentional: step text then daemon call below
             let server_json = serde_json::json!({
                 "mode": "server",
+                "version": "0.3.1",
                 "log_level": "info",
                 "listen": listen,
                 "access_keys": access_keys,
@@ -867,6 +896,7 @@ fn run_setup_wizard(config_path: &std::path::Path) -> Result<()> {
             let panel_bind = format!("0.0.0.0:{}", panel_port);
             let server_json = serde_json::json!({
                 "mode": "server",
+                "version": "0.3.1",
                 "log_level": "info",
                 "listen": listen,
                 "access_keys": access_keys,
@@ -929,6 +959,7 @@ fn run_setup_wizard(config_path: &std::path::Path) -> Result<()> {
             wizard_step(2, TOTAL, "Saving configuration");
             let relay_json = serde_json::json!({
                 "mode": "relay",
+                "version": "0.3.1",
                 "listen": listen,
                 "upstream_tcp": upstream,
                 "upstream_udp": upstream,
@@ -1060,9 +1091,15 @@ async fn run_app() -> Result<()> {
                 let mut stripped = json_comments::StripComments::new(content.as_bytes());
                 if let Ok(config) = serde_json::from_reader::<_, UnifiedConfig>(&mut stripped) {
                     if let AppMode::Client(c) = config.mode {
-                        if let Some(bind) = c.socks5_bind {
-                            if let Some(p) = bind.split(':').last().and_then(|s| s.parse::<u16>().ok()) {
-                                port = p;
+                        let (migrated, _) = ostp_client::config::ClientConfig::migrate_json(c);
+                        if let Some(inbounds) = migrated.get("inbounds").and_then(|i| i.as_array()) {
+                            for inbound in inbounds {
+                                if inbound.get("type").and_then(|t| t.as_str()) == Some("local_proxy") {
+                                    if let Some(p) = inbound.get("port").and_then(|p| p.as_u64()) {
+                                        port = p as u16;
+                                        break;
+                                    }
+                                }
                             }
                         }
                     }
@@ -1150,8 +1187,14 @@ async fn run_app() -> Result<()> {
         let mut input = String::new();
         std::io::stdin().read_line(&mut input).unwrap();
         if input.trim().eq_ignore_ascii_case("y") {
-            if let Some(tun) = &mut client_cfg.tun {
-                tun.enable = true;
+            if let Some(i_val) = client_cfg.get_mut("inbounds") {
+                if let Some(inbounds) = i_val.as_array_mut() {
+                    for inbound in inbounds.iter_mut() {
+                        if inbound.get("type").and_then(|t| t.as_str()) == Some("tun") {
+                            inbound["auto_route"] = serde_json::json!(true);
+                        }
+                    }
+                }
             }
         }
         
@@ -1170,14 +1213,17 @@ async fn run_app() -> Result<()> {
                     sessions = s;
                 }
             }
-            if client_cfg.mux.is_none() {
-                client_cfg.mux = Some(MuxConfig {
-                    enabled: Some(true),
-                    sessions: Some(sessions),
-                });
-            } else if let Some(mux) = &mut client_cfg.mux {
-                mux.enabled = Some(true);
-                mux.sessions = Some(sessions);
+            if let Some(o_val) = client_cfg.get_mut("outbounds") {
+                if let Some(outbounds) = o_val.as_array_mut() {
+                    for outbound in outbounds.iter_mut() {
+                        if outbound.get("type").and_then(|t| t.as_str()) == Some("ostp") {
+                            outbound["multiplex"] = serde_json::json!({
+                                "enabled": true,
+                                "sessions": sessions
+                            });
+                        }
+                    }
+                }
             }
         }
         
@@ -1186,7 +1232,7 @@ async fn run_app() -> Result<()> {
         input.clear();
         std::io::stdin().read_line(&mut input).unwrap();
         if input.trim().eq_ignore_ascii_case("y") {
-            client_cfg.debug = Some(true);
+            client_cfg["log"]["level"] = serde_json::json!("debug");
         }
 
         return run_client_directly(client_cfg).await;
@@ -1226,8 +1272,24 @@ async fn run_app() -> Result<()> {
                     }
                     AppMode::Client(c) => {
                         println!("{} Config OK: client mode", "[ostp]".green().bold());
-                        println!("  Server: {}", c.server.cyan());
-                        println!("  Key: {}...", &c.access_key[..8.min(c.access_key.len())].yellow());
+                        let (migrated, _) = ostp_client::config::ClientConfig::migrate_json(c.clone());
+                        let mut display_server = "unknown";
+                        let mut display_key = "unknown";
+                        if let Some(outbounds) = migrated.get("outbounds").and_then(|o| o.as_array()) {
+                            for outbound in outbounds {
+                                if outbound.get("type").and_then(|t| t.as_str()) == Some("ostp") {
+                                    if let Some(s) = outbound.get("server").and_then(|s| s.as_str()) {
+                                        display_server = s;
+                                    }
+                                    if let Some(k) = outbound.get("access_key").and_then(|k| k.as_str()) {
+                                        display_key = k;
+                                    }
+                                    break;
+                                }
+                            }
+                        }
+                        println!("  Server: {}", display_server.cyan());
+                        println!("  Key: {}...", &display_key[..8.min(display_key.len())].yellow());
                     }
                     AppMode::Relay(r) => {
                         println!("{} Config OK: relay mode", "[ostp]".green().bold());
@@ -1601,46 +1663,26 @@ fn cmd_update() -> Result<()> {
     anyhow::bail!("The 'update' command is only supported on Linux/Unix systems.");
 }
 
-async fn run_client_directly(client_cfg: ClientConfig) -> Result<()> {
-    let is_tun_enabled = client_cfg.tun.as_ref().map(|t| t.enable).unwrap_or(false);
+async fn run_client_directly(client_cfg: serde_json::Value) -> Result<()> {
+    let (migrated, _) = ostp_client::config::ClientConfig::migrate_json(client_cfg);
+    let client_conf: ostp_client::config::ClientConfig = serde_json::from_value(migrated)?;
+
+    let mut is_tun_enabled = false;
+    for inbound in &client_conf.inbounds {
+        if matches!(inbound, ostp_client::config::InboundConfig::Tun { .. }) {
+            is_tun_enabled = true;
+            break;
+        }
+    }
+
     let mode_str = if is_tun_enabled { "tun" } else { "proxy" };
-    println!("{} Starting client (mode={}, server={})", "[ostp]".cyan().bold(), mode_str.yellow(), client_cfg.server.cyan());    let client_conf = ostp_client::config::ClientConfig {
-        mode: if is_tun_enabled { "tun".to_string() } else { "proxy".to_string() },
-        tun_stack: "native".to_string(),
-        debug: client_cfg.debug.unwrap_or(false),
-        ostp: ostp_client::config::OstpConfig {
-            server_addr: client_cfg.server.clone(),
-            local_bind_addr: "0.0.0.0:0".to_string(),
-            access_key: client_cfg.access_key.clone(),
-            handshake_timeout_ms: 5000,
-            io_timeout_ms: 2500,
-            mtu: client_cfg.mtu.unwrap_or(1350),
-            keepalive_interval_sec: 5,
-        },
-        local_proxy: ostp_client::config::LocalProxyConfig {
-            bind_addr: client_cfg.socks5_bind.clone().unwrap_or_else(|| "127.0.0.1:1088".to_string()),
-            connect_timeout_ms: 5000,
-        },
-        exclusions: ostp_client::config::ExclusionConfig {
-            domains: client_cfg.exclude.as_ref().and_then(|e| e.domains.clone()).unwrap_or_default(),
-            ips: client_cfg.exclude.as_ref().and_then(|e| e.ips.clone()).unwrap_or_default(),
-            processes: client_cfg.exclude.as_ref().and_then(|e| e.processes.clone()).unwrap_or_default(),
-        },
-        multiplex: ostp_client::config::MultiplexConfig {
-            enabled: client_cfg.mux.as_ref().and_then(|m| m.enabled).unwrap_or(false),
-            sessions: client_cfg.mux.as_ref().and_then(|m| m.sessions).unwrap_or(1),
-        },
-        transport: ostp_client::config::TransportConfig {
-            mode: client_cfg.transport.as_ref().and_then(|t| t.mode.clone()).unwrap_or_else(|| "udp".to_string()),
-            stealth_sni: client_cfg.transport.as_ref().and_then(|t| t.stealth_sni.clone()).unwrap_or_else(|| "microsoft.com".to_string()),
-            wss: client_cfg.transport.as_ref().and_then(|t| t.wss).unwrap_or(false),
-        },
-        dns_server: client_cfg.tun.as_ref().and_then(|t| t.dns.clone()),
-        kill_switch: client_cfg.tun.as_ref().and_then(|t| t.kill_switch).unwrap_or(false),
-        gui: None,
-    };
+    println!("{} Starting client (mode={})", "[ostp]".cyan().bold(), mode_str.yellow());
 
     // Run the client implementation
-    ostp_client::runner::run_client(client_conf).await?;
+    let (_shutdown_tx, rx) = tokio::sync::watch::channel(false);
+    let metrics = std::sync::Arc::new(ostp_client::bridge::BridgeMetrics::default());
+    
+    // Launch the core runner directly.
+    ostp_client::runner::run_client_core(client_conf, metrics, rx, None).await?;
     Ok(())
 }

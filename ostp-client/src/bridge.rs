@@ -7,6 +7,17 @@ pub struct BridgeMetrics {
     pub rtt_ms: AtomicU32,
 }
 
+impl Default for BridgeMetrics {
+    fn default() -> Self {
+        Self {
+            bytes_sent: portable_atomic::AtomicU64::new(0),
+            bytes_recv: portable_atomic::AtomicU64::new(0),
+            connection_state: portable_atomic::AtomicU8::new(0),
+            rtt_ms: portable_atomic::AtomicU32::new(0),
+        }
+    }
+}
+
 pub fn set_socket_protector<F>(f: F)
 where
     F: Fn(i32) -> bool + Send + Sync + 'static,

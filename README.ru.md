@@ -110,39 +110,36 @@ irm https://raw.githubusercontent.com/ospab/ostp/master/scripts/install.ps1 | ie
 ```jsonc
 {
   "mode": "client",
-  "server": "IP_СЕРВЕРА:50000",
-  "access_key": "ВАШ_КЛЮЧ",
-  "socks5_bind": "127.0.0.1:1088",
-  "debug": false,
-  // Настройки транспорта (udp или uot)
-  "transport": {
-    "mode": "udp",
-    "stealth_sni": "vk.com"
-  },
-  // TUN-режим (полносистемный VPN)
-  "tun": {
-    "enable": false,
-    "dns": "1.1.1.1"
-  },
-  // Мультиплексирование: несколько UDP-сессий
-  "mux": {
-    "enabled": false,
-    "sessions": 2
-  },
-  // TURN-реле для заблокированных сетей
-  "turn": {
-    "enabled": false,
-    "server_addr": "turn.example.com:3478",
-    "username": "user",
-    "access_key": "pass"
-  },
-  // Исключения (идут напрямую, минуя туннель)
-  "exclude": {
-    "domains": ["example.local"],
-    "ips": ["192.168.0.0/16"]
+  "version": "0.3.1",
+  "log": { "level": "info" },
+  "inbounds": [
+    { "type": "local_proxy", "tag": "socks-in", "protocol": "socks", "listen": "127.0.0.1", "port": 1088 },
+    { "type": "tun", "tag": "tun-in", "auto_route": false, "mtu": 1140 }
+  ],
+  "outbounds": [
+    {
+      "type": "ostp",
+      "tag": "proxy",
+      "server": "IP_СЕРВЕРА",
+      "port": 50000,
+      "access_key": "ВАШ_КЛЮЧ",
+      "transport": { "type": "udp" },
+      "multiplex": { "enabled": false, "sessions": 1 }
+    },
+    { "type": "direct", "tag": "direct" },
+    { "type": "block", "tag": "block" }
+  ],
+  "routing": {
+    "rules": [
+      { "domain_suffix": ["example.local"], "outbound": "direct" },
+      { "ip_cidr": ["192.168.0.0/16"], "outbound": "direct" }
+    ],
+    "default_outbound": "proxy"
   }
 }
 ```
+
+> **Примечание:** Обновляетесь с v0.2.x? Прочтите [Гайд по миграции на v0.3.1](MIGRATION_V0_3_1.md).
 
 ---
 
