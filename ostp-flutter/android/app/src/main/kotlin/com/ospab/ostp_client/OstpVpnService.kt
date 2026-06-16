@@ -16,6 +16,7 @@ import java.io.IOException
 import androidx.annotation.Keep
 import androidx.core.app.NotificationCompat
 import androidx.core.app.NotificationManagerCompat
+import androidx.core.app.ServiceCompat
 
 @Keep
 class OstpVpnService : VpnService() {
@@ -56,7 +57,7 @@ class OstpVpnService : VpnService() {
         if (action == "START") {
             val configJson = intent.getStringExtra("configJson") ?: return START_NOT_STICKY
             // Launch foreground immediately so Android doesn't kill us
-            startForeground(NOTIF_ID, buildNotification(connecting = true))
+            ServiceCompat.startForeground(this, NOTIF_ID, buildNotification(connecting = true), ServiceInfo.FOREGROUND_SERVICE_TYPE_CONNECTED_DEVICE)
             startVpn(configJson)
         } else if (action == "STOP") {
             stopVpn()
@@ -271,6 +272,9 @@ class OstpVpnService : VpnService() {
 
         } catch (e: Throwable) {
             Log.e("OstpVpnService", "Error starting VPN", e)
+            android.os.Handler(android.os.Looper.getMainLooper()).post {
+                android.widget.Toast.makeText(applicationContext, "VPN Error: ${e.message}", android.widget.Toast.LENGTH_LONG).show()
+            }
             stopVpn()
         }
         

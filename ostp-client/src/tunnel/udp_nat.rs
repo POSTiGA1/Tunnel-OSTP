@@ -50,17 +50,17 @@ pub async fn run_udp_nat(
                                 if !should_bypass {
                                     if let Some(proc_name) = crate::tunnel::process_lookup::get_process_name_from_port_udp(src.port()) {
                                         if debug {
-                                            tracing::info!("TUN UDP lookup: port {} -> process {}", src.port(), proc_name);
+                                            tracing::debug!("TUN UDP lookup: port {} -> process {}", src.port(), proc_name);
                                         }
                                         if matcher_guard.match_process(&proc_name) {
                                             should_bypass = true;
                                             if debug {
-                                                tracing::info!("TUN UDP BYPASS (Process match): {} ({} → {})", proc_name, src, dst);
+                                                tracing::debug!("TUN UDP BYPASS (Process match): {} ({} → {})", proc_name, src, dst);
                                             }
                                         }
                                     } else {
                                         if debug {
-                                            tracing::info!("TUN UDP lookup: port {} -> no process found", src.port());
+                                            tracing::debug!("TUN UDP lookup: port {} -> no process found", src.port());
                                         }
                                     }
                                 }

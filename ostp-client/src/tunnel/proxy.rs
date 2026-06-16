@@ -665,9 +665,7 @@ async fn handle_proxy_client(
             ).await;
         }
 
-        if true {
-            tracing::info!("proxy CONNECT stream_id={stream_id} target={target}");
-        }
+        tracing::debug!("proxy CONNECT stream_id={stream_id} target={target}");
         let target_host = if let Some((host, _)) = split_host_port(&target) { host } else { target.clone() };
         let target_port = match split_host_port(&target) { Some((_, p)) => p, None => 0 };
         if matcher.should_bypass_target(&target_host, target_port, connect_timeout).await {

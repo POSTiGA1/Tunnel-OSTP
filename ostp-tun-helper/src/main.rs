@@ -61,23 +61,27 @@ async fn main() -> Result<()> {
         }
     }
 
-    let mut expected_token = String::new();
+    let mut expected_token = std::env::var("OSTP_TUN_TOKEN").unwrap_or_default();
     let mut port = 53211u16;
     let args: Vec<String> = std::env::args().collect();
     for i in 1..args.len() {
         if args[i] == "--port" && i + 1 < args.len() {
             port = args[i + 1].parse().unwrap_or(53211);
         }
-        if args[i] == "--token" && i + 1 < args.len() {
-            expected_token = args[i + 1].clone();
+        if args[i] == "--token-file" && i + 1 < args.len() {
+            let path = &args[i + 1];
+            if let Ok(content) = std::fs::read_to_string(path) {
+                expected_token = content.trim().to_string();
+                let _ = std::fs::remove_file(path); // securely delete after reading
+            }
         }
     }
 
     log_to_file("Helper started (TCP mode)");
 
     if expected_token.is_empty() {
-        log_to_file("FATAL: OSTP_TUN_TOKEN environment variable is required for security. Unauthorized access denied.");
-        return Err(anyhow::anyhow!("OSTP_TUN_TOKEN environment variable is required"));
+        log_to_file("FATAL: Auth token is required for security (--token-file or OSTP_TUN_TOKEN).");
+        return Err(anyhow::anyhow!("Auth token is required"));
     }
 
     if let Err(e) = run_server(expected_token, port).await {

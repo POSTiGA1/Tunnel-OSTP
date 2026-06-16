@@ -9,6 +9,10 @@ import 'package:mobile_scanner/mobile_scanner.dart';
 import 'app_routing_screen.dart';
 import 'logs_screen.dart';
 import 'qr_scanner_screen.dart';
+import 'package:qr_flutter/qr_flutter.dart';
+import 'package:http/http.dart' as http;
+import 'package:url_launcher/url_launcher.dart';
+import 'package:package_info_plus/package_info_plus.dart';
 
 class SettingsScreen extends StatefulWidget {
   final SharedPreferences prefs;
@@ -39,7 +43,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
   String _tunStack = 'ostp'; // 'system' | 'ostp'
   bool _muxEnabled = false;
   late TextEditingController _muxSessionsCtrl;
-
+  bool _isCheckingUpdates = false;
 
   @override
   void initState() {
@@ -174,6 +178,11 @@ class _SettingsScreenState extends State<SettingsScreen> {
           onPressed: () => Navigator.pop(context),
         ),
         actions: [
+          IconButton(
+            icon: const Icon(Icons.share_rounded),
+            tooltip: 'Share Config',
+            onPressed: _showShareModal,
+          ),
           IconButton(
             icon: const Icon(Icons.qr_code_scanner_rounded),
             onPressed: () async {
@@ -487,10 +496,190 @@ class _SettingsScreenState extends State<SettingsScreen> {
             ),
           ),
           
+          const SizedBox(height: 16),
+          
+          InkWell(
+            onTap: _isCheckingUpdates ? null : _checkForUpdates,
+            child: Container(
+              padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 16),
+              decoration: BoxDecoration(
+                color: Colors.white.withOpacity(0.02),
+                borderRadius: BorderRadius.circular(16),
+                border: Border.all(color: Colors.white.withOpacity(0.05)),
+              ),
+              child: Row(
+                children: [
+                  Icon(Icons.system_update_rounded, color: Colors.white70, size: 24),
+                  const SizedBox(width: 16),
+                  Expanded(
+                    child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        Text(
+                          'Check for Updates',
+                          style: TextStyle(fontWeight: FontWeight.bold, fontSize: 16, color: Colors.white),
+                        ),
+                        SizedBox(height: 4),
+                        Text(
+                          _isCheckingUpdates ? 'Checking...' : 'Check latest release on GitHub',
+                          style: TextStyle(fontSize: 13, color: Colors.white54),
+                        ),
+                      ],
+                    ),
+                  ),
+                  if (_isCheckingUpdates)
+                    const SizedBox(
+                      width: 16,
+                      height: 16,
+                      child: CircularProgressIndicator(strokeWidth: 2, color: Colors.white54),
+                    )
+                  else
+                    const Icon(Icons.arrow_forward_ios_rounded, color: Colors.white54, size: 16),
+                ],
+              ),
+            ),
+          ),
+          
           const SizedBox(height: 40),
         ],
       ),
     );
+  }
+
+  String _generateShareUrl() {
+    final host = _serverCtrl.text.trim();
+    final key = Uri.encodeComponent(_keyCtrl.text.trim());
+    if (host.isEmpty || key.isEmpty) return '';
+
+    final queryParams = <String>[];
+    if (_stealthSniCtrl.text.trim().isNotEmpty) {
+      queryParams.add('sni=${Uri.encodeComponent(_stealthSniCtrl.text.trim())}');
+    }
+    if (_pbkCtrl.text.trim().isNotEmpty) {
+      queryParams.add('pbk=${Uri.encodeComponent(_pbkCtrl.text.trim())}');
+    }
+    if (_sidCtrl.text.trim().isNotEmpty) {
+      queryParams.add('sid=${Uri.encodeComponent(_sidCtrl.text.trim())}');
+    }
+    if (_wss) {
+      queryParams.add('wss=true');
+    }
+    if (_transportMode != 'udp') {
+      queryParams.add('type=$_transportMode');
+    }
+    
+    final queryString = queryParams.isEmpty ? '' : '?${queryParams.join('&')}';
+    return 'ostp://$key@$host$queryString';
+  }
+
+  void _showShareModal() {
+    final url = _generateShareUrl();
+    if (url.isEmpty) {
+      ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('Server Address and Access Key are required to share.')));
+      return;
+    }
+
+    showDialog(
+      context: context,
+      builder: (context) {
+        return AlertDialog(
+          backgroundColor: Theme.of(context).colorScheme.surface,
+          shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(20)),
+          title: const Text('Share Config', textAlign: TextAlign.center),
+          content: Column(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              Container(
+                padding: const EdgeInsets.all(16),
+                decoration: BoxDecoration(
+                  color: Colors.white,
+                  borderRadius: BorderRadius.circular(16),
+                ),
+                child: QrImageView(
+                  data: url,
+                  version: QrVersions.auto,
+                  size: 200.0,
+                ),
+              ),
+              const SizedBox(height: 20),
+              ElevatedButton.icon(
+                onPressed: () {
+                  Clipboard.setData(ClipboardData(text: url));
+                  ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('Copied to clipboard')));
+                  Navigator.pop(context);
+                },
+                icon: const Icon(Icons.copy_rounded, color: Colors.white),
+                label: const Text('Copy Link', style: TextStyle(color: Colors.white)),
+                style: ElevatedButton.styleFrom(
+                  backgroundColor: Theme.of(context).colorScheme.primary,
+                  padding: const EdgeInsets.symmetric(horizontal: 24, vertical: 12),
+                  shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
+                ),
+              )
+            ],
+          ),
+          actions: [
+            TextButton(
+              onPressed: () => Navigator.pop(context),
+              child: const Text('Close'),
+            )
+          ],
+        );
+      }
+    );
+  }
+
+  Future<void> _checkForUpdates() async {
+    if (_isCheckingUpdates) return;
+    setState(() { _isCheckingUpdates = true; });
+    try {
+      final packageInfo = await PackageInfo.fromPlatform();
+      final currentVersion = packageInfo.version;
+
+      final response = await http.get(Uri.parse('https://api.github.com/repos/ospab/ostp/releases/latest'));
+      if (response.statusCode == 200) {
+        final data = json.decode(response.body);
+        final latestVersion = (data['tag_name'] as String).replaceAll('v', '');
+        
+        final hasUpdate = latestVersion != currentVersion;
+
+        if (!mounted) return;
+        showDialog(
+          context: context,
+          builder: (context) {
+            return AlertDialog(
+              backgroundColor: Theme.of(context).colorScheme.surface,
+              title: Text(hasUpdate ? 'Update Available!' : 'Up to Date'),
+              content: Text(hasUpdate 
+                ? 'A new version ($latestVersion) is available on GitHub. You are currently running version $currentVersion.'
+                : 'You are running the latest version ($currentVersion).'),
+              actions: [
+                TextButton(
+                  onPressed: () => Navigator.pop(context),
+                  child: const Text('Close'),
+                ),
+                if (hasUpdate)
+                  TextButton(
+                    onPressed: () {
+                      Navigator.pop(context);
+                      final url = Uri.parse(data['html_url'] ?? 'https://github.com/ospab/ostp/releases/latest');
+                      launchUrl(url, mode: LaunchMode.externalApplication);
+                    },
+                    child: const Text('Download'),
+                  )
+              ],
+            );
+          }
+        );
+      } else {
+        throw Exception('HTTP ${response.statusCode}');
+      }
+    } catch (e) {
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text('Error checking updates: $e')));
+    } finally {
+      if (mounted) setState(() { _isCheckingUpdates = false; });
+    }
   }
 }
 

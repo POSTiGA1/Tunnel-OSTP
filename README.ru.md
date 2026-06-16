@@ -8,7 +8,9 @@
 ![Crypto](https://img.shields.io/badge/Crypto-Noise__NNpsk0-blueviolet?style=for-the-badge)
 ![Transport](https://img.shields.io/badge/Transport-UDP%20ARQ-informational?style=for-the-badge)
 
-**OSTP** (Ospab Stealth Transport Protocol) — высокопроизводительный, устойчивый к цензуре zero-signature транспортный протокол. Реализует собственный надёжный ARQ-транспорт поверх UDP, а также режим UoT (UDP-over-TCP). Каждый байт, включая заголовки пакетов, криптографически неотличим от случайного шума. Полностью устойчив к Deep Packet Inspection (DPI), активному зондированию и статистическому анализу трафика.
+> Быстрый кастомный зашифрованный транспортный протокол на Rust.
+
+**OSTP** (Ospab Stealth Transport Protocol) — кастомный транспортный протокол. Реализует собственный ARQ-транспорт поверх UDP, а также режим UoT (UDP-over-TCP). Каждый байт, включая заголовки пакетов, криптографически неотличим от случайного шума, что делает его устойчивым к системам глубокого анализа трафика (DPI).
 
 ---
 

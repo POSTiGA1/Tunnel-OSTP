@@ -255,17 +255,17 @@ pub async fn run_native_tunnel(
                 if !should_bypass {
                     if let Some(proc_name) = crate::tunnel::process_lookup::get_process_name_from_port(local.port()) {
                         if debug {
-                            tracing::info!("TUN TCP lookup: port {} -> process {}", local.port(), proc_name);
+                            tracing::debug!("TUN TCP lookup: port {} -> process {}", local.port(), proc_name);
                         }
                         if matcher.match_process(&proc_name) {
                             if debug {
-                                tracing::info!("TUN TCP BYPASS (Process match): {} → {remote}", proc_name);
+                                tracing::debug!("TUN TCP BYPASS (Process match): {} → {remote}", proc_name);
                             }
                             should_bypass = true;
                         }
                     } else {
                         if debug {
-                            tracing::info!("TUN TCP lookup: port {} -> no process found", local.port());
+                            tracing::debug!("TUN TCP lookup: port {} -> no process found", local.port());
                         }
                     }
                 }

@@ -34,9 +34,9 @@ use crate::{
     Runner,
 };
 
-// NOTE: Default buffer could contain 20 AEAD packets
-const DEFAULT_TCP_SEND_BUFFER_SIZE: u32 = 0x3FFF * 20;
-const DEFAULT_TCP_RECV_BUFFER_SIZE: u32 = 0x3FFF * 20;
+// Reduced buffer sizes to 16KB to prevent excessive memory overhead (was 0x3FFF * 20 = 327KB per buffer)
+const DEFAULT_TCP_SEND_BUFFER_SIZE: u32 = 16384;
+const DEFAULT_TCP_RECV_BUFFER_SIZE: u32 = 16384;
 
 #[derive(Debug, Clone, Copy, Eq, PartialEq)]
 enum TcpSocketState {
@@ -542,7 +542,7 @@ impl AsyncWrite for TcpStream {
     fn poll_shutdown(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<std::io::Result<()>> {
         let mut control = self.control.lock();
 
-        if matches!(control.send_state, TcpSocketState::Closed) {
+        if matches!(control.send_state, TcpSocketState::Closed | TcpSocketState::Closing) {
             return Ok(()).into();
         }
 

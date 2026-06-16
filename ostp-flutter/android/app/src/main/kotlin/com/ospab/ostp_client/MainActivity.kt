@@ -133,6 +133,6 @@ class MainActivity : FlutterActivity() {
         if (pendingConfigJson != null) {
             intent.putExtra("configJson", pendingConfigJson)
         }
-        startService(intent)
+        androidx.core.content.ContextCompat.startForegroundService(this, intent)
     }
 }

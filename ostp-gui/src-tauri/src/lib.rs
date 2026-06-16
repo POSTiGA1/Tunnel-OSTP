@@ -720,7 +720,13 @@ fn launch_as_admin(exe: &std::path::PathBuf, token: &str, port: u16) -> anyhow::
 
     let exe_wstr: Vec<u16> = exe.as_os_str().encode_wide().chain(Some(0)).collect();
     let verb_wstr: Vec<u16> = OsStr::new("runas").encode_wide().chain(Some(0)).collect();
-    let params_str = format!("--port {} --token {}", port, token);
+    
+    // Write token to temp file for security instead of passing via cmdline
+    let temp_dir = std::env::temp_dir();
+    let token_file = temp_dir.join(format!("ostp_auth_{}.tmp", rand::random::<u32>()));
+    std::fs::write(&token_file, token)?;
+    
+    let params_str = format!("--port {} --token-file \"{}\"", port, token_file.display());
     let params_wstr: Vec<u16> = OsStr::new(&params_str).encode_wide().chain(Some(0)).collect();
     #[link(name = "shell32")] extern "system" { fn ShellExecuteW(h: *mut std::ffi::c_void, op: *const u16, f: *const u16, p: *const u16, d: *const u16, s: i32) -> isize; }
     
