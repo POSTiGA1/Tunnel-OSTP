@@ -3,13 +3,11 @@ use jni::sys::{jboolean, jstring};
 use jni::JNIEnv;
 
 use std::collections::VecDeque;
-use std::sync::{atomic::Ordering, Arc, RwLock};
+use std::sync::{Arc, RwLock};
+use std::sync::atomic::Ordering;
 use tokio::runtime::Runtime;
 use tokio::sync::{mpsc, watch};
-use ostp_client::bridge::{Bridge, BridgeMetrics};
-use ostp_client::config::ClientConfig;
-use ostp_client::tunnel;
-use ostp_client::app::{BridgeCommand, UiEvent};
+use ostp_client::bridge::BridgeMetrics;
 use std::io::Write;
 
 static LOG_TX: std::sync::OnceLock<std::sync::mpsc::Sender<String>> = std::sync::OnceLock::new();
@@ -65,7 +63,6 @@ struct SdkState {
     shutdown_tx: Option<watch::Sender<bool>>,
     metrics: Option<Arc<BridgeMetrics>>,
     tun_child: Option<std::process::Child>,
-    cmd_tx: Option<mpsc::Sender<BridgeCommand>>,
 }
 
 impl SdkState {
@@ -75,7 +72,6 @@ impl SdkState {
             shutdown_tx: None,
             metrics: None,
             tun_child: None,
-            cmd_tx: None,
         }
     }
 }
@@ -100,19 +96,9 @@ pub extern "system" fn Java_net_ostp_client_OstpClientSdk_nativeStartClient(
     _class: JClass,
     config_json: JString,
     fd: jni::sys::jint,
-    t2s_bin_path: JString,
-    local_proxy: JString,
+    _t2s_bin_path: JString,
+    _local_proxy: JString,
 ) -> jboolean {
-    let mut state = match STATE.write() {
-        Ok(s) => s,
-        Err(_) => return jni::sys::JNI_FALSE,
-    };
-
-    if state.runtime.is_some() {
-        add_log("Client is already running!".to_string());
-        return jni::sys::JNI_TRUE;
-    }
-
     init_tracing();
 
     if let Ok(jvm) = env.get_java_vm() {
@@ -160,26 +146,37 @@ pub extern "system" fn Java_net_ostp_client_OstpClientSdk_nativeStartClient(
         Err(_) => return jni::sys::JNI_FALSE,
     };
 
-    let t2s_path: String = match env.get_string(&t2s_bin_path) {
-        Ok(s) => s.into(),
-        Err(_) => return jni::sys::JNI_FALSE,
-    };
-
-    let proxy_addr: String = match env.get_string(&local_proxy) {
-        Ok(s) => s.into(),
-        Err(_) => return jni::sys::JNI_FALSE,
-    };
-
     // Parse config from JSON
-    let config: ClientConfig = match serde_json::from_str(&config_str) {
-        Ok(cfg) => cfg,
+    let parsed_val: serde_json::Value = match serde_json::from_str(&config_str) {
+        Ok(v) => v,
         Err(e) => {
             add_log(format!("Failed to parse config JSON: {e}"));
             return jni::sys::JNI_FALSE;
         }
     };
 
-    let debug = config.debug;
+    let (mut migrated, _) = ostp_client::config::ClientConfig::migrate_json(parsed_val);
+    
+    // Insert fd into TUN inbound
+    if fd > 0 {
+        if let Some(inbounds) = migrated.get_mut("inbounds").and_then(|v| v.as_array_mut()) {
+            for inbound in inbounds.iter_mut() {
+                if inbound.get("type").and_then(|t| t.as_str()) == Some("tun") {
+                    if let Some(obj) = inbound.as_object_mut() {
+                        obj.insert("fd".to_string(), serde_json::json!(fd));
+                    }
+                }
+            }
+        }
+    }
+
+    let config: ostp_client::config::ClientConfig = match serde_json::from_value(migrated) {
+        Ok(cfg) => cfg,
+        Err(e) => {
+            add_log(format!("Failed to build ClientConfig: {e}"));
+            return jni::sys::JNI_FALSE;
+        }
+    };
 
     // Create tokio runtime
     let rt = match Runtime::new() {
@@ -190,162 +187,31 @@ pub extern "system" fn Java_net_ostp_client_OstpClientSdk_nativeStartClient(
         }
     };
 
-    let (proxy_events_tx, proxy_events_rx) = mpsc::channel(512);
-    let (client_msgs_tx, client_msgs_rx) = mpsc::unbounded_channel();
-
-    let metrics = Arc::new(BridgeMetrics {
+    let metrics = Arc::new(ostp_client::bridge::BridgeMetrics {
         bytes_sent: portable_atomic::AtomicU64::new(0),
         bytes_recv: portable_atomic::AtomicU64::new(0),
         connection_state: portable_atomic::AtomicU8::new(0),
         rtt_ms: portable_atomic::AtomicU32::new(0),
     });
 
-    let bridge = match Bridge::new(&config, Arc::clone(&metrics)) {
-        Ok(b) => b,
-        Err(e) => {
-            add_log(format!("Failed to initialize Bridge: {e}"));
-            return jni::sys::JNI_FALSE;
-        }
-    };
-
-    let (ui_tx, mut ui_rx) = mpsc::channel(512);
-    let (cmd_tx, cmd_rx) = mpsc::channel(128);
-    let (shutdown_tx, shutdown_rx) = watch::channel(false);
-    let proxy_shutdown_rx = shutdown_tx.subscribe();
-    
-    // Create exclusions channel
-    let (exclusions_tx, exclusions_rx) = watch::channel(config.exclusions.clone());
-    let _exclusions_rx_tun = exclusions_tx.subscribe();
-
+    let (shutdown_tx, shutdown_rx) = tokio::sync::watch::channel(false);
     let metrics_clone = Arc::clone(&metrics);
 
-    // Spawn async tasks inside runtime
     rt.spawn(async move {
-        bridge.run(ui_tx, cmd_rx, shutdown_rx, proxy_events_rx, client_msgs_tx).await
-    });
-
-    let config_proxy = config.clone();
-    rt.spawn(async move {
-        tunnel::run_local_proxy(
-            config_proxy.local_proxy,
-            config_proxy.ostp,
-            exclusions_rx,
-            config_proxy.debug,
-            proxy_shutdown_rx,
-            proxy_events_tx,
-            client_msgs_rx,
-        )
-        .await
-    });
-
-    // Start logs receiver task
-    rt.spawn(async move {
-        while let Some(msg) = ui_rx.recv().await {
-            match msg {
-                UiEvent::Log(text) => add_log(text),
-                UiEvent::ProfileChanged(p) => add_log(format!("Profile changed: {p:?}")),
-                UiEvent::TunnelStopped => add_log("Tunnel stopped".to_string()),
-                _ => {}
-            }
+        if let Err(e) = ostp_client::runner::run_client_core(config, metrics_clone, shutdown_rx, None).await {
+            add_log(format!("OSTP Core exited with error: {}", e));
         }
     });
 
-    // Toggle tunnel to initiate handshake
-    let cmd_tx_clone = cmd_tx.clone();
-    rt.spawn(async move {
-        let _ = cmd_tx_clone.send(BridgeCommand::ToggleTunnel).await;
-    });
-
-    if config.tun_stack == "system" {
-        // Spawn tun2socks
-        let fd_str = format!("fd://{}", fd);
-        let proxy_str = format!("socks5://{}", proxy_addr);
-
-        if debug {
-            add_log(format!("Spawning tun2socks: {} -device {} -proxy {}", t2s_path, fd_str, proxy_str));
-        }
-
-        let mut cmd = std::process::Command::new(&t2s_path);
-    cmd.arg("-device")
-       .arg(&fd_str)
-       .arg("-proxy")
-       .arg(&proxy_str);
-    
-    if config.ostp.mtu > 0 {
-        cmd.arg("-mtu").arg(config.ostp.mtu.to_string());
-    }
-    
-    cmd.stdout(std::process::Stdio::piped())
-       .stderr(std::process::Stdio::piped());
-
-    let mut child = match cmd.spawn() {
-        Ok(c) => c,
-        Err(e) => {
-            add_log(format!("Failed to spawn tun2socks from Rust: {e}"));
-            return jni::sys::JNI_FALSE;
-        }
+    let mut state = match STATE.write() {
+        Ok(s) => s,
+        Err(_) => return jni::sys::JNI_FALSE,
     };
-
-    let stdout = match child.stdout.take() {
-        Some(s) => s,
-        None => {
-            add_log("Failed to capture tun2socks stdout".to_string());
-            return jni::sys::JNI_FALSE;
-        }
-    };
-    let stderr = match child.stderr.take() {
-        Some(s) => s,
-        None => {
-            add_log("Failed to capture tun2socks stderr".to_string());
-            return jni::sys::JNI_FALSE;
-        }
-    };
-
-    // Read stdout
-    std::thread::spawn(move || {
-        use std::io::{BufRead, BufReader};
-        let reader = BufReader::new(stdout);
-        for line in reader.lines() {
-            if let Ok(l) = line {
-                if debug {
-                    add_log(format!("tun2socks: {}", l));
-                }
-            }
-        }
-    });
-
-        // Read stderr & wait
-        std::thread::spawn(move || {
-            use std::io::{BufRead, BufReader};
-            let reader = BufReader::new(stderr);
-            for line in reader.lines() {
-                if let Ok(l) = line {
-                    if debug {
-                        add_log(format!("tun2socks ERROR: {}", l));
-                    }
-                }
-            }
-        });
-        state.tun_child = Some(child);
-    } else {
-        if debug {
-            add_log("Using OSTP native TUN stack. Bypassing tun2socks.".to_string());
-        }
-        let shutdown_rx_clone = shutdown_tx.subscribe();
-        let config_clone = config.clone();
-        let (exclusions_tx, exclusions_rx) = tokio::sync::watch::channel(config.exclusions.clone());
-        rt.spawn(async move {
-            let _tx = exclusions_tx; // keep tx alive
-            if let Err(e) = tunnel::native_handler::run_native_tunnel_from_fd(config_clone, shutdown_rx_clone, exclusions_rx, fd).await {
-                add_log(format!("Native TUN exited with error: {}", e));
-            }
-        });
-    }
 
     state.runtime = Some(rt);
     state.shutdown_tx = Some(shutdown_tx);
-    state.metrics = Some(metrics_clone);
-    state.cmd_tx = Some(cmd_tx);
+    state.metrics = Some(metrics);
+    state.tun_child = None;
 
     add_log("OSTP SDK: Client successfully started".to_string());
     jni::sys::JNI_TRUE
@@ -376,7 +242,6 @@ pub extern "system" fn Java_net_ostp_client_OstpClientSdk_nativeStopClient(
         let c = state.tun_child.take();
         let s = state.shutdown_tx.take();
         let r = state.runtime.take();
-        state.cmd_tx = None;
         state.metrics = None;
         (c, s, r)
     };
@@ -496,15 +361,10 @@ pub extern "system" fn Java_net_ostp_client_OstpClientSdk_notifyNetworkChanged(
     _env: JNIEnv,
     _class: JClass,
 ) {
-    let state = match STATE.read() {
+    let _state = match STATE.read() {
         Ok(s) => s,
         Err(_) => return,
     };
 
-    if let Some(ref cmd_tx) = state.cmd_tx {
-        // Use try_send since we're likely on a background thread from Android's ConnectivityManager
-        let _ = cmd_tx.try_send(ostp_client::app::BridgeCommand::NetworkChanged);
-        add_log("notifyNetworkChanged: BridgeCommand::NetworkChanged sent".to_string());
-    }
+    // No-op for now; multi-server handles network drops via keep-alives and reconnection
 }
-

@@ -331,31 +331,79 @@ async function loadConfigIntoForm() {
     const c = rawConfig.mode === 'client' ? rawConfig : null;
     if (!c) return;
 
-    inServer.value  = c.server        || '';
-    inKey.value     = c.access_key    || '';
-    inSocks.value   = c.socks5_bind   || '127.0.0.1:1088';
-    inTransport.value = c.transport?.mode || 'udp';
-    inSni.value     = c.transport?.stealth_sni || '';
-    inWss.checked   = !!c.transport?.wss;
+    if (c.version === '0.3.1' || c.outbounds !== undefined) {
+      // NEW FORMAT
+      const ostpOut = (c.outbounds || []).find(o => o.type === 'ostp');
+      if (ostpOut) {
+        inServer.value = ostpOut.server ? `${ostpOut.server}:${ostpOut.port || 50000}` : '';
+        inKey.value = ostpOut.access_key || '';
+        inTransport.value = ostpOut.transport?.type || 'udp';
+        inSni.value     = ostpOut.transport?.stealth_sni || '';
+        inWss.checked   = !!ostpOut.transport?.wss;
+        inMux.checked   = !!ostpOut.multiplex?.enabled;
+        inMuxSessions.value = ostpOut.multiplex?.sessions || '';
+      }
 
-    inMtu.value     = c.mtu           || '';
-    inTun.checked   = !!c.tun?.enable;
-    if (inKillSwitch) inKillSwitch.checked = !!c.tun?.kill_switch;
-    inMux.checked   = !!c.mux?.enabled;
-    inMuxSessions.value = c.mux?.sessions || '';
-    
-    inDns.value = c.tun?.dns || '';
-    updateKillSwitchVisibility();
+      const tunIn = (c.inbounds || []).find(i => i.type === 'tun');
+      if (tunIn) {
+        inTun.checked = true;
+        inMtu.value = tunIn.mtu || '';
+      } else {
+        inTun.checked = false;
+      }
+      
+      const socksIn = (c.inbounds || []).find(i => i.type === 'local_proxy');
+      if (socksIn) {
+        inSocks.value = `${socksIn.listen || '127.0.0.1'}:${socksIn.port || 1088}`;
+      }
 
-    inDebug.checked = !!c.debug;
+      inDns.value = ''; // DNS handling is manual in routing now, ignore here
+      if (inKillSwitch) inKillSwitch.checked = !!c.gui?.kill_switch;
+      inDebug.checked = c.log?.level === 'debug';
+      
+      const ex = c.routing?.rules || [];
+      const doms = new Set();
+      const ips = new Set();
+      const procs = new Set();
+      ex.forEach(r => {
+         if (r.outbound === 'direct') {
+             if (r.domain_suffix) r.domain_suffix.forEach(d => doms.add(d));
+             if (r.ip_cidr) r.ip_cidr.forEach(ip => ips.add(ip));
+             if (r.process_name) r.process_name.forEach(p => procs.add(p));
+         }
+      });
+      tagState.domains = doms;
+      tagState.ips = ips;
+      tagState.processes = procs;
+
+    } else {
+      // OLD FORMAT
+      inServer.value  = c.server        || '';
+      inKey.value     = c.access_key    || '';
+      inSocks.value   = c.socks5_bind   || '127.0.0.1:1088';
+      inTransport.value = c.transport?.mode || 'udp';
+      inSni.value     = c.transport?.stealth_sni || '';
+      inWss.checked   = !!c.transport?.wss;
+
+      inMtu.value     = c.mtu           || '';
+      inTun.checked   = !!c.tun?.enable;
+      if (inKillSwitch) inKillSwitch.checked = !!c.tun?.kill_switch;
+      inMux.checked   = !!c.mux?.enabled;
+      inMuxSessions.value = c.mux?.sessions || '';
+      
+      inDns.value = c.tun?.dns || '';
+      inDebug.checked = !!c.debug;
+
+      const ex = c.exclude || {};
+      tagState.domains   = new Set(ex.domains   || []);
+      tagState.ips       = new Set(ex.ips       || []);
+      tagState.processes = new Set(ex.processes || []);
+    }
+
     if (inAutoconnect) inAutoconnect.checked = !!c.gui?.autoconnect;
     if (inLaunchStartup) inLaunchStartup.checked = !!c.gui?.launch_startup;
 
-
-    const ex = c.exclude || {};
-    tagState.domains   = new Set(ex.domains   || []);
-    tagState.ips       = new Set(ex.ips       || []);
-    tagState.processes = new Set(ex.processes || []);
+    updateKillSwitchVisibility();
     renderTagList('domains');
     renderTagList('ips');
     renderTagList('processes');
@@ -380,52 +428,78 @@ async function handleSave(silent = false) {
   if (!server) { if (!silent) showToast(t('err_server_req') || 'Server address required', 'error'); return; }
   if (!key)    { if (!silent) showToast(t('err_key_req')    || 'Access key required',     'error'); return; }
 
-  rawConfig.mode       = 'client';
-  rawConfig.server     = server;
-  rawConfig.access_key = key;
-  rawConfig.socks5_bind = inSocks.value.trim() || null;
-  rawConfig.debug      = inDebug.checked;
-  if (inAutoconnect || inLaunchStartup) {
-    rawConfig.gui = rawConfig.gui || {};
-    if (inAutoconnect) rawConfig.gui.autoconnect = inAutoconnect.checked;
-    if (inLaunchStartup) rawConfig.gui.launch_startup = inLaunchStartup.checked;
-  }
-
   if (inLaunchStartup) {
     try { await invoke('set_autostart', { enable: inLaunchStartup.checked }); } catch (err) { console.error('autostart error', err); }
   }
 
+  const sHost = server.includes(':') ? server.substring(0, server.lastIndexOf(':')) : server;
+  const sPort = server.includes(':') ? parseInt(server.substring(server.lastIndexOf(':') + 1), 10) : 50000;
 
+  const socksStr = inSocks.value.trim() || '127.0.0.1:1088';
+  const socksHost = socksStr.includes(':') ? socksStr.substring(0, socksStr.lastIndexOf(':')) : '127.0.0.1';
+  const socksPort = socksStr.includes(':') ? parseInt(socksStr.substring(socksStr.lastIndexOf(':') + 1), 10) : 1088;
 
-  rawConfig.transport = rawConfig.transport || {};
-  rawConfig.transport.mode = inTransport.value;
-  rawConfig.transport.stealth_sni = inSni.value.trim() || undefined;
-  rawConfig.transport.wss = inWss.checked;
+  const inbounds = [];
+  inbounds.push({
+    type: "local_proxy",
+    tag: "socks-in",
+    protocol: "socks",
+    listen: socksHost,
+    port: socksPort
+  });
 
-  const mtuStr = inMtu.value.trim();
-  if (mtuStr) rawConfig.mtu = parseInt(mtuStr, 10);
-  else delete rawConfig.mtu;
-
-  if (inMux.checked) {
-    const s = parseInt(inMuxSessions.value.trim(), 10);
-    rawConfig.mux = { enabled: true, sessions: isNaN(s) ? 1 : s };
-  } else {
-    delete rawConfig.mux;
+  if (inTun.checked) {
+    inbounds.push({
+      type: "tun",
+      tag: "tun-in",
+      auto_route: !(inKillSwitch && inKillSwitch.checked), 
+      mtu: parseInt(inMtu.value, 10) || 1140
+    });
   }
 
-  rawConfig.tun = rawConfig.tun || {};
-  rawConfig.tun.enable = inTun.checked;
-  rawConfig.tun.kill_switch = inKillSwitch ? inKillSwitch.checked : false;
-  rawConfig.tun.wintun_path = rawConfig.tun.wintun_path || './wintun.dll';
-  rawConfig.tun.ipv4_address = rawConfig.tun.ipv4_address || '10.1.0.2/24';
-  rawConfig.tun.stack = 'ostp';
-  rawConfig.tun.dns    = inDns.value.trim() || null;
+  const outbounds = [
+    {
+      type: "ostp",
+      tag: "proxy",
+      server: sHost,
+      port: sPort,
+      access_key: key,
+      transport: {
+        type: inTransport.value,
+        stealth_sni: inSni.value.trim() || undefined,
+        wss: inWss.checked ? true : undefined
+      },
+      multiplex: inMux.checked ? {
+        enabled: true,
+        sessions: parseInt(inMuxSessions.value, 10) || 1
+      } : { enabled: false, sessions: 1 }
+    },
+    { type: "direct", tag: "direct" },
+    { type: "block", tag: "block" }
+  ];
 
-  rawConfig.exclude = {
-    domains:   [...tagState.domains],
-    ips:       [...tagState.ips],
-    processes: [...tagState.processes],
+  const rules = [];
+  if (tagState.domains.size > 0) rules.push({ domain_suffix: Array.from(tagState.domains), outbound: "direct" });
+  if (tagState.ips.size > 0) rules.push({ ip_cidr: Array.from(tagState.ips), outbound: "direct" });
+  if (tagState.processes.size > 0) rules.push({ process_name: Array.from(tagState.processes), outbound: "direct" });
+
+  if (inKillSwitch && inKillSwitch.checked && inTun.checked) {
+      rules.push({ ip_cidr: ["0.0.0.0/0", "::/0"], outbound: "proxy" });
+  }
+
+  rawConfig = {
+    mode: 'client',
+    version: '0.3.1',
+    log: { level: inDebug.checked ? 'debug' : 'info' },
+    inbounds,
+    outbounds,
+    routing: { rules, default_outbound: "proxy" },
+    gui: rawConfig.gui || {}
   };
+
+  if (inAutoconnect) rawConfig.gui.autoconnect = inAutoconnect.checked;
+  if (inLaunchStartup) rawConfig.gui.launch_startup = inLaunchStartup.checked;
+  if (inKillSwitch) rawConfig.gui.kill_switch = inKillSwitch.checked;
 
   try {
     const ok = await invoke('save_config', { jsonContent: JSON.stringify(rawConfig, null, 2) });
@@ -544,11 +618,21 @@ window.addEventListener('DOMContentLoaded', async () => {
           for (let mtu of mtus) {
             showToast(`Testing: ${mode.t} | WSS: ${mode.w} | XTLS: ${mode.r} | MTU: ${mtu}`);
             
-            rawConfig.ostp = rawConfig.ostp || {};
-            rawConfig.ostp.mtu = mtu;
-            rawConfig.transport = rawConfig.transport || {};
-            rawConfig.transport.mode = mode.t;
-            rawConfig.transport.wss = mode.w;
+            const ostpOut = (rawConfig.outbounds || []).find(o => o.type === 'ostp');
+            if (ostpOut) {
+              ostpOut.transport = ostpOut.transport || { type: 'udp' };
+              ostpOut.transport.type = mode.t;
+              ostpOut.transport.wss = mode.w ? true : undefined;
+            } else {
+              rawConfig.transport = { mode: mode.t, wss: mode.w };
+            }
+            
+            const tunIn = (rawConfig.inbounds || []).find(i => i.type === 'tun');
+            if (tunIn) {
+               tunIn.mtu = mtu;
+            } else {
+               rawConfig.mtu = mtu;
+            }
             
 
 

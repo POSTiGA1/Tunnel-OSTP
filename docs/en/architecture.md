@@ -5,10 +5,20 @@ The Obfuscated Secure Transport Protocol (OSTP) is a high-performance, asynchron
 
 ---
 
+## Kerckhoffs's Principle and DPI Resilience
+
+The OSTP architecture strictly adheres to **Kerckhoffs's Principle**: a cryptosystem should be secure even if everything about the system, except the key, is public knowledge. 
+All encryption and obfuscation algorithms are fully open source. The security and indistinguishability of the traffic rely entirely on the secrecy of the pre-shared key (`access_key` / PSK).
+
+Through cryptographic transformations using this key (Noise Protocol + ChaCha20Poly1305 + Blake2s) and adaptive padding, every transmitted packet is visually indistinguishable from completely random white noise. 
+The protocol lacks any static headers or plaintext handshakes. This makes it impossible for Deep Packet Inspection (DPI) systems, such as state censors, to create a static filter or signature to block OSTP within minutes. Blocking the protocol would require either blocking all unknown UDP traffic globally (which breaks many legitimate services) or possessing the secret key.
+
+---
+
 ## Workspace Structure
 The project is modularized into the following crates:
 1. **ostp-core**: The core engine. Contains protocol state machines, Noise Protocol Framework handshakes, data framing serialization, dynamic obfuscation algorithms, and reliable packet delivery (ARQ).
-2. **ostp-client**: The client daemon. Manages local traffic interception via dual-mode SOCKS5/HTTP proxies or virtualized network adapters (TUN/Wintun), multiplexing active host streams into a single UDP tunnel, and interfacing with TURN servers.
+2. **ostp-client**: The client daemon. Manages routing configuration via arrays of `inbounds` (e.g., SOCKS5, TUN) and `outbounds` (e.g., OSTP, direct, block), handling multiplexing of streams and interacting with TURN servers.
 3. **ostp-server**: The high-concurrency connection dispatcher, responsible for demultiplexing data from multiple sessions, handling seamless IP roaming, and forwarding traffic to the broader internet.
 4. **ostp-obfuscator**: Utility crate for static traffic shaping and dynamic obfuscation key derivation tools.
 5. **ostp-jni**: Android JNI bindings that allow embedding OSTP inside mobile applications via an isolated runtime.

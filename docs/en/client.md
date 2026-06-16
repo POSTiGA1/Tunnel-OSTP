@@ -46,16 +46,29 @@ The client is engineered to maintain persistence without requiring user interven
 
 ---
 
-## Routing Exclusions (Bypass Mode)
+## Modular Routing Architecture (Inbounds / Outbounds)
 
-To minimize latency and overhead for trusted resources, the OSTP client incorporates an integrated direct-routing bypass engine. This is configured inside the `"exclude"` block of the `config.json` file:
+Starting from version `0.3.1`, the OSTP client utilizes a modular configuration architecture based on inbound and outbound arrays, similar to Xray or Sing-box.
 
-- **`domains`**: A list of domain suffixes (e.g., `["trusted-site.com", "local.lan"]`). Traffic bound for these domains is instantly channeled via the default local gateway, bypassing encryption entirely.
-- **`ips`**: A list of target subnet destinations in CIDR format (e.g., `["192.168.1.0/24", "10.0.0.0/8"]`), ensuring local area networks maintain full wire-speed throughput.
-- **`processes`**: A list of OS executable filenames (e.g., `["discord.exe", "steam.exe"]`). Applications specified here will automatically evade the VPN's virtual network driver.
+- **`inbounds`**: Defines how local traffic enters the client. Supported types include `tun` (virtual network interface) and `local_proxy` (SOCKS5/HTTP proxy).
+- **`outbounds`**: Defines where the client sends the traffic. The main type is `ostp` (encapsulation and transmission to the server), but it also supports `direct` (bypassing the VPN to connect directly to the internet) and `block` (dropping traffic).
+- **`routing`**: The mechanism replacing the legacy `exclude` block. It allows for flexible traffic routing based on advanced rules.
+
+Routing rule example in `config.json`:
+```json
+"routing": {
+  "rules": [
+    {
+      "domain_suffix": ["trusted-site.com", "local.lan"],
+      "outbound": "direct"
+    }
+  ],
+  "default_outbound": "proxy"
+}
+```
 
 > [!NOTE]
-> The exclusion/bypass logic is fully operational, rigorously optimized, and ready for immediate production deployment.
+> This architecture enables the client to connect to multiple OSTP servers simultaneously, split traffic by domain, or block telemetry directly at the VPN routing level.
 
 ---
 

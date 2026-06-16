@@ -1416,6 +1416,7 @@ dependencies = [
  "futures-util",
  "hex",
  "hmac",
+ "ipnet",
  "json_comments",
  "libc",
  "netstack-smoltcp",

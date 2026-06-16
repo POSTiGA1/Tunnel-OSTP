@@ -13,7 +13,8 @@ use tauri::Emitter;
 #[serde(tag = "mode", rename_all = "lowercase")]
 enum AppMode {
     Server(serde_json::Value),
-    Client(ClientConfigRaw),
+    #[serde(rename = "client")]
+    Client(serde_json::Value),
 }
 
 #[derive(Debug, Deserialize, Serialize, Clone)]
@@ -21,56 +22,6 @@ struct UnifiedConfig {
     #[serde(flatten)]
     mode: AppMode,
     log_level: Option<String>,
-}
-
-#[derive(Debug, Deserialize, Serialize, Clone)]
-struct ClientConfigRaw {
-    server: String,
-    access_key: String,
-    socks5_bind: Option<String>,
-    tun: Option<TunConfig>,
-    transport: Option<TransportConfigRaw>,
-    debug: Option<bool>,
-    exclude: Option<ExcludeConfig>,
-    mux: Option<MuxConfig>,
-    gui: Option<GuiConfig>,
-}
-
-#[derive(Debug, Deserialize, Serialize, Clone)]
-struct GuiConfig {
-    autoconnect: Option<bool>,
-    launch_startup: Option<bool>,
-}
-
-#[derive(Debug, Deserialize, Serialize, Clone)]
-struct TunConfig {
-    enable: bool,
-    wintun_path: Option<String>,
-    ipv4_address: Option<String>,
-    dns: Option<String>,
-    stack: Option<String>,
-    kill_switch: Option<bool>,
-}
-
-
-#[derive(Debug, Deserialize, Serialize, Clone)]
-struct TransportConfigRaw {
-    mode: Option<String>,
-    stealth_sni: Option<String>,
-    wss: Option<bool>,
-}
-
-#[derive(Debug, Deserialize, Serialize, Clone)]
-struct ExcludeConfig {
-    domains: Option<Vec<String>>,
-    ips: Option<Vec<String>>,
-    processes: Option<Vec<String>>,
-}
-
-#[derive(Debug, Deserialize, Serialize, Clone)]
-struct MuxConfig {
-    enabled: Option<bool>,
-    sessions: Option<usize>,
 }
 
 #[derive(Serialize)]
@@ -143,44 +94,7 @@ fn get_config_path() -> PathBuf {
     PathBuf::from("config.json")
 }
 
-fn map_to_client_config(raw: &ClientConfigRaw, mode: &str) -> ostp_client::config::ClientConfig {
-    ostp_client::config::ClientConfig {
-        mode: mode.to_string(),
-        debug: raw.debug.unwrap_or(false),
-        ostp: ostp_client::config::OstpConfig {
-            server_addr: raw.server.clone(),
-            local_bind_addr: "0.0.0.0:0".to_string(),
-            access_key: raw.access_key.clone(),
-            handshake_timeout_ms: 5000,
-            io_timeout_ms: 5000,
-            mtu: 1350,
-            keepalive_interval_sec: 5,
-        },
-        local_proxy: ostp_client::config::LocalProxyConfig {
-            bind_addr: raw.socks5_bind.clone().unwrap_or_else(|| "127.0.0.1:1088".to_string()),
-            connect_timeout_ms: 5000,
-        },
 
-        transport: ostp_client::config::TransportConfig {
-            mode: raw.transport.as_ref().and_then(|t| t.mode.clone()).unwrap_or_else(|| "udp".to_string()),
-            stealth_sni: raw.transport.as_ref().and_then(|t| t.stealth_sni.clone()).unwrap_or_else(|| "microsoft.com".to_string()),
-            wss: raw.transport.as_ref().and_then(|t| t.wss).unwrap_or(false),
-        },
-        exclusions: ostp_client::config::ExclusionConfig {
-            domains: raw.exclude.as_ref().and_then(|e| e.domains.clone()).unwrap_or_default(),
-            ips: raw.exclude.as_ref().and_then(|e| e.ips.clone()).unwrap_or_default(),
-            processes: raw.exclude.as_ref().and_then(|e| e.processes.clone()).unwrap_or_default(),
-        },
-        multiplex: ostp_client::config::MultiplexConfig {
-            enabled: raw.mux.as_ref().and_then(|m| m.enabled).unwrap_or(false),
-            sessions: raw.mux.as_ref().and_then(|m| m.sessions).unwrap_or(1),
-        },
-        dns_server: raw.tun.as_ref().and_then(|t| t.dns.clone()),
-        tun_stack: raw.tun.as_ref().and_then(|t| t.stack.clone()).unwrap_or_else(|| "system".to_string()),
-        kill_switch: raw.tun.as_ref().and_then(|t| t.kill_switch).unwrap_or(false),
-        gui: raw.gui.as_ref().map(|g| serde_json::to_value(g).unwrap()),
-    }
-}
 
 // ── Tauri commands ────────────────────────────────────────────────────────────
 
@@ -356,7 +270,14 @@ async fn save_config(json_content: String) -> Result<bool, String> {
     let _parsed: UnifiedConfig = serde_json::from_reader(&mut stripped)
         .map_err(|e| format!("Invalid configuration: {}", e))?;
     let path = get_config_path();
-    std::fs::write(path, json_content).map_err(|e| format!("Failed to write config: {}", e))?;
+    
+    let mut final_content = json_content;
+    if !final_content.trim_start().starts_with("// OSTP") {
+        let header = "// OSTP Configuration v0.3.1\n// DO NOT EDIT THIS COMMENT - Migrator relies on it\n";
+        final_content = format!("{}{}", header, final_content);
+    }
+    
+    std::fs::write(path, final_content).map_err(|e| format!("Failed to write config: {}", e))?;
     Ok(true)
 }
 
@@ -431,8 +352,9 @@ async fn reload_tunnel(state: tauri::State<'_, AppState>) -> Result<bool, String
         AppMode::Client(c) => c,
         AppMode::Server(_) => return Err("GUI only supports Client mode.".into()),
     };
-    let mode_str = if client_cfg.tun.as_ref().map(|t| t.enable).unwrap_or(false) { "tun" } else { "proxy" };
-    let core_cfg = map_to_client_config(&client_cfg, mode_str);
+    let (migrated, _) = ostp_client::config::ClientConfig::migrate_json(client_cfg);
+    let core_cfg: ostp_client::config::ClientConfig = serde_json::from_value(migrated)
+        .map_err(|e| format!("Failed to parse migrated config: {}", e))?;
     let config_str = serde_json::to_string(&core_cfg).unwrap();
 
     match &guard.tunnel {
@@ -507,7 +429,15 @@ async fn start_tunnel(state: tauri::State<'_, AppState>, app: tauri::AppHandle) 
         AppMode::Server(_) => return Err("GUI only supports Client mode.".into()),
     };
 
-    let is_tun_enabled = client_cfg.tun.as_ref().map(|t| t.enable).unwrap_or(false);
+    let (migrated, _) = ostp_client::config::ClientConfig::migrate_json(client_cfg);
+    
+    let is_tun_enabled = migrated.get("inbounds")
+        .and_then(|i| i.as_array())
+        .map(|i| i.iter().any(|v| v.get("type").and_then(|t| t.as_str()) == Some("tun")))
+        .unwrap_or(false);
+
+    let parsed_config: ostp_client::config::ClientConfig = serde_json::from_value(migrated)
+        .map_err(|e| format!("Failed to parse migrated config: {}", e))?;
     eprintln!("[OSTP] start_tunnel: is_tun_enabled={}", is_tun_enabled);
 
     #[cfg(target_os = "windows")]
@@ -538,19 +468,19 @@ async fn start_tunnel(state: tauri::State<'_, AppState>, app: tauri::AppHandle) 
 
     if is_tun_enabled {
         eprintln!("[OSTP] starting TUN via helper");
-        start_tun_via_helper(&mut guard, &client_cfg, app).await
+        start_tun_via_helper(&mut guard, &parsed_config, app).await
     } else {
         eprintln!("[OSTP] starting proxy in-process");
-        start_proxy_in_process(&mut guard, &client_cfg, app).await
+        start_proxy_in_process(&mut guard, &parsed_config, app).await
     }
 }
 
 async fn start_proxy_in_process(
     guard: &mut AppStateInner,
-    raw: &ClientConfigRaw,
+    parsed_config: &ostp_client::config::ClientConfig,
     app: tauri::AppHandle,
 ) -> Result<bool, String> {
-    let mapped = map_to_client_config(raw, "proxy");
+    let mapped = parsed_config.clone();
     let metrics = Arc::new(BridgeMetrics {
         bytes_sent: portable_atomic::AtomicU64::new(0),
         bytes_recv: portable_atomic::AtomicU64::new(0),
@@ -591,7 +521,7 @@ async fn start_proxy_in_process(
 
 async fn start_tun_via_helper(
     guard: &mut AppStateInner,
-    raw: &ClientConfigRaw,
+    parsed_config: &ostp_client::config::ClientConfig,
     app: tauri::AppHandle,
 ) -> Result<bool, String> {
     let port = {
@@ -614,8 +544,8 @@ async fn start_tun_via_helper(
     }).await.map_err(|_| "Timeout connecting to helper.".to_string())?
      .map_err(|e| e.to_string())?;
 
-    // Send the correctly MAPPED config
-    let mapped = map_to_client_config(raw, "tun");
+    // Send the config
+    let mapped = parsed_config.clone();
     let start_cmd = serde_json::json!({
         "cmd": "start",
         "config": serde_json::to_string(&mapped).unwrap_or_default(),
@@ -674,11 +604,16 @@ struct HelperPipeState {
     error_msg: Option<String>,
 }
 
+#[cfg(target_os = "windows")]
+const HELPER_EXE_NAME: &str = "ostp-tun-helper.exe";
+#[cfg(not(target_os = "windows"))]
+const HELPER_EXE_NAME: &str = "ostp-tun-helper";
+
 fn find_helper_exe() -> Option<PathBuf> {
     if let Ok(exe) = std::env::current_exe() {
         if let Some(dir) = exe.parent() {
             // 1. Release/Production adjacent
-            let candidate = dir.join("ostp-tun-helper.exe");
+            let candidate = dir.join(HELPER_EXE_NAME);
             if candidate.exists() { return Some(candidate); }
             
             // 2. Tauri target directory fallback
@@ -686,9 +621,9 @@ fn find_helper_exe() -> Option<PathBuf> {
             let mut parent = dir;
             while let Some(p) = parent.parent() {
                 if p.file_name().map(|n| n == "target").unwrap_or(false) {
-                    let deb = p.join("debug").join("ostp-tun-helper.exe");
+                    let deb = p.join("debug").join(HELPER_EXE_NAME);
                     if deb.exists() { return Some(deb); }
-                    let rel = p.join("release").join("ostp-tun-helper.exe");
+                    let rel = p.join("release").join(HELPER_EXE_NAME);
                     if rel.exists() { return Some(rel); }
                 }
                 parent = p;
@@ -698,13 +633,13 @@ fn find_helper_exe() -> Option<PathBuf> {
     // 3. Current working directory target fallback
     let cwd = std::env::current_dir().unwrap_or_default();
     let candidates = [
-        cwd.join("ostp-tun-helper.exe"),
-        cwd.join("target").join("debug").join("ostp-tun-helper.exe"),
-        cwd.join("target").join("release").join("ostp-tun-helper.exe"),
-        cwd.join("..").join("target").join("debug").join("ostp-tun-helper.exe"),
-        cwd.join("..").join("target").join("release").join("ostp-tun-helper.exe"),
-        cwd.join("..").join("..").join("target").join("debug").join("ostp-tun-helper.exe"),
-        cwd.join("..").join("..").join("target").join("release").join("ostp-tun-helper.exe"),
+        cwd.join(HELPER_EXE_NAME),
+        cwd.join("target").join("debug").join(HELPER_EXE_NAME),
+        cwd.join("target").join("release").join(HELPER_EXE_NAME),
+        cwd.join("..").join("target").join("debug").join(HELPER_EXE_NAME),
+        cwd.join("..").join("target").join("release").join(HELPER_EXE_NAME),
+        cwd.join("..").join("..").join("target").join("debug").join(HELPER_EXE_NAME),
+        cwd.join("..").join("..").join("target").join("release").join(HELPER_EXE_NAME),
     ];
     for path in &candidates {
         if path.exists() { return Some(path.clone()); }
@@ -740,9 +675,45 @@ fn launch_as_admin(exe: &std::path::PathBuf, token: &str, port: u16) -> anyhow::
     Ok(())
 }
 
-#[cfg(not(target_os = "windows"))]
-fn launch_as_admin(_exe: &PathBuf, _token: &str, _port: u16) -> Result<()> { anyhow::bail!("Windows only."); }
+#[cfg(target_os = "macos")]
+fn launch_as_admin(exe: &std::path::PathBuf, token: &str, port: u16) -> anyhow::Result<()> {
+    let temp_dir = std::env::temp_dir();
+    let token_file = temp_dir.join(format!("ostp_auth_{}.tmp", rand::random::<u32>()));
+    std::fs::write(&token_file, token)?;
+    
+    let cmd = format!("'{}' --port {} --token-file '{}'", exe.display(), port, token_file.display());
+    let script = format!("do shell script \"{}\" with administrator privileges", cmd);
+    
+    let status = std::process::Command::new("osascript")
+        .arg("-e")
+        .arg(&script)
+        .status()?;
+        
+    if !status.success() {
+        anyhow::bail!("osascript failed");
+    }
+    Ok(())
+}
 
+#[cfg(target_os = "linux")]
+fn launch_as_admin(exe: &std::path::PathBuf, token: &str, port: u16) -> anyhow::Result<()> {
+    let temp_dir = std::env::temp_dir();
+    let token_file = temp_dir.join(format!("ostp_auth_{}.tmp", rand::random::<u32>()));
+    std::fs::write(&token_file, token)?;
+    
+    let status = std::process::Command::new("pkexec")
+        .arg(exe)
+        .arg("--port")
+        .arg(port.to_string())
+        .arg("--token-file")
+        .arg(&token_file)
+        .status()?;
+        
+    if !status.success() {
+        anyhow::bail!("pkexec failed");
+    }
+    Ok(())
+}
 #[cfg(target_os = "windows")]
 fn show_error_dialog(msg: &str) {
     use std::os::windows::ffi::OsStrExt;

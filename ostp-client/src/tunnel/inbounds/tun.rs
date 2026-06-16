@@ -18,7 +18,7 @@ pub async fn run_tun_inbound(
     use tokio::io::{AsyncReadExt, AsyncWriteExt};
     use futures::{StreamExt, SinkExt};
 
-    let InboundConfig::Tun { tag, auto_route, mtu } = inbound_config else {
+    let InboundConfig::Tun { tag, auto_route, mtu, .. } = inbound_config else {
         return Err(anyhow!("Invalid config for TUN inbound"));
     };
 
@@ -51,25 +51,6 @@ pub async fn run_tun_inbound(
         }
     }
 
-    let dummy_server_ip = bypass_ips.first().copied().unwrap_or_else(|| "8.8.8.8".parse().unwrap());
-
-    // Create TUN device
-    let opts = ostp_tun::OstpTunOptions {
-        server_ip: dummy_server_ip,
-        bypass_ips,
-        dns_server: None,
-        kill_switch: false,
-        mtu: mtu as u16,
-        wintun_path: None,
-    };
-
-    let tun_interface = ostp_tun::OstpTunInterface::create(opts)
-        .await
-        .map_err(|e| anyhow!("Failed to create OstpTunInterface: {}", e))?;
-        
-    let dev = tun_interface.device;
-    let _route_guard = tun_interface.guard; // Drops when TUN drops
-
     // Build smoltcp network stack
     let (stack, tcp_runner, udp_socket, tcp_listener) = StackBuilder::default()
         .stack_buffer_size(1024)
@@ -87,35 +68,115 @@ pub async fn run_tun_inbound(
     });
 
     let (mut stack_sink, mut stack_stream) = stack.split();
-    let (mut tun_read, mut tun_write) = tokio::io::split(dev);
 
-    let mut tun_to_stack = tokio::spawn(async move {
-        let mut buf = vec![0u8; 65536];
-        loop {
-            match tun_read.read(&mut buf).await {
-                Ok(0) => break,
-                Ok(n) => {
-                    let frame = buf[..n].to_vec();
-                    if let Err(e) = stack_sink.send(frame).await {
-                        if e.kind() == std::io::ErrorKind::BrokenPipe {
-                            break;
+    #[allow(unused_variables)]
+    let mut _route_guard = None;
+
+    let (mut tun_to_stack, mut stack_to_tun) = {
+        #[cfg(target_os = "android")]
+        {
+            if let Some(fd) = fd {
+                use std::os::fd::{FromRawFd, AsRawFd};
+                use tokio::io::unix::AsyncFd;
+                use std::os::unix::io::OwnedFd;
+                
+                let async_fd = AsyncFd::new(unsafe { OwnedFd::from_raw_fd(fd) })?;
+                let async_fd_shared = std::sync::Arc::new(async_fd);
+                
+                let afd1 = async_fd_shared.clone();
+                let tun_to_stack = tokio::spawn(async move {
+                    let mut frame = vec![0u8; 65535];
+                    loop {
+                        let mut guard = match afd1.readable().await {
+                            Ok(g) => g,
+                            Err(_) => break,
+                        };
+                        match guard.try_io(|inner| {
+                            let res = unsafe { libc::read(inner.as_raw_fd(), frame.as_mut_ptr() as *mut libc::c_void, frame.len()) };
+                            if res < 0 {
+                                let err = std::io::Error::last_os_error();
+                                if err.kind() == std::io::ErrorKind::WouldBlock { Err(err) } else { Ok(res as isize) }
+                            } else { Ok(res as isize) }
+                        }) {
+                            Ok(Ok(n)) if n > 0 => {
+                                if let Err(_) = stack_sink.send(frame[..n as usize].to_vec()).await { break; }
+                            }
+                            Ok(Ok(_)) => break,
+                            Ok(Err(_)) => break,
+                            Err(_) => continue,
                         }
                     }
-                }
-                Err(e) => {
-                    tracing::debug!("tun_read error: {e}");
-                }
-            }
-        }
-    });
+                });
 
-    let mut stack_to_tun = tokio::spawn(async move {
-        while let Some(Ok(frame)) = stack_stream.next().await {
-            if let Err(e) = tun_write.write(&frame).await {
-                tracing::debug!("tun_write error: {e}");
+                let afd2 = async_fd_shared.clone();
+                let stack_to_tun = tokio::spawn(async move {
+                    while let Some(Ok(frame)) = stack_stream.next().await {
+                        let mut written = 0;
+                        while written < frame.len() {
+                            let mut guard = match afd2.writable().await {
+                                Ok(g) => g,
+                                Err(_) => break,
+                            };
+                            match guard.try_io(|inner| {
+                                let res = unsafe { libc::write(inner.as_raw_fd(), frame[written..].as_ptr() as *const libc::c_void, frame.len() - written) };
+                                if res < 0 {
+                                    let err = std::io::Error::last_os_error();
+                                    if err.kind() == std::io::ErrorKind::WouldBlock { Err(err) } else { Ok(res as isize) }
+                                } else { Ok(res as isize) }
+                            }) {
+                                Ok(Ok(n)) if n > 0 => written += n as usize,
+                                Ok(Ok(_)) => break,
+                                Ok(Err(_)) => break,
+                                Err(_) => continue,
+                            }
+                        }
+                    }
+                });
+                (tun_to_stack, stack_to_tun)
+            } else {
+                return Err(anyhow!("FD is required on Android but not provided"));
             }
         }
-    });
+
+        #[cfg(not(target_os = "android"))]
+        {
+            let opts = ostp_tun::OstpTunOptions {
+                server_ip: bypass_ips.first().copied().unwrap_or_else(|| "127.0.0.1".parse().unwrap()),
+                bypass_ips: bypass_ips,
+                dns_server: None,
+                kill_switch: false,
+                mtu: mtu as u16,
+                wintun_path: None,
+            };
+
+            let tun_interface = ostp_tun::OstpTunInterface::create(opts)
+                .await
+                .map_err(|e| anyhow!("Failed to create OstpTunInterface: {}", e))?;
+                
+            let dev = tun_interface.device;
+            _route_guard = Some(tun_interface.guard);
+
+            let (mut tun_read, mut tun_write) = tokio::io::split(dev);
+            let tun_to_stack = tokio::spawn(async move {
+                let mut buf = vec![0u8; 65536];
+                loop {
+                    match tun_read.read(&mut buf).await {
+                        Ok(0) => break,
+                        Ok(n) => {
+                            if let Err(_) = stack_sink.send(buf[..n].to_vec()).await { break; }
+                        }
+                        Err(e) => tracing::debug!("tun_read error: {e}"),
+                    }
+                }
+            });
+            let stack_to_tun = tokio::spawn(async move {
+                while let Some(Ok(frame)) = stack_stream.next().await {
+                    if let Err(e) = tun_write.write(&frame).await { tracing::debug!("tun_write error: {e}"); }
+                }
+            });
+            (tun_to_stack, stack_to_tun)
+        }
+    };
 
     // ── TCP Handler ──
     let outbound_manager_tcp = outbound_manager.clone();

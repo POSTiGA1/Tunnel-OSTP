@@ -42,6 +42,8 @@ pub enum InboundConfig {
         auto_route: bool,
         #[serde(default = "default_mtu")]
         mtu: usize,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        fd: Option<i32>,
     },
     LocalProxy {
         tag: String,
@@ -163,7 +165,9 @@ impl ClientConfig {
         if was_migrated {
             tracing::info!("Config was migrated to v0.3.1. Saving to {}", path.display());
             let serialized = serde_json::to_string_pretty(&migrated_json)?;
-            std::fs::write(&path, serialized)
+            let header = "// OSTP Configuration v0.3.1\n// DO NOT EDIT THIS COMMENT - Migrator relies on it\n";
+            let final_content = format!("{}{}", header, serialized);
+            std::fs::write(&path, final_content)
                 .with_context(|| format!("failed to save migrated config to {}", path.display()))?;
         }
 

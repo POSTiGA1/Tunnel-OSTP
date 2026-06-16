@@ -2665,7 +2665,7 @@ dependencies = [
 
 [[package]]
 name = "ostp-client"
-version = "0.2.97"
+version = "0.2.98"
 dependencies = [
  "anyhow",
  "base64 0.22.1",
@@ -2676,6 +2676,7 @@ dependencies = [
  "futures-util",
  "hex",
  "hmac",
+ "ipnet",
  "json_comments",
  "libc",
  "netstack-smoltcp",
@@ -2699,7 +2700,7 @@ dependencies = [
 
 [[package]]
 name = "ostp-core"
-version = "0.2.97"
+version = "0.2.98"
 dependencies = [
  "anyhow",
  "bytes",
@@ -2734,7 +2735,7 @@ dependencies = [
 
 [[package]]
 name = "ostp-tun"
-version = "0.2.97"
+version = "0.2.98"
 dependencies = [
  "anyhow",
  "libc",
