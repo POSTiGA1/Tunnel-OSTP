@@ -7,6 +7,8 @@ use ostp_client::bridge::BridgeMetrics;
 use portable_atomic::Ordering;
 use tauri::Emitter;
 
+mod ipc_crypto;
+
 // ── Config types ─────────────────────────────────────────────────────────────
 
 #[derive(Debug, Deserialize, Serialize, Clone)]
@@ -532,26 +534,32 @@ async fn start_tun_via_helper(
     app: tauri::AppHandle,
 ) -> Result<bool, String> {
     let port = {
-        let listener = std::net::TcpListener::bind("127.0.0.1:0").map_err(|e| format!("Bind error: {}", e))?;
-        listener.local_addr().unwrap().port()
+        let listener = std::net::TcpListener::bind("127.0.0.1:0")
+            .map_err(|e| format!("Bind error: {}", e))?;
+        listener.local_addr()
+            .map_err(|e| format!("Get local_addr failed: {}", e))?.port()
     };
 
     let auth_token = rand::random::<u64>().to_string();
-    let helper_exe = find_helper_exe().ok_or_else(|| "ostp-tun-helper.exe not found.".to_string())?;
-    launch_as_admin(&helper_exe, &auth_token, port).map_err(|e| format!("Failed to launch helper: {}", e))?;
+    let helper_exe = find_helper_exe()
+        .ok_or_else(|| "ostp-tun-helper.exe not found.".to_string())?;
+    launch_as_admin(&helper_exe, &auth_token, port)
+        .map_err(|e| format!("Failed to launch helper: {}", e))?;
     tokio::time::sleep(std::time::Duration::from_millis(1500)).await;
 
-    let socket = tokio::time::timeout(std::time::Duration::from_secs(60), async {
+    let socket = tokio::time::timeout(std::time::Duration::from_secs(15), async {
         loop {
             match tokio::net::TcpStream::connect(format!("127.0.0.1:{}", port)).await {
                 Ok(s) => return Ok::<_, std::io::Error>(s),
                 Err(_) => tokio::time::sleep(std::time::Duration::from_millis(200)).await,
             }
         }
-    }).await.map_err(|_| "Timeout connecting to helper.".to_string())?
+    }).await.map_err(|_| "Timeout connecting to helper (15s)".to_string())?
      .map_err(|e| e.to_string())?;
 
-    // Send the config
+    let key = ipc_crypto::derive_key(&auth_token);
+    let crypto = ipc_crypto::IpcCrypto::new(&key);
+
     let mapped = parsed_config.clone();
     let start_cmd = serde_json::json!({
         "cmd": "start",
@@ -559,15 +567,26 @@ async fn start_tun_via_helper(
         "token": auth_token
     }).to_string();
 
+    let encrypted_cmd = crypto.encrypt(start_cmd.as_bytes())
+        .map_err(|e| format!("Encryption failed: {}", e))?;
+    let encoded_cmd = hex::encode(&encrypted_cmd);
+
     let (cmd_tx, mut cmd_rx) = tokio::sync::mpsc::channel::<String>(16);
-    let pipe_state = Arc::new(Mutex::new(HelperPipeState { connection_state: 1, bytes_sent: 0, bytes_recv: 0, rtt_ms: 0, error_msg: None }));
+    let pipe_state = Arc::new(Mutex::new(HelperPipeState {
+        connection_state: 1,
+        bytes_sent: 0,
+        bytes_recv: 0,
+        rtt_ms: 0,
+        error_msg: None
+    }));
     let state_for_task = pipe_state.clone();
+    let crypto_for_task = ipc_crypto::IpcCrypto::new(&key);
 
     tokio::spawn(async move {
         use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader, split};
         let (reader_half, mut writer_half) = split(socket);
         let mut reader = BufReader::new(reader_half);
-        let _ = writer_half.write_all(format!("{}\n", start_cmd).as_bytes()).await;
+        let _ = writer_half.write_all(format!("{}\n", encoded_cmd).as_bytes()).await;
 
         let mut line = String::new();
         loop {
@@ -576,23 +595,41 @@ async fn start_tun_via_helper(
                     if result.unwrap_or(0) == 0 { break; }
                     let trimmed = line.trim().to_string();
                     line.clear();
-                    if let Ok(msg) = serde_json::from_str::<HelperMsg>(&trimmed) {
-                        let mut s = state_for_task.lock().await;
-                        match msg {
-                            HelperMsg::Status { value } => s.connection_state = value,
-                            HelperMsg::Metrics { bytes_sent, bytes_recv, rtt_ms } => { s.bytes_sent = bytes_sent; s.bytes_recv = bytes_recv; s.rtt_ms = rtt_ms; }
-                            HelperMsg::Error { message } => { 
-                                s.connection_state = 0; 
-                                s.error_msg = Some(message.clone());
-                                eprintln!("Helper error: {}", message);
-                                let _ = app.emit("tunnel-error", message);
+
+                    if let Ok(encrypted_bytes) = hex::decode(&trimmed) {
+                        if let Ok(decrypted) = crypto_for_task.decrypt(&encrypted_bytes) {
+                            if let Ok(msg_str) = String::from_utf8(decrypted) {
+                                if let Ok(msg) = serde_json::from_str::<HelperMsg>(&msg_str) {
+                                    let mut s = state_for_task.lock().await;
+                                    match msg {
+                                        HelperMsg::Status { value } => s.connection_state = value,
+                                        HelperMsg::Metrics { bytes_sent, bytes_recv, rtt_ms } => {
+                                            s.bytes_sent = bytes_sent;
+                                            s.bytes_recv = bytes_recv;
+                                            s.rtt_ms = rtt_ms;
+                                        }
+                                        HelperMsg::Error { message } => {
+                                            s.connection_state = 0;
+                                            s.error_msg = Some(message.clone());
+                                            eprintln!("Helper error: {}", message);
+                                            let _ = app.emit("tunnel-error", message);
+                                        }
+                                        _ => {}
+                                    }
+                                }
                             }
-                            _ => {}
                         }
                     }
                 }
                 cmd = cmd_rx.recv() => {
-                    if let Some(c) = cmd { let _ = writer_half.write_all(c.as_bytes()).await; } else { break; }
+                    if let Some(c) = cmd {
+                        if let Ok(enc) = crypto_for_task.encrypt(c.as_bytes()) {
+                            let encoded = hex::encode(&enc);
+                            let _ = writer_half.write_all(format!("{}\n", encoded).as_bytes()).await;
+                        }
+                    } else {
+                        break;
+                    }
                 }
             }
         }
