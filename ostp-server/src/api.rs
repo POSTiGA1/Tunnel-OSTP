@@ -172,42 +172,8 @@ fn api_unauthorized<T: Serialize>() -> (StatusCode, Json<ApiResponse<T>>) {
     (StatusCode::UNAUTHORIZED, Json(ApiResponse { ok: false, data: None, error: Some("unauthorized".to_string()) }))
 }
 
-#[derive(RustEmbed)]
-#[folder = "../ostp-control/dist/"]
-struct Assets;
-
-async fn static_handler(State(state): State<ApiState>, uri: Uri) -> impl IntoResponse {
-    let mut path = uri.path();
-    
-    let webpath = state.webpath.trim_matches('/');
-    let prefix = if webpath.is_empty() {
-        "/panel".to_string()
-    } else {
-        format!("/{}", webpath)
-    };
-    
-    if path.starts_with(&prefix) {
-        path = &path[prefix.len()..];
-    }
-    path = path.trim_start_matches('/');
-    
-    if path.is_empty() || path == "index.html" {
-        path = "index.html";
-    }
-
-    match Assets::get(path) {
-        Some(content) => {
-            let mime = mime_guess::from_path(path).first_or_octet_stream();
-            ([(header::CONTENT_TYPE, mime.as_ref())], content.data).into_response()
-        }
-        None => {
-            if let Some(index) = Assets::get("index.html") {
-                ([(header::CONTENT_TYPE, "text/html")], index.data).into_response()
-            } else {
-                (StatusCode::NOT_FOUND, "404 Not Found").into_response()
-            }
-        }
-    }
+async fn static_handler(State(_state): State<ApiState>, _uri: Uri) -> impl IntoResponse {
+    (StatusCode::NOT_FOUND, "Control panel not bundled").into_response()
 }
 
 // ── API router ───────────────────────────────────────────────────────────────

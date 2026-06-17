@@ -58,15 +58,6 @@ if (Test-Path $CargoToml) {
             Write-Output "  [ok] Updated tauri.conf.json"
         }
 
-        # Bump React Control Panel
-        $PackageJson = Join-Path $ProjectRoot "ostp-control\package.json"
-        if (Test-Path $PackageJson) {
-            $PkgContent = [System.IO.File]::ReadAllText($PackageJson)
-            $PkgRegex = [regex] '"version":\s*"[^"]+"'
-            $PkgContent = $PkgRegex.Replace($PkgContent, ('"version": "' + $Version + '"'), 1)
-            [System.IO.File]::WriteAllText($PackageJson, $PkgContent)
-            Write-Output "  [ok] Updated package.json"
-        }
 
         # Bump Flutter App
         $Pubspec = Join-Path $ProjectRoot "ostp-flutter\pubspec.yaml"
@@ -83,13 +74,6 @@ if (Test-Path $CargoToml) {
     }
 }
 
-# --- Pre-flight: frontend build ---
-Write-Output ""
-Write-Output "Building frontend control panel..."
-Push-Location (Join-Path $ProjectRoot "ostp-control")
-& npm install | Out-Null
-& npm run build | Out-Null
-Pop-Location
 
 # --- Pre-flight: cargo check ---
 Write-Output ""
