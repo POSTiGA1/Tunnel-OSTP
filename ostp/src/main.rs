@@ -180,9 +180,10 @@ enum AppMode {
 
 #[derive(Debug, Deserialize, Serialize)]
 struct UnifiedConfig {
+    version: Option<String>,
+    log: Option<serde_json::Value>,
     #[serde(flatten)]
     mode: AppMode,
-    log_level: Option<String>,
 }
 
 impl UnifiedConfig {
@@ -791,7 +792,9 @@ fn run_setup_wizard(config_path: &std::path::Path) -> Result<()> {
             let server_json = serde_json::json!({
                 "mode": "server",
                 "version": "0.3.1",
-                "log_level": "info",
+                "log": {
+                    "level": "info"
+                },
                 "listen": listen,
                 "access_keys": access_keys,
                 "outbound": {
@@ -918,7 +921,9 @@ fn run_setup_wizard(config_path: &std::path::Path) -> Result<()> {
             let server_json = serde_json::json!({
                 "mode": "server",
                 "version": "0.3.1",
-                "log_level": "info",
+                "log": {
+                    "level": "info"
+                },
                 "listen": listen,
                 "access_keys": access_keys,
                 "outbound": {
@@ -1043,6 +1048,9 @@ By downloading, installing, or using the Control Panel, you agree to the followi
             let relay_json = serde_json::json!({
                 "mode": "relay",
                 "version": "0.3.1",
+                "log": {
+                    "level": "info"
+                },
                 "listen": listen,
                 "upstream_tcp": upstream,
                 "upstream_udp": upstream,
@@ -1244,7 +1252,8 @@ async fn run_app() -> Result<()> {
             .map_err(|e| anyhow!("Share Link Error: {e}"))?;
         let unified = UnifiedConfig {
             mode: AppMode::Client(client_cfg),
-            log_level: Some("info".to_string()),
+            version: Some("0.3.1".to_string()),
+            log: Some(serde_json::json!({ "level": "info" })),
         };
         let content = serde_json::to_string_pretty(&unified)?;
         if let Some(parent) = args.config.parent() {
@@ -1396,9 +1405,13 @@ async fn run_app() -> Result<()> {
         let key = generate_secure_key("hex");
         let content = if is_server {
             format!(r#"{{
-  // OSTP Server Configuration
+  // OSTP Configuration v0.3.1
+  // DO NOT EDIT THIS COMMENT - Migrator relies on it
+  "version": "0.3.1",
   "mode": "server",
-  "log_level": "info",
+  "log": {{
+    "level": "info"
+  }},
   
   // The address and port the server listens on for incoming OSTP connections.
   "listen": "0.0.0.0:50000",
@@ -1450,8 +1463,13 @@ async fn run_app() -> Result<()> {
 }}"#, key)
         } else if mode_str == "relay" {
             r#"{
-  // OSTP Relay Node Configuration
+  // OSTP Configuration v0.3.1
+  // DO NOT EDIT THIS COMMENT - Migrator relies on it
+  "version": "0.3.1",
   "mode": "relay",
+  "log": {
+    "level": "info"
+  },
   "listen": "0.0.0.0:50000",
   "upstream_tcp": "TARGET_SERVER_IP:50000",
   "upstream_udp": "TARGET_SERVER_IP:50000",
