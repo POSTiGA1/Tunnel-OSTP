@@ -957,8 +957,9 @@ fn run_setup_wizard(config_path: &std::path::Path) -> Result<()> {
 
             println!();
             wizard_section("Downloading control panel...");
-            let download_url = format!("https://ostp.ospab.lol/download?key={}", license_key);
-            match reqwest::blocking::get(&download_url) {
+            let download_url = "https://ostp.ospab.lol/download";
+            let client = reqwest::blocking::Client::new();
+            match client.get(download_url).header("Authorization", format!("Bearer {}", license_key)).send() {
                 Ok(mut response) => {
                     if response.status().is_success() {
                         let mut file = std::fs::File::create("ostp-control.zip").expect("Failed to create file");
@@ -966,12 +967,14 @@ fn run_setup_wizard(config_path: &std::path::Path) -> Result<()> {
                         wizard_ok("Downloaded ostp-control.zip successfully! Please extract it.");
                     } else {
                         tracing::warn!("Failed to download panel: HTTP {}", response.status());
-                        println!("  Please download ostp-control manually from: {}", download_url);
+                        println!("  Please download ostp-control manually using:");
+                        println!("  curl -H \"Authorization: Bearer {}\" -o ostp-control.zip {}", license_key, download_url);
                     }
                 }
                 Err(e) => {
                     tracing::warn!("Failed to download panel: {}", e);
-                    println!("  Please download ostp-control manually from: {}", download_url);
+                    println!("  Please download ostp-control manually using:");
+                    println!("  curl -H \"Authorization: Bearer {}\" -o ostp-control.zip {}", license_key, download_url);
                 }
             }
 
