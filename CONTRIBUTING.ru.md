@@ -21,8 +21,8 @@
 
 Для локальной сборки и тестирования OSTP вам понадобятся:
 
-*   **Rust Toolchain (1.75+)**: Рекомендуется установить через [rustup](https://rustup.rs/).
-*   **Node.js (18+) и npm**: Необходимы для сборки веб-панели управления (`ostp-control`) и сборки интерфейса Tauri.
+*   **Rust Toolchain**: Установите через [rustup](https://rustup.rs/) (stable канал).
+*   **Node.js (18+) и npm**: Необходимы для сборки интерфейса Tauri.
 *   **Git**: Для контроля версий.
 
 ### Сборка проекта
@@ -33,15 +33,7 @@
     cd ostp
     ```
 
-2.  **Соберите веб-интерфейс панели управления**:
-    ```bash
-    cd ostp-control
-    npm install
-    npm run build
-    cd ..
-    ```
-
-3.  **Соберите весь Cargo-workspace**:
+2.  **Соберите весь Cargo-workspace**:
     ```bash
     cargo build
     ```
@@ -59,8 +51,7 @@
 
 *   [`ostp-core/`](file:///d:/ospab-projects/ostp/ostp-core): Базовая логика протокола: форматирование пакетов, сериализация, конечный автомат выборочного подтверждения (ARQ/ACK/NACK) и рукопожатие Noise (`Noise_NNpsk0_25519_ChaChaPoly_BLAKE2s`).
 *   [`ostp-client/`](file:///d:/ospab-projects/ostp/ostp-client): Клиентская часть: локальные SOCKS5/HTTP прокси-серверы, интеграция с драйвером `wintun` / `tun2socks` и реализация раздельного туннелирования для прямого обхода трафика.
-*   [`ostp-server/`](file:///d:/ospab-projects/ostp/ostp-server): Серверная часть: диспетчеризация сессий, маскировка под классические веб-серверы при активном сканировании, база данных ключей доступа и REST API панели управления.
-*   [`ostp-control/`](file:///d:/ospab-projects/ostp/ostp-control): Панель администратора (пользователи, статистика трафика в реальном времени, лимиты скорости и объема данных).
+*   [`ostp-server/`](file:///d:/ospab-projects/ostp/ostp-server): Логика сервера, диспетчер сессий, защита от пробинга, база данных ключей и REST API.
 *   [`ostp-gui/`](file:///d:/ospab-projects/ostp/ostp-gui): Настольное приложение-клиент для Windows и Linux на платформе Tauri.
 *   [`ostp-flutter/`](file:///d:/ospab-projects/ostp/ostp-flutter): Мобильный клиент для платформы Android.
 

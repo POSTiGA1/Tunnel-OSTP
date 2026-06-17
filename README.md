@@ -48,7 +48,7 @@ Download pre-built binaries for your platform from [GitHub Releases](https://git
 | **Multi-Listener** | Bind to multiple addresses simultaneously (dual-stack IPv4/IPv6, multi-port). |
 | **TUN Mode** | Full-system VPN via native `smoltcp` network stack without external dependencies. All traffic transparently routed through the tunnel. |
 | **xHTTP Stealth (UoT)** | UDP-over-TCP tunnel that completely hides traffic. Since all data is fully encrypted and length-prefixed, it bypasses DPI filters that block unknown UDP traffic by riding over a plain TCP connection. |
-| **Mobile & Web Apps** | Beautiful cross-platform mobile client (Flutter) and a modern Web Control Panel (React/Vite) for effortless server and client management. |
+| **Mobile Apps** | Beautiful cross-platform mobile client (Flutter) for effortless client management. |
 | **TURN Relay** | RFC 5766 TURN support for environments where direct UDP is blocked. |
 | **Hot-Reload** | Runtime config reload without restart (access keys, exclusions, mux settings). |
 | **Structured Logging** | `tracing`-based logging with `RUST_LOG` filtering. JSON/file/syslog output support. |
