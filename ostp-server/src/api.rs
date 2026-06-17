@@ -855,6 +855,7 @@ mod tests {
             dns_server: crate::dns::DnsServer::new(Default::default()),
             audit_logs: Arc::new(RwLock::new(Vec::new())),
             router: Arc::new(crate::router::Router::new(None, crate::dns::DnsServer::new(Default::default()), false)),
+            is_licensed: true,
         }
     }
 
