@@ -12,12 +12,14 @@ use tokio::time::{interval, Duration, Instant};
 
 mod dispatcher;
 pub mod outbound;
-pub mod api;
 pub mod fallback;
+pub mod tui;
+pub mod signal;
+pub mod license;
+pub mod api;
 pub mod transport;
 pub mod relay_node;
 mod relay;
-mod signal;
 pub mod dns;
 pub mod router;
 
@@ -69,6 +71,7 @@ pub async fn run_server(
     debug: bool,
     dns_config: Option<dns::DnsConfig>,
     config_path: Option<std::path::PathBuf>,
+    license_key: Option<String>,
 ) -> Result<()> {
     let mut keys_map = HashMap::new();
     for (key, meta) in access_keys {
@@ -114,7 +117,46 @@ pub async fn run_server(
         mtu: 1350,
     };
 
-    let dispatcher = Dispatcher::new(protocol_config, shared_keys.clone());
+    let mut max_sessions = Some(30);
+    if let Some(key) = license_key {
+        let host = server_public_ip.as_deref().unwrap_or("0.0.0.0");
+        match crate::license::verify_license(&key, host) {
+            Ok(payload) => {
+                tracing::info!("License verified successfully! Features: {:?}", payload.features);
+                if payload.features.contains(&"unlimited_connections".to_string()) {
+                    max_sessions = None;
+                    tracing::info!("Unlimited connections enabled.");
+                }
+                if payload.features.contains(&"control_panel".to_string()) {
+                    tracing::info!("Spawning control panel child process...");
+                    
+                    let exe_name = if cfg!(windows) { "ostp-control.exe" } else { "./ostp-control" };
+                    match std::process::Command::new(exe_name)
+                        .env("OSTP_LICENSE_KEY", &key)
+                        .spawn()
+                    {
+                        Ok(mut child) => {
+                            tracing::info!("Control panel spawned successfully (PID: {})", child.id());
+                            tokio::spawn(async move {
+                                let _ = child.wait();
+                                tracing::warn!("Control panel process exited.");
+                            });
+                        }
+                        Err(e) => {
+                            tracing::error!("Failed to spawn {}: {}. Ensure it is downloaded and in the same directory.", exe_name, e);
+                        }
+                    }
+                }
+            }
+            Err(e) => {
+                tracing::error!("Failed to verify license: {:?}", e);
+            }
+        }
+    } else {
+        tracing::info!("No license key provided. Free version limited to 30 sessions.");
+    }
+
+    let dispatcher = Dispatcher::new(protocol_config, shared_keys.clone(), max_sessions);
 
     // Background config hot-reloader for access keys
     let shared_keys_clone = shared_keys.clone();

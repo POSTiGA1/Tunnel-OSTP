@@ -6,7 +6,7 @@ use std::collections::VecDeque;
 use std::sync::{Arc, RwLock};
 use std::sync::atomic::Ordering;
 use tokio::runtime::Runtime;
-use tokio::sync::{mpsc, watch};
+use tokio::sync::watch;
 use ostp_client::bridge::BridgeMetrics;
 use std::io::Write;
 

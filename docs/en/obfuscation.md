@@ -53,3 +53,9 @@ The `AdaptivePadder` calculates dynamic dummy byte quantities to append to the p
 ## XTLS-Reality Impersonation
 
 OSTP provides a custom, dependency-free implementation of the XTLS-Reality protocol. It fully simulates a TLS 1.3 handshake (with realistic ClientHello profiles) to bypass advanced DPI filters. Post-handshake, it utilizes ChaCha20Poly1305 to seamlessly encrypt and tunnel the inner HTTP/WSS connections.
+
+---
+
+## Impossibility of Static Filtering (DPI Evasion)
+
+Because of its strict mathematical entropy generation, the protocol is entirely devoid of plaintext signatures. This ensures that filtering systems (such as state censors like RKN or the Great Firewall) **physically cannot** write an effective blocking rule by analyzing packet contents. Any attempt to write a filter would inevitably result in blocking legitimate, randomized UDP traffic (like WebRTC or gaming traffic). Security is backed by Kerckhoffs's Principle — knowing the algorithms is useless for classifying traffic without possessing the `access_key`.

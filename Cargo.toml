@@ -6,7 +6,7 @@ members = [
     "ostp-jni", "ostp",
     "ostp-tun-helper"
 ]
-exclude = ["ostp-gui/src-tauri", "ostp-brain", "ostp-prober", "ostp-sandbox"]
+exclude = ["ostp-gui/src-tauri", "ostp-brain", "ostp-prober", "ostp-sandbox", "ostp-control", "ostp-license"]
 resolver = "2"
 
 [workspace.package]
@@ -26,6 +26,8 @@ tracing = "0.1"
 sha2 = "0.10"
 hmac = "0.12"
 portable-atomic = "1.10"
+ed25519-dalek = "2.1"
+base64 = "0.22"
 
 [patch.crates-io]
 netstack-smoltcp = { path = "netstack-smoltcp" }

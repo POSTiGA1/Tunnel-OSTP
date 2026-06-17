@@ -27,8 +27,16 @@ if (Test-Path $CargoToml) {
         $Major = [int]$Matches[1]
         $Minor = [int]$Matches[2]
         $Patch = [int]$Matches[3]
+        
+        $NewMinor = $Minor
         $NewPatch = $Patch + 1
-        $Version = "{0}.{1}.{2}" -f $Major, $Minor, $NewPatch
+
+        if ($TriggerOnly -and $NewMinor -lt 3) {
+            $NewMinor = 3
+            $NewPatch = 0
+        }
+        
+        $Version = "{0}.{1}.{2}" -f $Major, $NewMinor, $NewPatch
         # Replace only the workspace version line, not dependency versions
         $OldVersionStr = 'version = "{0}.{1}.{2}"' -f $Major, $Minor, $Patch
         $NewVersionStr = 'version = "' + $Version + '"'

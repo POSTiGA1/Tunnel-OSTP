@@ -32,7 +32,7 @@ pub async fn dial_tcp(
         session_id: 1,
         handshake_payload: vec![],
         max_padding: 0,
-        padding_strategy: ostp_core::framing::PaddingStrategy::None,
+        padding_strategy: ostp_core::framing::PaddingStrategy::Fixed(0),
         obfuscation_key: [0; 8],
         max_reorder: 16384,
         max_reorder_buffer: 8192,

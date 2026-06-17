@@ -44,6 +44,11 @@ If you prefer to configure manually, the following is a reference of the new mod
 {
   "version": "0.3.1",
   "mode": "client",
+  "api": {
+    "enabled": true,
+    "bind": "127.0.0.1:50001",
+    "token": "admin-secret-token"
+  },
   "log": {
     "level": "info"
   },

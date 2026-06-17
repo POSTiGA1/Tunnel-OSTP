@@ -227,6 +227,13 @@ async fn get_config() -> Result<String, String> {
   "mode": "client",
   "log_level": "info",
   
+  "_comment_api": "Management API Server (used by control panel)",
+  "api": {
+    "enabled": true,
+    "bind": "127.0.0.1:50001",
+    "token": "admin-secret-token"
+  },
+  
   "_comment_server": "Address of the remote OSTP server",
   "server": "127.0.0.1:50000",
   

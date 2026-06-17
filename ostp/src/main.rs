@@ -80,20 +80,20 @@ fn parse_ostp_link(link: &str) -> Result<serde_json::Value> {
 
     let host = parsed.host_str().ok_or_else(|| anyhow!("Missing host in share link"))?;
     let port = parsed.port().ok_or_else(|| anyhow!("Missing port in share link"))?;
-    let server = format!("{host}:{port}");
-    let mut sni = String::new();
+    let _server = format!("{host}:{port}");
+    let mut _sni = String::new();
     let mut transport_mode = String::from("udp");
     let mut tun_enabled = false;
-    let mut tun_dns = None;
-    let mut wss_enabled = false;
+    let mut _tun_dns = None;
+    let mut _wss_enabled = false;
 
     for (k, v) in parsed.query_pairs() {
         match &*k {
-            "sni" => sni = v.into_owned(),
+            "sni" => _sni = v.into_owned(),
             "type" => transport_mode = v.into_owned(),
             "tun" => tun_enabled = v == "true",
-            "dns" => tun_dns = Some(v.into_owned()),
-            "wss" => wss_enabled = v == "true",
+            "dns" => _tun_dns = Some(v.into_owned()),
+            "wss" => _wss_enabled = v == "true",
             _ => {}
         }
     }
@@ -292,6 +292,7 @@ struct ServerConfig {
     fallback: Option<FallbackCfg>,
     transport: Option<TransportConfigRaw>,
     dns: Option<ostp_server::dns::DnsConfig>,
+    license_key: Option<String>,
 }
 
 /// Конфигурация Relay-узла в config.json
@@ -581,8 +582,9 @@ fn run_setup_wizard(config_path: &std::path::Path) -> Result<()> {
     }
     #[cfg(windows)]
     {
-        println!("    {}  Client  (connect to a server via VPN/proxy)", "[1]".cyan().bold());
-        println!("    {}  Server  (accept client connections)",           "[2]".cyan().bold());
+        println!("    {}  Client       (connect to a server via VPN/proxy)", "[1]".cyan().bold());
+        println!("    {}  Server       (accept client connections)",           "[2]".cyan().bold());
+        println!("    {}  Server+Panel (server with web management panel)",     "[3]".cyan().bold());
     }
 
     print!("\n  Your choice: ");
@@ -594,7 +596,7 @@ fn run_setup_wizard(config_path: &std::path::Path) -> Result<()> {
     #[cfg(unix)]
     let valid_choices = ["1", "2", "3", "4"];
     #[cfg(windows)]
-    let valid_choices = ["1", "2"];
+    let valid_choices = ["1", "2", "3"];
 
     if !valid_choices.contains(&mode_choice) {
         anyhow::bail!("Invalid selection '{}'", mode_choice);
@@ -647,7 +649,7 @@ fn run_setup_wizard(config_path: &std::path::Path) -> Result<()> {
 
             let tun_enable = wizard_yn("Enable TUN (full VPN) mode?", false);
 
-            let (tun_dns, kill_switch) = if tun_enable {
+            let (_tun_dns, _kill_switch) = if tun_enable {
                 let dns = wizard_prompt("DNS server for TUN", "1.1.1.1");
                 let ks  = wizard_yn("Enable kill switch (block traffic if VPN drops)?", false);
                 (dns, ks)
@@ -684,6 +686,11 @@ fn run_setup_wizard(config_path: &std::path::Path) -> Result<()> {
             let client_json = serde_json::json!({
                 "mode": "client",
                 "version": "0.3.1",
+                "api": {
+                    "enabled": true,
+                    "bind": "127.0.0.1:50001",
+                    "token": key_for_gen.clone()
+                },
                 "log": {
                     "level": "info"
                 },
@@ -836,22 +843,36 @@ fn run_setup_wizard(config_path: &std::path::Path) -> Result<()> {
             ]);
         }
 
-        // ── SERVER + PANEL (Linux only) ───────────────────────────────
-        #[cfg(unix)]
+        // ── SERVER + PANEL ───────────────────────────────
         "3" => {
-            const TOTAL: usize = 5;
+            #[cfg(unix)]    const TOTAL: usize = 6;
+            #[cfg(windows)] const TOTAL: usize = 5;
 
-            wizard_step(1, TOTAL, "Listen address");
+            wizard_step(1, TOTAL, "License Verification");
+            let license_key = wizard_prompt("Enter your ostp-enterprise license key", "");
+            let host = get_or_ask_public_ip(config_path);
+            
+            match ostp_server::license::verify_license(&license_key, &host) {
+                Ok(payload) => {
+                    wizard_ok("License verified successfully!");
+                    if !payload.features.contains(&"control_panel".to_string()) {
+                        anyhow::bail!("Your license does not include the 'control_panel' feature.");
+                    }
+                }
+                Err(e) => anyhow::bail!("Invalid license: {:?}", e),
+            }
+
+            wizard_step(2, TOTAL, "Listen address");
             let listen = wizard_prompt("Listen address (host:port)", "0.0.0.0:50000");
 
-            wizard_step(2, TOTAL, "Access keys");
+            wizard_step(3, TOTAL, "Access keys");
             let key_count_str = wizard_prompt("Number of access keys to generate", "1");
             let key_count = key_count_str.parse::<usize>().unwrap_or(1).max(1);
             let mut access_keys: Vec<String> = Vec::new();
             for _ in 0..key_count { access_keys.push(generate_secure_key("hex")); }
             wizard_ok(&format!("Generated {} key(s)", key_count));
 
-            wizard_step(3, TOTAL, "Web panel settings");
+            wizard_step(4, TOTAL, "Web panel settings");
             use rand::Rng;
             let panel_port = wizard_prompt("Panel port", "9090");
             let rand_path: String = (0..8).map(|_| {
@@ -916,15 +937,44 @@ fn run_setup_wizard(config_path: &std::path::Path) -> Result<()> {
                     "password_hash": pass_hash
                 },
                 "fallback": { "enabled": false, "listen": "0.0.0.0:443", "target": "127.0.0.1:8080" },
-                "debug": false
+                "debug": false,
+                "license_key": license_key
             });
 
+            wizard_step(5, TOTAL, "Saving configuration");
             let actual_path = wizard_save_config(config_path, &server_json)?;
 
-            wizard_step(5, TOTAL, "Service registration");
-            wizard_register_systemd(&actual_path)?;
+            #[cfg(unix)]
+            {
+                wizard_step(6, TOTAL, "Service registration");
+                wizard_register_systemd(&actual_path)?;
+            }
+            #[cfg(windows)]
+            {
+                wizard_step(5, TOTAL, "Service registration");
+                wizard_register_windows_service(&actual_path)?;
+            }
 
-            let host = get_or_ask_public_ip(config_path);
+            println!();
+            wizard_section("Downloading control panel...");
+            let download_url = format!("https://ostp.ospab.lol/download?key={}", license_key);
+            match reqwest::blocking::get(&download_url) {
+                Ok(mut response) => {
+                    if response.status().is_success() {
+                        let mut file = std::fs::File::create("ostp-control.zip").expect("Failed to create file");
+                        let _ = response.copy_to(&mut file);
+                        wizard_ok("Downloaded ostp-control.zip successfully! Please extract it.");
+                    } else {
+                        tracing::warn!("Failed to download panel: HTTP {}", response.status());
+                        println!("  Please download ostp-control manually from: {}", download_url);
+                    }
+                }
+                Err(e) => {
+                    tracing::warn!("Failed to download panel: {}", e);
+                    println!("  Please download ostp-control manually from: {}", download_url);
+                }
+            }
+
             let port = listen.split(':').last().unwrap_or("50000");
             println!();
             wizard_section("Share links for clients:");
@@ -1555,7 +1605,7 @@ async fn run_app() -> Result<()> {
             // Build DNS config and set owndns flag in subscribe links if DNS enabled
             let dns_cfg = server_cfg.dns;
             // Pass all listen addresses for multi-listener support
-            ostp_server::run_server(listen_addrs, Some(host), access_keys_meta, outbound, api_config, fallback_config, debug, dns_cfg, Some(args.config)).await?;
+            ostp_server::run_server(listen_addrs, Some(host), access_keys_meta, outbound, api_config, fallback_config, debug, dns_cfg, Some(args.config), server_cfg.license_key.clone()).await?;
         }
         AppMode::Client(client_cfg) => {
             println!("{}", include_str!("../../docs/banner.txt").blue().bold());

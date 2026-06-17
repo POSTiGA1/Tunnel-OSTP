@@ -494,7 +494,8 @@ async function handleSave(silent = false) {
     inbounds,
     outbounds,
     routing: { rules, default_outbound: "proxy" },
-    gui: rawConfig.gui || {}
+    gui: rawConfig.gui || {},
+    api: rawConfig.api || undefined
   };
 
   if (inAutoconnect) rawConfig.gui.autoconnect = inAutoconnect.checked;
