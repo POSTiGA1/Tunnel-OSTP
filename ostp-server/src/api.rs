@@ -54,6 +54,7 @@ pub struct ApiState {
     pub dns_server: std::sync::Arc<crate::dns::DnsServer>,
     pub audit_logs: Arc<RwLock<Vec<AuditLogEntry>>>,
     pub router: std::sync::Arc<crate::router::Router>,
+    pub is_licensed: bool,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -208,7 +209,8 @@ pub fn create_api_router(state: ApiState) -> Router {
                 .delete(handle_clear_audit),
         )
         .route("/users/bulk", post(handle_bulk_create_users))
-        .route("/router/rules", get(handle_get_rules).put(handle_put_rules));
+        .route("/router/rules", get(handle_get_rules).put(handle_put_rules))
+        .layer(axum::middleware::from_fn_with_state(state.clone(), license_middleware));
 
     let webpath = state.webpath.clone();
     let webpath = webpath.trim_matches('/');
@@ -236,6 +238,25 @@ pub fn create_api_router(state: ApiState) -> Router {
         .layer(cors)
         .with_state(state)
 }
+async fn license_middleware(
+    axum::extract::State(state): axum::extract::State<ApiState>,
+    req: axum::extract::Request,
+    next: axum::middleware::Next,
+) -> axum::response::Response {
+    if state.is_licensed {
+        return next.run(req).await;
+    }
+
+    let path = req.uri().path();
+    // Allow read-only access to users for relay, and server status
+    if (path == "/server/status" && req.method() == axum::http::Method::GET) ||
+       (path == "/users" && req.method() == axum::http::Method::GET) 
+    {
+        return next.run(req).await;
+    }
+
+    (axum::http::StatusCode::PAYMENT_REQUIRED, "This feature requires an active OSTP license. Get yours at https://ostp.ospab.lol").into_response()
+}
 
 /// Start the Management API server on the configured bind address.
 pub async fn start_api_server(
@@ -247,6 +268,7 @@ pub async fn start_api_server(
     config_path: Option<std::path::PathBuf>,
     dns_server: std::sync::Arc<crate::dns::DnsServer>,
     router: std::sync::Arc<crate::router::Router>,
+    is_licensed: bool,
 ) {
     let state = ApiState {
         access_keys,
@@ -263,6 +285,7 @@ pub async fn start_api_server(
         dns_server,
         audit_logs: Arc::new(RwLock::new(Vec::new())),
         router,
+        is_licensed,
     };
 
     let app = create_api_router(state);

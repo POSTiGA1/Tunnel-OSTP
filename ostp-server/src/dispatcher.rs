@@ -81,12 +81,11 @@ pub struct Dispatcher {
     replay_cache: std::collections::HashMap<Vec<u8>, u64>,
     roaming_tokens: f64,
     last_token_regen: std::time::Instant,
-    max_sessions: Option<usize>,
 }
 
 #[allow(dead_code)]
 impl Dispatcher {
-    pub fn new(machine_config: ProtocolConfig, access_keys: Arc<RwLock<HashMap<String, crate::api::UserMeta>>>, max_sessions: Option<usize>) -> Self {
+    pub fn new(machine_config: ProtocolConfig, access_keys: Arc<RwLock<HashMap<String, crate::api::UserMeta>>>) -> Self {
         let mut initial_stats = HashMap::new();
         for (key, meta) in access_keys.read().unwrap_or_else(|e| e.into_inner()).iter() {
             initial_stats.insert(key.clone(), Arc::new(UserStats::new(meta.limit_bytes)));
@@ -100,7 +99,6 @@ impl Dispatcher {
             replay_cache: std::collections::HashMap::new(),
             roaming_tokens: 50.0,
             last_token_regen: std::time::Instant::now(),
-            max_sessions,
         }
     }
 
@@ -371,11 +369,6 @@ impl Dispatcher {
                         if !self.replay_cache.contains_key(&payload.to_vec()) {
                             if self.replay_cache.len() >= 50_000 {
                                 tracing::warn!("Replay cache full (100000 entries), rejecting handshake from {}", peer);
-                                return Ok(DispatchOutcome::Unauthorized);
-                            }
-                            let limit = self.max_sessions.unwrap_or(30);
-                            if self.peer_machines.len() >= limit {
-                                tracing::warn!("drop session by {}, for more active clients buy our license here: https://ostp.ospab.lol/license", peer.ip());
                                 return Ok(DispatchOutcome::Unauthorized);
                             }
 

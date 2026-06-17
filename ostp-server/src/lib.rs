@@ -117,16 +117,15 @@ pub async fn run_server(
         mtu: 1350,
     };
 
-    let mut max_sessions = Some(30);
+    let mut is_licensed = false;
+
     if let Some(key) = license_key {
         let host = server_public_ip.as_deref().unwrap_or("0.0.0.0");
         match crate::license::verify_license(&key, host) {
             Ok(payload) => {
                 tracing::info!("License verified successfully! Features: {:?}", payload.features);
-                if payload.features.contains(&"unlimited_connections".to_string()) {
-                    max_sessions = None;
-                    tracing::info!("Unlimited connections enabled.");
-                }
+                is_licensed = true;
+                
                 if payload.features.contains(&"control_panel".to_string()) {
                     tracing::info!("Spawning control panel child process...");
                     
@@ -152,11 +151,9 @@ pub async fn run_server(
                 tracing::error!("Failed to verify license: {:?}", e);
             }
         }
-    } else {
-        tracing::info!("No license key provided. Free version limited to 30 sessions.");
     }
 
-    let dispatcher = Dispatcher::new(protocol_config, shared_keys.clone(), max_sessions);
+    let dispatcher = Dispatcher::new(protocol_config, shared_keys.clone());
 
     // Background config hot-reloader for access keys
     let shared_keys_clone = shared_keys.clone();
@@ -307,7 +304,7 @@ pub async fn run_server(
             let dns_server_api = dns_server.clone();
             let router_api = router.clone();
             tokio::spawn(async move {
-                api::start_api_server(api_cfg, api_keys, api_stats, server_host, server_port, config_path_api, dns_server_api, router_api).await;
+                api::start_api_server(api_cfg, api_keys, api_stats, server_host, server_port, config_path_api, dns_server_api, router_api, is_licensed).await;
             });
         }
     }
