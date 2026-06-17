@@ -956,6 +956,35 @@ fn run_setup_wizard(config_path: &std::path::Path) -> Result<()> {
             }
 
             println!();
+            wizard_section("Control Panel EULA (End User License Agreement)");
+            let eula_text = "OSTP CONTROL PANEL END USER LICENSE AGREEMENT
+
+The OSTP Control Panel is proprietary commercial software and is NOT covered by the AGPLv3 license of the OSTP core repository.
+
+By downloading, installing, or using the Control Panel, you agree to the following terms:
+1. RESTRICTIONS: You may not distribute, sub-license, rent, or resell the Control Panel.
+2. NO REVERSE ENGINEERING: You may not reverse engineer, decompile, or modify the Control Panel source code or bypass the license verification mechanisms.
+3. BINDING: Your license is strictly bound to the server IP/domain specified during purchase.
+4. DISCLAIMER: The Control Panel is provided 'AS IS' without warranties of any kind.";
+
+            println!("{}", colored::Colorize::cyan(eula_text));
+            
+            loop {
+                print!("\nDo you accept this EULA? (yes/no): ");
+                std::io::Write::flush(&mut std::io::stdout()).unwrap();
+                let mut accept = String::new();
+                std::io::stdin().read_line(&mut accept).unwrap();
+                match accept.trim().to_lowercase().as_str() {
+                    "y" | "yes" => break,
+                    "n" | "no" => {
+                        println!("{}", colored::Colorize::red("EULA declined. Skipping Control Panel download. You can still use the core via CLI."));
+                        return Ok(());
+                    }
+                    _ => continue,
+                }
+            }
+
+            println!();
             wizard_section("Downloading control panel...");
             let download_url = "https://ostp.ospab.lol/download";
             let client = reqwest::blocking::Client::new();
@@ -964,7 +993,8 @@ fn run_setup_wizard(config_path: &std::path::Path) -> Result<()> {
                     if response.status().is_success() {
                         let mut file = std::fs::File::create("ostp-control.zip").expect("Failed to create file");
                         let _ = response.copy_to(&mut file);
-                        wizard_ok("Downloaded ostp-control.zip successfully! Please extract it.");
+                        std::fs::write("EULA.txt", eula_text).unwrap_or_default();
+                        wizard_ok("Downloaded ostp-control.zip and EULA.txt successfully! Please extract the zip file.");
                     } else {
                         tracing::warn!("Failed to download panel: HTTP {}", response.status());
                         println!("  Please download ostp-control manually using:");
@@ -1432,47 +1462,89 @@ async fn run_app() -> Result<()> {
 }"#.to_string()
         } else {
             format!(r#"{{
-  // OSTP Client Configuration
+  // OSTP Configuration v0.3.1
+  // DO NOT EDIT THIS COMMENT - Migrator relies on it
+  "version": "0.3.1",
   "mode": "client",
-  "log_level": "info",
-  
-  // Address of the remote OSTP server
-  "server": "127.0.0.1:50000",
-  
-  // Must match one of the access_keys on the server
-  "access_key": "{}",
-  
-  // The local port for HTTP/SOCKS5 proxying
-  "socks5_bind": "127.0.0.1:1088",
-  
-  // Virtual network adapter settings
-  "tun": {{
-    "enable": false,
-    "wintun_path": "./wintun.dll",
-    "ipv4_address": "10.1.0.2/24",
-    "dns": "1.1.1.1"
+
+  // Management API (used by ostp-control web panel)
+  "api": {{
+    "enabled": true,
+    "bind": "127.0.0.1:50001",
+    // Bearer token for API auth - keep this secret
+    "token": "{key}"
   }},
-  
-  // Bypass tunnel for these domains/IPs
-  "exclude": {{
-    "domains": ["localhost", "127.0.0.1"],
-    "ips": [],
-    "processes": []
+
+  // Logging
+  "log": {{
+    "level": "info"
   }},
-  
-  // Transport Mode: "udp" (default WebRTC masquerade) or "uot" (TCP UoT)
-  "transport": {{
-    "mode": "udp",
-    "stealth_sni": "www.microsoft.com",
-    "wss": false
-  }},
-  
-  "mux": {{
-    "enabled": false,
-    "sessions": 1
-  }},
-  "debug": false
-}}"#, key)
+
+  // Inbound listeners - what the client exposes locally
+  "inbounds": [
+    {{
+      // TUN virtual adapter for full VPN mode (requires ostp-tun-helper)
+      "type": "tun",
+      "tag": "tun-in",
+      "auto_route": false,
+      "mtu": 1140
+    }},
+    {{
+      // SOCKS5/HTTP proxy listener (browser/system proxy)
+      "type": "local_proxy",
+      "tag": "socks-in",
+      "protocol": "socks",
+      "listen": "127.0.0.1",
+      "port": 1088
+    }}
+  ],
+
+  // Outbound connections
+  "outbounds": [
+    {{
+      // Primary OSTP proxy - connect to your server here
+      "type": "ostp",
+      "tag": "proxy",
+      "server": "YOUR_SERVER_IP",
+      "port": 50000,
+      "access_key": "{key}",
+      "transport": {{
+        // "udp" (default, WebRTC masquerade) or "uot" (TCP-over-UDP)
+        "type": "udp"
+      }},
+      "multiplex": {{
+        "enabled": false,
+        "sessions": 1
+      }}
+    }},
+    {{
+      // Direct (bypass) outbound
+      "type": "direct",
+      "tag": "direct"
+    }},
+    {{
+      // Block outbound
+      "type": "block",
+      "tag": "block"
+    }}
+  ],
+
+  // Routing rules - matched top-to-bottom, default_outbound is the fallback
+  "routing": {{
+    "rules": [
+      {{
+        // Bypass local addresses
+        "domain_suffix": ["localhost"],
+        "outbound": "direct"
+      }},
+      {{
+        "ip_cidr": ["127.0.0.0/8", "192.168.0.0/16", "10.0.0.0/8"],
+        "outbound": "direct"
+      }}
+    ],
+    "default_outbound": "proxy"
+  }}
+}}"#, key = key)
         };
         if let Some(parent) = args.config.parent() {
             if !parent.as_os_str().is_empty() {
