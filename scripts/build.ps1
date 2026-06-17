@@ -19,7 +19,7 @@ Write-Output "Synchronizing with origin master..."
 
 # --- Version bump ---
 $CargoToml = Join-Path $ProjectRoot "Cargo.toml"
-$Version = "0.2.0"
+$Version = "0.3.0"
 if (Test-Path $CargoToml) {
     $Content = [System.IO.File]::ReadAllText($CargoToml)
     # Match version only in [workspace.package] section (first occurrence)
