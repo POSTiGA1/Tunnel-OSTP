@@ -1,6 +1,6 @@
 # OSTP — Ospab Stealth Transport Protocol
 
-[English](README.md) · [Contributing](CONTRIBUTING.ru.md)
+[English](README.md) · [Wiki](https://github.com/ospab/ostp/wiki) · [Contributing](CONTRIBUTING.ru.md) · [Миграция v0.3.1](MIGRATION_V0_3_1.md)
 
 ![GitHub Release](https://img.shields.io/github/v/release/ospab/ostp?style=for-the-badge&color=blue)
 ![License: BSL 1.1](https://img.shields.io/badge/License-BSL%201.1-orange.svg?style=for-the-badge)
@@ -11,6 +11,9 @@
 > Быстрый кастомный зашифрованный транспортный протокол на Rust.
 
 **OSTP** (Ospab Stealth Transport Protocol) — кастомный транспортный протокол. Реализует собственный ARQ-транспорт поверх UDP, а также режим UoT (UDP-over-TCP). Каждый байт, включая заголовки пакетов, криптографически неотличим от случайного шума, что делает его устойчивым к системам глубокого анализа трафика (DPI).
+
+> [!IMPORTANT]
+> **Обновляетесь с версии v0.2.x?** Пожалуйста, ознакомьтесь с [Руководством по миграции конфигурации v0.3.1](MIGRATION_V0_3_1.md).
 
 ---
 

@@ -92,7 +92,7 @@ pub fn init_tracing(level: &str, app_name: &str, version: &str) -> Option<tracin
             .with(stderr_layer)
             .try_init();
             
-        tracing::info!(
+        tracing::debug!(
             "{} v{} | OS: {} | Arch: {} | log_level: {} | log_file: {}",
             app_name,
             version,

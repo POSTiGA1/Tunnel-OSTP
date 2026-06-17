@@ -26,7 +26,6 @@ use axum::{
     routing::{get, post, put},
     Json, Router,
 };
-use rust_embed::RustEmbed;
 use sha2::Digest;
 use serde::{Deserialize, Serialize};
 use tower_http::cors::{Any, CorsLayer};

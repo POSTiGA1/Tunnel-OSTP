@@ -81,16 +81,99 @@ pub async fn dial_tcp(
 }
 
 pub async fn handle_udp(
-    _client_src: std::net::SocketAddr,
-    _target_dst: std::net::SocketAddr,
-    _payload: bytes::Bytes,
-    _server: &str,
-    _port: u16,
-    _access_key: &str,
+    client_src: std::net::SocketAddr,
+    target_dst: std::net::SocketAddr,
+    payload: bytes::Bytes,
+    server: &str,
+    port: u16,
+    access_key: &str,
     _transport: &TransportConfig,
     _multiplex: &MultiplexConfig,
 ) -> Result<()> {
-    Err(anyhow!("OSTP UDP handler not yet fully migrated"))
+    let udp = tokio::net::UdpSocket::bind("0.0.0.0:0").await?;
+    udp.connect((server, port)).await?;
+
+    let mut psk = [0u8; 32];
+    let key_bytes = access_key.as_bytes();
+    let len = key_bytes.len().min(32);
+    psk[..len].copy_from_slice(&key_bytes[..len]);
+
+    let config = ProtocolConfig {
+        role: ostp_core::NoiseRole::Initiator,
+        psk,
+        session_id: u32::from_ne_bytes([
+            client_src.ip().to_string().as_bytes().get(0).copied().unwrap_or(0),
+            client_src.ip().to_string().as_bytes().get(1).copied().unwrap_or(0),
+            client_src.ip().to_string().as_bytes().get(2).copied().unwrap_or(0),
+            client_src.ip().to_string().as_bytes().get(3).copied().unwrap_or(0),
+        ]),
+        handshake_payload: vec![],
+        max_padding: 0,
+        padding_strategy: ostp_core::framing::PaddingStrategy::Fixed(0),
+        obfuscation_key: [0; 8],
+        max_reorder: 4096,
+        max_reorder_buffer: 2048,
+        ack_delay_ms: 50,
+        rto_ms: 200,
+        max_retries: 3,
+        max_sent_history: 8192,
+        handshake_pad_min: 8,
+        handshake_pad_max: 24,
+        mtu: 1400,
+    };
+
+    let mut machine = ProtocolMachine::new(config)?;
+
+    // Send initial packet with UDP payload
+    if let Ok(action) = machine.on_event(OstpEvent::Start) {
+        handle_udp_action(action, &udp).await;
+    }
+
+    // Send the actual UDP payload
+    let relay_msg = ostp_core::relay::RelayMessage::Connect(format!("{}:{}", target_dst.ip(), target_dst.port()));
+    let encoded = relay_msg.encode();
+    if let Ok(action) = machine.on_event(OstpEvent::Outbound(1, bytes::Bytes::from(encoded))) {
+        handle_udp_action(action, &udp).await;
+    }
+
+    // Send data packet
+    let data_msg = ostp_core::relay::RelayMessage::Data(payload.to_vec());
+    let encoded = data_msg.encode();
+    if let Ok(action) = machine.on_event(OstpEvent::Outbound(1, bytes::Bytes::from(encoded))) {
+        handle_udp_action(action, &udp).await;
+    }
+
+    // Keep-alive for a short time to receive response
+    for _ in 0..5 {
+        let mut buf = [0u8; 8192];
+        match tokio::time::timeout(
+            std::time::Duration::from_millis(100),
+            udp.recv(&mut buf)
+        ).await {
+            Ok(Ok(n)) => {
+                let _ = machine.on_event(OstpEvent::Inbound(bytes::Bytes::copy_from_slice(&buf[..n])));
+            }
+            _ => break,
+        }
+    }
+
+    Ok(())
+}
+
+async fn handle_udp_action(action: ProtocolAction, udp: &UdpSocket) {
+    match action {
+        ProtocolAction::SendDatagram(data) => {
+            let _ = udp.send(&data).await;
+        }
+        ProtocolAction::Multiple(actions) => {
+            for a in actions {
+                if let ProtocolAction::SendDatagram(data) = a {
+                    let _ = udp.send(&data).await;
+                }
+            }
+        }
+        _ => {}
+    }
 }
 
 async fn handle_action(action: ProtocolAction, udp: &UdpSocket, server_stream: &mut tokio::net::TcpStream) {

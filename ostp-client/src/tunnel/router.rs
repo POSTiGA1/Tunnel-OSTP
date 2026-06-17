@@ -47,10 +47,10 @@ impl Router {
         if let Some(domains) = &rule.domain_suffix {
             let mut domain_match = false;
             if let Some(sni) = &session.sni {
-                let sni = sni.to_lowercase();
+                let sni_lower = sni.to_lowercase();
                 domain_match = domains.iter().any(|d| {
-                    let d = d.to_lowercase();
-                    sni == d || sni.ends_with(&format!(".{}", d))
+                    let d_lower = d.to_lowercase();
+                    sni_lower == d_lower || sni_lower.ends_with(&format!(".{}", d_lower))
                 });
             }
             if !domain_match {
@@ -63,8 +63,11 @@ impl Router {
         if let Some(processes) = &rule.process_name {
             let mut proc_match = false;
             if let Some(proc) = &session.process_name {
-                let proc = proc.to_lowercase();
-                proc_match = processes.iter().any(|p| proc.contains(&p.to_lowercase()));
+                let proc_lower = proc.to_lowercase();
+                proc_match = processes.iter().any(|p| {
+                    let p_lower = p.to_lowercase();
+                    proc_lower.contains(&p_lower)
+                });
             }
             if !proc_match {
                 return false;

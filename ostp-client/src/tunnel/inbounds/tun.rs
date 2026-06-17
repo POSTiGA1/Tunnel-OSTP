@@ -51,11 +51,11 @@ pub async fn run_tun_inbound(
         }
     }
 
-    // Build smoltcp network stack
+    // Build smoltcp network stack with proper buffer sizes for throughput
     let (stack, tcp_runner, udp_socket, tcp_listener) = StackBuilder::default()
-        .stack_buffer_size(1024)
-        .tcp_buffer_size(1024)
-        .udp_buffer_size(1024)
+        .stack_buffer_size(65536)   // 64KB for packet accumulation
+        .tcp_buffer_size(131072)    // 128KB for TCP streams
+        .udp_buffer_size(65536)     // 64KB for UDP datagrams
         .enable_tcp(true)
         .enable_udp(true)
         .mtu(mtu)

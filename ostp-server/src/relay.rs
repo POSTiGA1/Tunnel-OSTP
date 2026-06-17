@@ -163,7 +163,7 @@ pub async fn handle_relay_message(
                             res = p.recv_from(&mut proxy_buf) => {
                                 if let Ok((len, target_str)) = res {
                                     let _ = udp_reply_clone.send((session_id, stream_id, target_str, proxy_buf[..len].to_vec()));
-                                }
+                                } else { break; }
                             }
                         }
                     } else {

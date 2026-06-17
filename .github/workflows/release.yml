@@ -44,9 +44,6 @@ jobs:
       - name: Install musl-tools
         run: sudo apt-get update && sudo apt-get install -y musl-tools
 
-      - name: Create dummy dist for rust-embed
-        run: mkdir -p ostp-control/dist && touch ostp-control/dist/index.html
-
       - name: cargo check
         run: cargo check --workspace
 
@@ -140,17 +137,6 @@ jobs:
     steps:
       - name: Checkout code
         uses: actions/checkout@v4
-
-      # ── Frontend Build ─────────────────────────────────────────────────────
-      - name: Setup Node.js
-        uses: actions/setup-node@v4
-        with:
-          node-version: 20
-      - name: Build Web Panel
-        working-directory: ostp-control
-        run: |
-          npm install
-          npm run build
 
       # ── Rust toolchain ─────────────────────────────────────────────────────
       - name: Setup Rust toolchain

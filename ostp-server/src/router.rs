@@ -89,6 +89,8 @@ impl UdpSessionRouter {
                 if action == crate::outbound::OutboundAction::Proxy {
                     if let Some(p) = &self.proxy {
                         return p.send_to(data, target).await;
+                    } else {
+                        return Err(anyhow::anyhow!("UDP Proxy not available for proxy action (possibly proxy doesn't support UDP)"));
                     }
                 }
             }
