@@ -15,13 +15,14 @@ pub mod outbound;
 pub mod fallback;
 pub mod tui;
 pub mod signal;
-pub mod license;
+
 pub mod api;
 pub mod transport;
 pub mod relay_node;
 mod relay;
 pub mod dns;
 pub mod router;
+pub mod config;
 
 pub use outbound::{OutboundAction, OutboundConfig, OutboundRule};
 pub use api::ApiConfig;
@@ -71,7 +72,6 @@ pub async fn run_server(
     debug: bool,
     dns_config: Option<dns::DnsConfig>,
     config_path: Option<std::path::PathBuf>,
-    license_key: Option<String>,
 ) -> Result<()> {
     let mut keys_map = HashMap::new();
     for (key, meta) in access_keys {
@@ -116,42 +116,6 @@ pub async fn run_server(
         handshake_pad_max: 128,
         mtu: 1350,
     };
-
-    let mut is_licensed = false;
-
-    if let Some(key) = license_key {
-        let host = server_public_ip.as_deref().unwrap_or("0.0.0.0");
-        match crate::license::verify_license(&key, host) {
-            Ok(payload) => {
-                tracing::info!("License verified successfully! Features: {:?}", payload.features);
-                is_licensed = true;
-                
-                if payload.features.contains(&"control_panel".to_string()) {
-                    tracing::info!("Spawning control panel child process...");
-                    
-                    let exe_name = if cfg!(windows) { "ostp-control.exe" } else { "./ostp-control" };
-                    match std::process::Command::new(exe_name)
-                        .env("OSTP_LICENSE_KEY", &key)
-                        .spawn()
-                    {
-                        Ok(mut child) => {
-                            tracing::info!("Control panel spawned successfully (PID: {})", child.id());
-                            tokio::spawn(async move {
-                                let _ = child.wait();
-                                tracing::warn!("Control panel process exited.");
-                            });
-                        }
-                        Err(e) => {
-                            tracing::error!("Failed to spawn {}: {}. Ensure it is downloaded and in the same directory.", exe_name, e);
-                        }
-                    }
-                }
-            }
-            Err(e) => {
-                tracing::error!("Failed to verify license: {:?}", e);
-            }
-        }
-    }
 
     let dispatcher = Dispatcher::new(protocol_config, shared_keys.clone());
 
@@ -304,7 +268,7 @@ pub async fn run_server(
             let dns_server_api = dns_server.clone();
             let router_api = router.clone();
             tokio::spawn(async move {
-                api::start_api_server(api_cfg, api_keys, api_stats, server_host, server_port, config_path_api, dns_server_api, router_api, is_licensed).await;
+                api::start_api_server(api_cfg, api_keys, api_stats, server_host, server_port, config_path_api, dns_server_api, router_api).await;
             });
         }
     }

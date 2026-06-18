@@ -22,6 +22,7 @@ hmac.workspace = true
 sha2.workspace = true
 base64 = "0.22"
 mime_guess = "2.0"
+rust-embed = "8.4"
 uuid = { version = "1", features = ["v4", "serde"] }
 reqwest = { version = "0.12", default-features = false, features = ["rustls-tls", "json"] }
 futures-util = "0.3"

@@ -15,8 +15,6 @@ pub struct ClientConfig {
     pub routing: RoutingConfig,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub gui: Option<serde_json::Value>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub api: Option<serde_json::Value>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -305,10 +303,6 @@ impl ClientConfig {
             new_json["gui"] = gui.clone();
         }
         
-        if let Some(api) = json.get("api") {
-            new_json["api"] = api.clone();
-        }
-
         (new_json, true)
     }
 }

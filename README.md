@@ -1,131 +1,101 @@
 # OSTP — Ospab Stealth Transport Protocol
 
-[Русский язык](README.ru.md) · [Wiki](https://github.com/ospab/ostp/wiki) · [Contributing](CONTRIBUTING.md) · [Releases](https://github.com/ospab/ostp/releases) · [Migration Guide](MIGRATION_V0_3_1.md)
+[Русский язык](README.ru.md) · [Wiki](https://github.com/ospab/ostp/wiki) · [Contributing](CONTRIBUTING.md) · [Releases](https://github.com/ospab/ostp/releases) · [Migration Guide](docs/migration_v0_3_1.md)
 
 ![GitHub Release](https://img.shields.io/github/v/release/ospab/ostp?style=for-the-badge&color=blue)
-![License: BSL 1.1](https://img.shields.io/badge/License-BSL%201.1-orange.svg?style=for-the-badge)
+![License: AGPL v3](https://img.shields.io/badge/License-AGPL%20v3-blue.svg?style=for-the-badge)
 ![Platform: Windows | Linux | macOS | Android](https://img.shields.io/badge/Platform-Windows%20%7C%20Linux%20%7C%20macOS%20%7C%20Android-green.svg?style=for-the-badge)
 ![Crypto](https://img.shields.io/badge/Crypto-Noise__NNpsk0-blueviolet?style=for-the-badge)
 ![Transport](https://img.shields.io/badge/Transport-UDP%20ARQ-informational?style=for-the-badge)
 
-> A fast, custom encrypted transport protocol written in Rust.
-
-**OSTP** (Ospab Stealth Transport Protocol) is a high-performance transport protocol. It implements a custom ARQ transport over UDP, as well as a UoT (UDP-over-TCP) mode. Every byte on the wire — including packet headers — is cryptographically indistinguishable from random noise, making it highly resistant to Deep Packet Inspection (DPI).
+OSTP (Ospab Stealth Transport Protocol) is an encrypted transport protocol written in Rust. It implements a custom ARQ transport over UDP and a UDP-over-TCP (UoT) mode. The protocol uses cryptographic masking for all packet headers and payloads to resist traffic classification by Deep Packet Inspection (DPI) systems.
 
 > [!IMPORTANT]
-> **Upgrading from v0.2.x?** Please read the [v0.3.1 Configuration Migration Guide](MIGRATION_V0_3_1.md).
+> **Upgrading from v0.2.x?** Please read the [v0.3.1 Configuration Migration Guide](docs/migration_v0_3_1.md).
 
 ---
 
-## Quick Install
+## Technical Capabilities
 
-### Linux
-```bash
-bash <(curl -Ls https://raw.githubusercontent.com/ospab/ostp/master/scripts/install.sh)
-```
-
-### Windows (PowerShell, run as Administrator)
-```powershell
-irm https://raw.githubusercontent.com/ospab/ostp/master/scripts/install.ps1 | iex
-```
-
-### Manual Download
-Download pre-built binaries for your platform from [GitHub Releases](https://github.com/ospab/ostp/releases).
-
----
-
-## Key Features
-
-| Feature | Description |
-|---------|-------------|
-| **Full Traffic Obfuscation** | Every packet — including headers — is indistinguishable from random noise. Session IDs and nonces are masked with per-packet HMAC-derived keys. |
-| **Noise Protocol Handshake** | `Noise_NNpsk0_25519_ChaChaPoly_BLAKE2s` — PSK-authenticated, forward-secret key exchange with no static identity exposure. |
+| Capability | Description |
+|------------|-------------|
+| **Traffic Masking** | Header and payload encryption using per-packet HMAC-derived keys. Indistinguishable from random noise. |
+| **Noise Protocol** | `Noise_NNpsk0_25519_ChaChaPoly_BLAKE2s` — PSK-authenticated, forward-secret key exchange. |
 | **Reliable UDP (ARQ)** | Selective ACK/NACK with rate-limited retransmission, configurable reorder buffer, and exponential backoff. |
-| **Multiplexed Streams** | Multiple logical TCP streams over a single encrypted UDP session with per-stream flow control. |
-| **Seamless Roaming** | Clients can switch networks (WiFi ↔ LTE) without session interruption — tracked by session-ID, not IP. |
-| **Management API** | Built-in REST API for third-party panels (3x-ui, custom dashboards). Per-user stats, traffic limits, key CRUD. |
-| **Fallback Server** | TCP fallback proxy to a web server — makes OSTP indistinguishable from nginx during active probing. |
-| **Multi-Listener** | Bind to multiple addresses simultaneously (dual-stack IPv4/IPv6, multi-port). |
-| **TUN Mode** | Full-system VPN via native `smoltcp` network stack without external dependencies. All traffic transparently routed through the tunnel. |
-| **xHTTP Stealth (UoT)** | UDP-over-TCP tunnel that completely hides traffic. Since all data is fully encrypted and length-prefixed, it bypasses DPI filters that block unknown UDP traffic by riding over a plain TCP connection. |
-| **Mobile Apps** | Beautiful cross-platform mobile client (Flutter) for effortless client management. |
-| **TURN Relay** | RFC 5766 TURN support for environments where direct UDP is blocked. |
-| **Hot-Reload** | Runtime config reload without restart (access keys, exclusions, mux settings). |
-| **Structured Logging** | `tracing`-based logging with `RUST_LOG` filtering. JSON/file/syslog output support. |
-| **Cross-Platform** | Windows, Linux, macOS, Android, FreeBSD, MIPS, RISC-V. Single binary, no runtime dependencies. |
+| **Multiplexed Streams**| Multiple logical TCP streams over a single encrypted UDP session with per-stream flow control. |
+| **Session Roaming** | Connection persistence across IP changes via session ID tracking. |
+| **UoT Mode** | UDP-over-TCP encapsulation with length-prefixing to bypass UDP blocking. |
+| **Fallback Server** | TCP proxying to a legitimate web server to resist active probing. |
+| **TUN Mode** | Native network stack integration (`smoltcp`) for full-system routing without external dependencies. |
+| **Management API** | Built-in REST API for server administration, metrics, and key generation. |
+| **TURN Relay** | RFC 5766 TURN support for NAT traversal. |
 
 ---
 
 ## Architecture
 
 ```mermaid
-graph TD
-    subgraph Client ["Client"]
-        A[Browser / Apps] -->|SOCKS5 / HTTP| B(Bridge Multiplexer)
-        TUN[TUN Interface] -->|IP Packets| B
-        
-        subgraph OSTPCoreClient ["OSTP Core Protocol"]
-            B --> C{Protocol Machine}
-            C -->|Noise Handshake| D[ChaCha20Poly1305 AEAD]
-            D -->|Obfuscated UDP Payload| E((UDP Socket))
-        end
+flowchart LR
+    Apps[Local Apps] -->|SOCKS5 / TUN| CoreC
+
+    subgraph Client [Client Node]
+        CoreC[OSTP Client] -.->|Encrypt & Mask| NetC[Transport Layer]
     end
 
-    E <==>|Encrypted & Obfuscated UDP Tunnel| F
+    NetC <==>|Encrypted UDP / UoT| NetS
 
-    subgraph Server ["Server"]
-        F((UDP Socket)) --> G{Dispatcher}
-        
-        subgraph OSTPCoreServer ["OSTP Core Backend"]
-            G -->|Auth & Decrypt| H[Session & State Guard]
-            H -->|TCP Stream| I[Relay Loop]
-        end
-        
-        G -->|Active Probing / Unauth| FB[TCP Fallback Proxy]
-        FB -->|Forward| NGINX[nginx / Caddy]
-        
-        H -->|Stats & Traffic| API[Management API]
-        
-        I -->|Outbound| WWW((Internet))
+    subgraph Server [Server Node]
+        NetS[Transport Layer] -.->|Decrypt & Auth| CoreS[OSTP Server]
+        NetS -->|Unauthenticated| Fallback[Fallback Server]
     end
+
+    CoreS -->|Relay| WWW((Internet))
+    Fallback -->|Forward| Web((Web / NGINX))
 ```
 
 ---
 
 ## Quick Start
 
-### 1. Generate config
+### 1. Installation
 
+**Linux:**
 ```bash
-# On your VPS (server):
+bash <(curl -Ls https://raw.githubusercontent.com/ospab/ostp/master/scripts/install.sh)
+```
+
+**Windows (PowerShell as Administrator):**
+```powershell
+irm https://raw.githubusercontent.com/ospab/ostp/master/scripts/install.ps1 | iex
+```
+
+### 2. Configuration
+
+Initialize the configuration files for the server and client:
+```bash
+# On the server:
 ./ostp --init server
 
-# On your machine (client):
+# On the client:
 ./ostp --init client
 ```
 
-### 2. Edit config
-
-**Server** — set your access keys:
+**Server Example** (`config.json`):
 ```jsonc
 {
   "mode": "server",
   "listen": "0.0.0.0:50000",
-  "access_keys": ["YOUR_SECRET_KEY"],
-  "api": { "enabled": true, "bind": "127.0.0.1:9090", "token": "admin-token" },
-  "fallback": { "enabled": false, "listen": "0.0.0.0:443", "target": "127.0.0.1:8080" }
+  "access_keys": ["YOUR_SECRET_KEY"]
 }
 ```
 
-**Client** — point to your server:
+**Client Example** (`config.json`):
 ```jsonc
 {
   "mode": "client",
   "version": "0.3.1",
-  "log": { "level": "info" },
   "inbounds": [
-    { "type": "local_proxy", "tag": "socks-in", "protocol": "socks", "listen": "127.0.0.1", "port": 1088 },
-    { "type": "tun", "tag": "tun-in", "auto_route": false, "mtu": 1140 }
+    { "type": "local_proxy", "tag": "socks-in", "protocol": "socks", "listen": "127.0.0.1", "port": 1088 }
   ],
   "outbounds": [
     {
@@ -135,90 +105,35 @@ graph TD
       "port": 50000,
       "access_key": "YOUR_SECRET_KEY",
       "transport": { "type": "udp" }
-    },
-    { "type": "direct", "tag": "direct" },
-    { "type": "block", "tag": "block" }
-  ],
-  "routing": {
-    "rules": [
-      { "domain_suffix": ["localhost"], "outbound": "direct" }
-    ],
-    "default_outbound": "proxy"
-  }
+    }
+  ]
 }
 ```
 
-> **Note:** Upgrading from v0.2.x? Read the [v0.3.1 Migration Guide](MIGRATION_V0_3_1.md).
-
-### 3. Run
+### 3. Execution
 
 ```bash
-./ostp                        # Uses config.json in current directory
-./ostp --config /path/to.json # Custom config path
-./ostp --check                # Validate config without running
-./ostp --generate-key         # Generate a new access key
-./ostp --links                # Print client share links
+# Run with default config.json
+./ostp
+
+# Run with a specific config path
+./ostp --config /path/to/config.json
 ```
 
-### 4. Connect via share link (one-liner)
+Or connect via a one-line share link on the client:
 ```bash
-./ostp "ostp://ACCESS_KEY@server.com:50000?..."
-```
-
-> [!WARNING]
-> Always wrap the `ostp://...` link in quotes (`"`) so your terminal doesn't misinterpret special characters like `&` or `?`.
-
----
-
-## Management API
-
-Built-in REST API for building panels and dashboards.
-
-```bash
-# Server status
-curl -H "Authorization: Bearer mytoken" http://127.0.0.1:9090/api/server/status
-
-# List all users with traffic stats  
-curl -H "Authorization: Bearer mytoken" http://127.0.0.1:9090/api/users
-
-# Create a user with 10GB traffic limit
-curl -X POST -H "Authorization: Bearer mytoken" \
-  -H "Content-Type: application/json" \
-  -d '{"limit_bytes": 10737418240}' \
-  http://127.0.0.1:9090/api/users
-```
-
-Full API reference: [Management API](https://github.com/ospab/ostp/wiki/Management-API)
-
----
-
-## CLI Reference
-
-```
-ostp [OPTIONS] [URL]
-
-Options:
-  --config <PATH>        Config file path (default: config.json)
-  --init <MODE>          Generate template config (server/client)
-  --check                Validate configuration and exit
-  -g, --generate-key     Generate a secure access key
-  -c, --count <N>        Number of keys to generate (default: 1)
-  --format <FMT>         Key format: hex, base64 (default: hex)
-  --links                Print client share links from server config
-
-Arguments:
-  [URL]                  Connect via share link: ostp://KEY@HOST:PORT
+./ostp "ostp://YOUR_SECRET_KEY@YOUR_SERVER_IP:50000?transport=udp"
 ```
 
 ---
 
-## Protocol Summary
+## Protocol Specification
 
 | Layer | Mechanism |
 |-------|-----------|
 | Key Exchange | Noise NNpsk0 (X25519 + ChaChaPoly + BLAKE2s) zero-RTT |
 | Encryption | ChaCha20-Poly1305 AEAD per-packet |
-| Header Obfuscation | HMAC-SHA256 derived per-packet mask |
+| Header Masking | HMAC-SHA256 derived per-packet mask |
 | Reliability | Selective ACK with cumulative + SACK ranges |
 | Retransmission | Rate-limited NACK + exponential backoff RTO |
 | Keepalive | Ping/Pong with RTT measurement every 5s |
@@ -228,38 +143,31 @@ Arguments:
 ## Building from Source
 
 ```bash
-# Prerequisites: Rust 1.75+
+# Requires Rust 1.75+
 cargo build --release
 
 # Cross-compile for Linux
 cross build --release --target x86_64-unknown-linux-gnu
-
-# Run tests
-cargo test -p ostp-core -p ostp-server
 ```
 
 ---
 
 ## Documentation
 
-- **[Wiki](https://github.com/ospab/ostp/wiki)** — Full documentation
-- [Installation](https://github.com/ospab/ostp/wiki/Installation)
+- **[Wiki](https://github.com/ospab/ostp/wiki)**
 - [Configuration Reference](https://github.com/ospab/ostp/wiki/Configuration)
 - [Management API](https://github.com/ospab/ostp/wiki/Management-API)
 - [Protocol Design](https://github.com/ospab/ostp/wiki/Protocol-Design)
-- [Building from Source](https://github.com/ospab/ostp/wiki/Building-from-Source)
-- [FAQ](https://github.com/ospab/ostp/wiki/FAQ)
 
 ---
 
 ## License
 
-Business Source License 1.1. Free for personal and non-commercial use.  
-Converts to MIT License on May 14, 2030.
+GNU Affero General Public License v3.0 (AGPL-3.0). See [LICENSE](LICENSE) for more details.
 
 ---
 
-## Contact
+## Contacts
 
 - **Telegram**: [@ospab0](https://t.me/ospab0)
 - **Email**: gvoprgrg@gmail.com

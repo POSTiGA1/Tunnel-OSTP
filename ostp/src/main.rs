@@ -194,18 +194,17 @@ impl UnifiedConfig {
     fn validate(&self) -> Result<()> {
         match &self.mode {
             AppMode::Server(cfg) => {
-                if cfg.access_keys.is_empty() {
-                    anyhow::bail!("Server configuration must contain at least one access_key.");
-                }
-                if let Some(outbound) = &cfg.outbound {
-                    if outbound.enabled {
-                        let action = outbound.default_action.as_deref().unwrap_or("direct");
-                        if action == "direct" && outbound.rules.is_empty() {
-                            println!("\n[WARNING] Server outbound proxy is ENABLED, but default_action is 'direct' and there are no rules!");
-                            println!("          This means ALL traffic will bypass the proxy and go out directly from the server IP.");
-                            println!("          If you want all traffic to be proxied, change 'default_action' to 'proxy'.\n");
+                let mut has_ostp = false;
+                for inbound in &cfg.inbounds {
+                    if let ostp_server::config::ServerInbound::Ostp { users, .. } = inbound {
+                        has_ostp = true;
+                        if users.is_empty() {
+                            anyhow::bail!("Ostp inbound must contain at least one user.");
                         }
                     }
+                }
+                if !has_ostp {
+                    anyhow::bail!("Server configuration must contain at least one Ostp inbound.");
                 }
             }
             AppMode::Client(cfg) => {
@@ -287,18 +286,7 @@ struct TransportConfigRaw {
     wss: Option<bool>,
 }
 
-#[derive(Debug, Deserialize, Serialize)]
-struct ServerConfig {
-    listen: ListenConfig,
-    access_keys: Vec<UserConfig>,
-    debug: Option<bool>,
-    outbound: Option<OutboundConfig>,
-    api: Option<ApiConfig>,
-    fallback: Option<FallbackCfg>,
-    transport: Option<TransportConfigRaw>,
-    dns: Option<ostp_server::dns::DnsConfig>,
-    license_key: Option<String>,
-}
+type ServerConfig = ostp_server::config::ModularServerConfig;
 
 /// Конфигурация Relay-узла в config.json
 #[derive(Debug, Deserialize, Serialize)]
@@ -691,11 +679,6 @@ fn run_setup_wizard(config_path: &std::path::Path) -> Result<()> {
             let client_json = serde_json::json!({
                 "mode": "client",
                 "version": "0.3.1",
-                "api": {
-                    "enabled": true,
-                    "bind": "127.0.0.1:50001",
-                    "token": key_for_gen.clone()
-                },
                 "log": {
                     "level": "info"
                 },
@@ -855,31 +838,18 @@ fn run_setup_wizard(config_path: &std::path::Path) -> Result<()> {
             #[cfg(unix)]    const TOTAL: usize = 6;
             #[cfg(windows)] const TOTAL: usize = 5;
 
-            wizard_step(1, TOTAL, "License Verification");
-            let license_key = wizard_prompt("Enter your ostp-enterprise license key", "");
-            let host = get_or_ask_public_ip(config_path);
-            
-            match ostp_server::license::verify_license(&license_key, &host) {
-                Ok(payload) => {
-                    wizard_ok("License verified successfully!");
-                    if !payload.features.contains(&"control_panel".to_string()) {
-                        anyhow::bail!("Your license does not include the 'control_panel' feature.");
-                    }
-                }
-                Err(e) => anyhow::bail!("Invalid license: {:?}", e),
-            }
-
-            wizard_step(2, TOTAL, "Listen address");
+            wizard_step(1, TOTAL, "Listen address");
             let listen = wizard_prompt("Listen address (host:port)", "0.0.0.0:50000");
+            let host = get_or_ask_public_ip(config_path);
 
-            wizard_step(3, TOTAL, "Access keys");
+            wizard_step(2, TOTAL, "Access keys");
             let key_count_str = wizard_prompt("Number of access keys to generate", "1");
             let key_count = key_count_str.parse::<usize>().unwrap_or(1).max(1);
             let mut access_keys: Vec<String> = Vec::new();
             for _ in 0..key_count { access_keys.push(generate_secure_key("hex")); }
             wizard_ok(&format!("Generated {} key(s)", key_count));
 
-            wizard_step(4, TOTAL, "Web panel settings");
+            wizard_step(3, TOTAL, "Web panel settings");
             use rand::Rng;
             let panel_port = wizard_prompt("Panel port", "9090");
             let rand_path: String = (0..8).map(|_| {
@@ -928,93 +898,44 @@ fn run_setup_wizard(config_path: &std::path::Path) -> Result<()> {
                 "log": {
                     "level": "info"
                 },
-                "listen": listen,
-                "access_keys": access_keys,
-                "outbound": {
-                    "enabled": false,
-                    "protocol": "socks5",
-                    "address": "127.0.0.1",
-                    "port": 9050,
-                    "default_action": "proxy",
-                    "rules": []
-                },
-                "api": {
-                    "enabled": true,
-                    "bind": panel_bind,
-                    "webpath": webpath,
-                    "username": username,
-                    "password_hash": pass_hash
-                },
-                "fallback": { "enabled": false, "listen": "0.0.0.0:443", "target": "127.0.0.1:8080" },
-                "debug": false,
-                "license_key": license_key
+                "inbounds": [
+                    {
+                        "type": "ostp",
+                        "tag": "ostp-in",
+                        "listen": "0.0.0.0",
+                        "port": 50000,
+                        "users": access_keys
+                    },
+                    {
+                        "type": "api",
+                        "tag": "api-in",
+                        "listen": "0.0.0.0",
+                        "port": panel_port.parse::<u16>().unwrap_or(9090),
+                        "webpath": webpath,
+                        "username": username,
+                        "password_hash": pass_hash
+                    }
+                ],
+                "outbounds": [
+                    {
+                        "type": "direct",
+                        "tag": "direct"
+                    }
+                ]
             });
 
-            wizard_step(5, TOTAL, "Saving configuration");
+            wizard_step(4, TOTAL, "Saving configuration");
             let actual_path = wizard_save_config(config_path, &server_json)?;
 
             #[cfg(unix)]
             {
-                wizard_step(6, TOTAL, "Service registration");
+                wizard_step(5, TOTAL, "Service registration");
                 wizard_register_systemd(&actual_path)?;
             }
             #[cfg(windows)]
             {
                 wizard_step(5, TOTAL, "Service registration");
                 wizard_register_windows_service(&actual_path)?;
-            }
-
-            println!();
-            wizard_section("Control Panel EULA (End User License Agreement)");
-            let eula_text = "OSTP CONTROL PANEL END USER LICENSE AGREEMENT
-
-The OSTP Control Panel is proprietary commercial software and is NOT covered by the AGPLv3 license of the OSTP core repository.
-
-By downloading, installing, or using the Control Panel, you agree to the following terms:
-1. RESTRICTIONS: You may not distribute, sub-license, rent, or resell the Control Panel.
-2. NO REVERSE ENGINEERING: You may not reverse engineer, decompile, or modify the Control Panel source code or bypass the license verification mechanisms.
-3. BINDING: Your license is strictly bound to the server IP/domain specified during purchase.
-4. DISCLAIMER: The Control Panel is provided 'AS IS' without warranties of any kind.";
-
-            println!("{}", colored::Colorize::cyan(eula_text));
-            
-            loop {
-                print!("\nDo you accept this EULA? (yes/no): ");
-                std::io::Write::flush(&mut std::io::stdout()).unwrap();
-                let mut accept = String::new();
-                std::io::stdin().read_line(&mut accept).unwrap();
-                match accept.trim().to_lowercase().as_str() {
-                    "y" | "yes" => break,
-                    "n" | "no" => {
-                        println!("{}", colored::Colorize::red("EULA declined. Skipping Control Panel download. You can still use the core via CLI."));
-                        return Ok(());
-                    }
-                    _ => continue,
-                }
-            }
-
-            println!();
-            wizard_section("Downloading control panel...");
-            let download_url = "https://ostp.ospab.lol/download";
-            let client = reqwest::blocking::Client::new();
-            match client.get(download_url).header("Authorization", format!("Bearer {}", license_key)).send() {
-                Ok(mut response) => {
-                    if response.status().is_success() {
-                        let mut file = std::fs::File::create("ostp-control.zip").expect("Failed to create file");
-                        let _ = response.copy_to(&mut file);
-                        std::fs::write("EULA.txt", eula_text).unwrap_or_default();
-                        wizard_ok("Downloaded ostp-control.zip and EULA.txt successfully! Please extract the zip file.");
-                    } else {
-                        tracing::warn!("Failed to download panel: HTTP {}", response.status());
-                        println!("  Please download ostp-control manually using:");
-                        println!("  curl -H \"Authorization: Bearer {}\" -o ostp-control.zip {}", license_key, download_url);
-                    }
-                }
-                Err(e) => {
-                    tracing::warn!("Failed to download panel: {}", e);
-                    println!("  Please download ostp-control manually using:");
-                    println!("  curl -H \"Authorization: Bearer {}\" -o ostp-control.zip {}", license_key, download_url);
-                }
             }
 
             let port = listen.split(':').last().unwrap_or("50000");
@@ -1351,23 +1272,33 @@ async fn run_app() -> Result<()> {
                 match &config.mode {
                     AppMode::Server(s) => {
                         println!("{} Config OK: server mode", "[ostp]".green().bold());
-                        println!("  Listen: {:?}", s.listen.primary().as_str().cyan());
-                        println!("  Access keys: {}", s.access_keys.len().to_string().yellow());
-                        if let Some(api) = &s.api {
-                            println!("  API: {} (bind: {})",
-                                if api.enabled.unwrap_or(false) { "enabled" } else { "disabled" },
-                                api.bind.as_deref().unwrap_or("127.0.0.1:9090"));
+                        let mut keys_count = 0;
+                        let mut has_outbound = false;
+                        for inbound in &s.inbounds {
+                            match inbound {
+                                ostp_server::config::ServerInbound::Ostp { listen, port, users, fallback, .. } => {
+                                    println!("  Inbound OSTP: {}:{}", listen.cyan(), port.to_string().cyan());
+                                    keys_count += users.len();
+                                    if let Some(fb) = fallback {
+                                        if fb.enabled {
+                                            println!("    Fallback: -> {}", fb.target.cyan());
+                                        }
+                                    }
+                                }
+                                ostp_server::config::ServerInbound::Api { listen, port, .. } => {
+                                    println!("  Inbound API: {}:{}", listen.cyan(), port.to_string().cyan());
+                                }
+                            }
                         }
-                        if let Some(outbound) = &s.outbound {
-                            println!("  Outbound proxy: {} ({})",
-                                if outbound.enabled { "enabled" } else { "disabled" },
-                                outbound.protocol);
+                        println!("  Access keys: {}", keys_count.to_string().yellow());
+                        for ob in &s.outbounds {
+                            if let ostp_server::config::ServerOutbound::Socks { server, port, .. } = ob {
+                                println!("  Outbound Proxy: SOCKS5 {}:{}", server.cyan(), port.to_string().cyan());
+                                has_outbound = true;
+                            }
                         }
-                        if let Some(fb) = &s.fallback {
-                            println!("  Fallback: {} ({} -> {})",
-                                if fb.enabled.unwrap_or(false) { "enabled" } else { "disabled" },
-                                fb.listen.as_deref().unwrap_or("0.0.0.0:443"),
-                                fb.target.as_deref().unwrap_or("127.0.0.1:8080"));
+                        if let Some(dns) = &s.dns {
+                            println!("  DNS Proxy: Listen 127.0.0.1:{}", dns.local_port.to_string().cyan());
                         }
                     }
                     AppMode::Client(c) => {
@@ -1444,15 +1375,6 @@ async fn run_app() -> Result<()> {
     ]
   }},
 
-  // Management API configuration.
-  "api": {{
-    "enabled": false,
-    "bind": "0.0.0.0:9090",
-    "webpath": "",
-    "username": "",
-    "password_hash": ""
-  }},
-
   // Fallback TCP proxy: unrecognized connections are proxied to a web server (anti-DPI).
   "fallback": {{
     "enabled": false,
@@ -1486,11 +1408,6 @@ async fn run_app() -> Result<()> {
   // DO NOT EDIT THIS COMMENT - Migrator relies on it
   "version": "0.3.1",
   "mode": "client",
-  "api": {{
-    "enabled": true,
-    "bind": "127.0.0.1:50001",
-    "token": "{key}"
-  }},
   "log": {{
     "level": "info"
   }},
@@ -1515,7 +1432,7 @@ async fn run_app() -> Result<()> {
       "tag": "proxy",
       "server": "YOUR_SERVER_IP",
       "port": 50000,
-      "access_key": "YOUR_ACCESS_KEY",
+      "access_key": "{key}",
       "transport": {{
         "type": "udp"
       }},
@@ -1536,7 +1453,7 @@ async fn run_app() -> Result<()> {
   "routing": {{
     "rules": [
       {{
-        "domain_suffix": ["localhost", "127.0.0.1"],
+        "domain_suffix": ["localhost"],
         "outbound": "direct"
       }}
     ],
@@ -1556,18 +1473,28 @@ async fn run_app() -> Result<()> {
             let mut stripped = json_comments::StripComments::new(content.as_bytes());
             if let Ok(config) = serde_json::from_reader::<_, UnifiedConfig>(&mut stripped) {
                 if let AppMode::Server(s) = &config.mode {
-                    let key = &s.access_keys[0];
-                    let host = get_or_ask_public_ip(&args.config);
-                    let mut query_params = Vec::<String>::new();
-                    query_params.push("type=udp".to_string());
-
-                    let mut link = format!("ostp://{}@{}:50000", key.key(), host);
-                    if !query_params.is_empty() {
-                        link.push('?');
-                        link.push_str(&query_params.join("&"));
+                    let mut first_key = None;
+                    for inbound in &s.inbounds {
+                        if let ostp_server::config::ServerInbound::Ostp { users, .. } = inbound {
+                            if !users.is_empty() {
+                                first_key = Some(users[0].key());
+                                break;
+                            }
+                        }
                     }
-                    println!("\n  Share link for client distribution:");
-                    println!("  {}", link);
+                    if let Some(key) = first_key {
+                        let host = get_or_ask_public_ip(&args.config);
+                        let mut query_params = Vec::<String>::new();
+                        query_params.push("type=udp".to_string());
+
+                        let mut link = format!("ostp://{}@{}:50000", key, host);
+                        if !query_params.is_empty() {
+                            link.push('?');
+                            link.push_str(&query_params.join("&"));
+                        }
+                        println!("\n  Share link for client distribution:");
+                        println!("  {}", link);
+                    }
                 }
             }
         }
@@ -1622,23 +1549,44 @@ async fn run_app() -> Result<()> {
     config.validate()?;
 
     if args.links {
-        match config.mode {
+        match &config.mode {
             AppMode::Server(server_cfg) => {
-                let listen = server_cfg.listen.primary();
-                let parts: Vec<&str> = listen.split(':').collect();
-                let port = parts.get(1).unwrap_or(&"50000");
-                let host = if parts[0] == "0.0.0.0" { 
-                    get_or_ask_public_ip(&args.config) 
-                } else { 
-                    parts[0].to_string() 
-                };
+                let mut host = "127.0.0.1".to_string();
+                let mut port = 50000;
+                let mut users = Vec::new();
+                for inbound in &server_cfg.inbounds {
+                    if let ostp_server::config::ServerInbound::Ostp { listen: l, port: p, users: u, .. } = inbound {
+                        if l != "0.0.0.0" {
+                            host = l.clone();
+                        }
+                        port = *p;
+                        users.extend(u.clone());
+                    }
+                }
+                if host == "127.0.0.1" { 
+                    host = get_or_ask_public_ip(&args.config); 
+                }
                 
                 println!("\n  Client share links from {:?}:", args.config);
-                for (idx, key) in server_cfg.access_keys.iter().enumerate() {
+                if let AppMode::Server(cfg) = &config.mode {
+                    let mut has_ostp = false;
+                    for inbound in &cfg.inbounds {
+                        if let ostp_server::config::ServerInbound::Ostp { users, .. } = inbound {
+                            has_ostp = true;
+                            if users.is_empty() {
+                                anyhow::bail!("Ostp inbound must contain at least one user.");
+                            }
+                        }
+                    }
+                    if !has_ostp {
+                        anyhow::bail!("Server configuration must contain at least one Ostp inbound.");
+                    }
+                }
+                for (idx, user) in users.iter().enumerate() {
                     let mut query_params = Vec::<String>::new();
                     query_params.push("type=udp".to_string());
 
-                    let mut link = format!("ostp://{}@{}:{}", key.key(), host, port);
+                    let mut link = format!("ostp://{}@{}:{}", user.key(), host, port);
                     if !query_params.is_empty() {
                         link.push('?');
                         link.push_str(&query_params.join("&"));
@@ -1660,51 +1608,84 @@ async fn run_app() -> Result<()> {
         AppMode::Server(server_cfg) => {
             println!("{}", include_str!("../../docs/banner.txt").blue().bold());
             
-            let listen_addrs = server_cfg.listen.addresses();
+            let mut listen_addrs = Vec::new();
+            let mut access_keys_meta = Vec::new();
+            let mut fallback_config = None;
+            let mut host_port = ("0.0.0.0".to_string(), 50000);
+            let mut api_config = None;
+
+            for inbound in server_cfg.inbounds {
+                match inbound {
+                    ostp_server::config::ServerInbound::Ostp { listen, port, users, fallback, .. } => {
+                        listen_addrs.push(format!("{}:{}", listen, port));
+                        host_port = (listen.clone(), port);
+                        for uc in users {
+                            access_keys_meta.push((uc.key(), ostp_server::api::UserMeta {
+                                name: uc.name(),
+                                limit_bytes: uc.limit(),
+                            }));
+                        }
+                        if fallback_config.is_none() {
+                            fallback_config = fallback;
+                        }
+                    }
+                    ostp_server::config::ServerInbound::Api { listen, port, token, webpath, username, password_hash, .. } => {
+                        api_config = Some(ostp_server::ApiConfig {
+                            enabled: true,
+                            bind: format!("{}:{}", listen, port),
+                            token,
+                            webpath: webpath.unwrap_or_default(),
+                            username: username.unwrap_or_default(),
+                            password_hash: password_hash.unwrap_or_default(),
+                        });
+                    }
+                }
+            }
+
             println!("{} Starting server on {:?}", "[ostp]".cyan().bold(), listen_addrs);
             let debug = server_cfg.debug.unwrap_or(false);
-            let outbound = server_cfg.outbound.map(|o| ostp_server::OutboundConfig {
-                enabled: o.enabled,
-                protocol: o.protocol,
-                address: o.address,
-                port: o.port,
-                rules: o
-                    .rules
-                    .into_iter()
-                    .map(|r| ostp_server::OutboundRule {
-                        domain_suffix: r.domain_suffix.unwrap_or_default(),
-                        ip_cidr: r.ip_cidr.unwrap_or_default(),
-                        protocol: r.protocol,
-                        action: parse_outbound_action(r.action),
-                    })
-                    .collect(),
-                default_action: parse_outbound_action(o.default_action),
-            });
-            let api_config = server_cfg.api.map(|a| ostp_server::ApiConfig {
-                enabled: a.enabled.unwrap_or(false),
-                bind: a.bind.unwrap_or_else(|| "127.0.0.1:9090".to_string()),
-                token: a.token.clone(),
-                webpath: a.webpath.unwrap_or_default(),
-                username: a.username.unwrap_or_default(),
-                password_hash: a.password_hash.unwrap_or_default(),
-            });
-            let fallback_config = server_cfg.fallback.map(|f| ostp_server::FallbackConfig {
-                enabled: f.enabled.unwrap_or(false),
-                listen: f.listen.unwrap_or_else(|| "0.0.0.0:443".to_string()),
-                target: f.target.unwrap_or_else(|| "127.0.0.1:8080".to_string()),
-            });
+            
+            let mut outbound = None;
+            for ob in server_cfg.outbounds {
+                if let ostp_server::config::ServerOutbound::Socks { server, port, tag } = ob {
+                    let mut rules = Vec::new();
+                    let mut default_action = Some("proxy".to_string());
+                    if let Some(routing) = &server_cfg.routing {
+                        for rule in &routing.rules {
+                            if rule.outbound == tag {
+                                rules.push(ostp_server::OutboundRule {
+                                    domain_suffix: rule.domain_suffix.clone().unwrap_or_default(),
+                                    ip_cidr: rule.ip_cidr.clone().unwrap_or_default(),
+                                    protocol: rule.protocol.clone(),
+                                    action: parse_outbound_action(Some("proxy".to_string())),
+                                });
+                            }
+                        }
+                        if routing.default_outbound != tag {
+                            default_action = Some("direct".to_string());
+                        }
+                    }
+                    outbound = Some(ostp_server::OutboundConfig {
+                        enabled: true,
+                        protocol: "socks5".to_string(),
+                        address: server,
+                        port,
+                        rules,
+                        default_action: parse_outbound_action(default_action),
+                    });
+                    break;
+                }
+            }
 
-            let access_keys_meta = server_cfg.access_keys.into_iter().map(|uc| {
-                (uc.key(), ostp_server::api::UserMeta {
-                    name: uc.name(),
-                    limit_bytes: uc.limit(),
-                })
-            }).collect::<Vec<_>>();
-            let host = get_or_ask_public_ip(&args.config);
-            // Build DNS config and set owndns flag in subscribe links if DNS enabled
             let dns_cfg = server_cfg.dns;
-            // Pass all listen addresses for multi-listener support
-            ostp_server::run_server(listen_addrs, Some(host), access_keys_meta, outbound, api_config, fallback_config, debug, dns_cfg, Some(args.config), server_cfg.license_key.clone()).await?;
+            
+            let host = if host_port.0 == "0.0.0.0" {
+                detect_local_public_ip().unwrap_or_else(|| "127.0.0.1".to_string())
+            } else {
+                host_port.0.to_string()
+            };
+
+            ostp_server::run_server(listen_addrs, Some(host), access_keys_meta, outbound, api_config, fallback_config, debug, dns_cfg, Some(args.config)).await?;
         }
         AppMode::Client(client_cfg) => {
             println!("{}", include_str!("../../docs/banner.txt").blue().bold());

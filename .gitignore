@@ -36,5 +36,8 @@ turn-harvesting-idea.md
 ostp-prober/
 ostp-brain/
 ostp-sandbox/
-ostp-control/
 ostp-license/
+ostp-web/
+
+# Web panel
+ostp-control/node_modules/

@@ -1,0 +1,53 @@
+{
+  // OSTP Configuration v0.3.1
+  // DO NOT EDIT THIS COMMENT - Migrator relies on it
+  "version": "0.3.1",
+  "mode": "client",
+  "log": {
+    "level": "info"
+  },
+  "inbounds": [
+    {
+      "type": "tun",
+      "tag": "tun-in",
+      "auto_route": true,
+      "mtu": 1140
+    },
+    {
+      "type": "local_proxy",
+      "tag": "socks-in",
+      "protocol": "socks",
+      "listen": "127.0.0.1",
+      "port": 1088
+    }
+  ],
+  "outbounds": [
+    {
+      "type": "ostp",
+      "tag": "proxy",
+      "server": "YOUR_SERVER_IP",
+      "port": 50000,
+      "access_key": "170756347f1562a4b260f8f4b419009a",
+      "transport": {
+        "type": "udp"
+      }
+    },
+    {
+      "type": "direct",
+      "tag": "direct"
+    },
+    {
+      "type": "block",
+      "tag": "block"
+    }
+  ],
+  "routing": {
+    "rules": [
+      {
+        "domain_suffix": ["localhost"],
+        "outbound": "direct"
+      }
+    ],
+    "default_outbound": "proxy"
+  }
+}
