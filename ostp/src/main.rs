@@ -1458,6 +1458,28 @@ async fn run_app() -> Result<()> {
     "target": "127.0.0.1:8080"
   }},
 
+  // Transport settings
+  "transport": {{
+    "mode": "udp",
+    // Optional fake SNI for TLS masking (e.g. "www.microsoft.com")
+    "stealth_sni": null,
+    // Enable WebSockets masquerade (requires a reverse proxy)
+    "wss": false
+  }},
+
+  // Internal DNS server with AdBlock and DoH (DNS-over-HTTPS)
+  "dns": {{
+    "enabled": false,
+    // Intercept all UDP port 53 traffic going through the server to prevent DNS leaks
+    "intercept_all_port53": true,
+    "local_port": 50053,
+    "doh_upstream": "https://cloudflare-dns.com/dns-query",
+    "adblock_urls": [],
+    "custom_domains": {{}}
+  }},
+
+  // License Key (if using premium features)
+  // "license_key": "YOUR_LICENSE_KEY_HERE",
 
   "debug": false
 }}"#, key)
