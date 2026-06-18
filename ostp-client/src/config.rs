@@ -93,7 +93,15 @@ pub enum OutboundConfig {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct TransportConfig {
     #[serde(default = "default_transport_mode")]
-    pub r#type: String, // "udp" or "uot"
+    pub r#type: String, // "udp", "uot", or "dns"
+    
+    // Settings for DNS transport
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub domain: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub resolver: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub pubkey: Option<String>,
 }
 
 fn default_transport_mode() -> String { "udp".to_string() }
@@ -102,6 +110,9 @@ impl Default for TransportConfig {
     fn default() -> Self {
         Self {
             r#type: default_transport_mode(),
+            domain: None,
+            resolver: None,
+            pubkey: None,
         }
     }
 }

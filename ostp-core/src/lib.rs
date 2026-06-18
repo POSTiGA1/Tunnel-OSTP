@@ -4,6 +4,7 @@ pub mod framing;
 pub mod protocol;
 pub mod relay;
 pub mod resumption;
+pub mod dns;
 
 pub use crypto::NoiseRole;
 pub use framing::{TrafficProfile, PaddingStrategy};

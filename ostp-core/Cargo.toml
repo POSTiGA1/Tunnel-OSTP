@@ -12,6 +12,7 @@ rand.workspace = true
 snow.workspace = true
 thiserror.workspace = true
 tracing.workspace = true
+byteorder = "1.5"
 sha2.workspace = true
 hmac.workspace = true
 x25519-dalek = { version = "2.0.1", features = ["static_secrets"] }

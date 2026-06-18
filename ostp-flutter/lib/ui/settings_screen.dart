@@ -32,13 +32,13 @@ class _SettingsScreenState extends State<SettingsScreen> {
   late TextEditingController _domainsCtrl;
   late TextEditingController _ipsCtrl;
   late TextEditingController _processesCtrl;
-  late TextEditingController _stealthSniCtrl;
+  late TextEditingController _dnsDomainCtrl;
   late TextEditingController _pbkCtrl;
   late TextEditingController _sidCtrl;
 
   bool _obscureKey = true;
   bool _debugMode = false;
-  bool _wss = false;
+  String _dnsRegion = 'Global';
   String _transportMode = 'udp'; // 'udp' | 'uot'
   String _tunStack = 'ostp'; // 'system' | 'ostp'
   bool _muxEnabled = false;
@@ -57,10 +57,10 @@ class _SettingsScreenState extends State<SettingsScreen> {
     _domainsCtrl = TextEditingController(text: widget.prefs.getString('ex_domains') ?? '');
     _ipsCtrl = TextEditingController(text: widget.prefs.getString('ex_ips') ?? '');
     _processesCtrl = TextEditingController(text: widget.prefs.getString('ex_processes') ?? '');
-    _stealthSniCtrl = TextEditingController(text: widget.prefs.getString('stealth_sni') ?? '');
+    _dnsDomainCtrl = TextEditingController(text: widget.prefs.getString('dns_domain') ?? '');
     _pbkCtrl = TextEditingController(text: widget.prefs.getString('pbk') ?? '');
     _sidCtrl = TextEditingController(text: widget.prefs.getString('sid') ?? '');
-    _wss = widget.prefs.getBool('wss') ?? false;
+    _dnsRegion = widget.prefs.getString('dns_region') ?? 'Global';
     _transportMode = widget.prefs.getString('transport_mode') ?? 'udp';
     _tunStack = widget.prefs.getString('tun_stack') ?? 'ostp';
     _debugMode = widget.prefs.getBool('debug_mode') ?? false;
@@ -80,7 +80,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
     _domainsCtrl.dispose();
     _ipsCtrl.dispose();
     _processesCtrl.dispose();
-    _stealthSniCtrl.dispose();
+    _dnsDomainCtrl.dispose();
     _pbkCtrl.dispose();
     _sidCtrl.dispose();
     _muxSessionsCtrl.dispose();
@@ -97,10 +97,10 @@ class _SettingsScreenState extends State<SettingsScreen> {
     widget.prefs.setString('ex_ips', _ipsCtrl.text.trim());
     widget.prefs.setString('ex_processes', _processesCtrl.text.trim());
     widget.prefs.setBool('debug_mode', _debugMode);
-    widget.prefs.setBool('wss', _wss);
+    widget.prefs.setString('dns_region', _dnsRegion);
     widget.prefs.setString('transport_mode', _transportMode);
     widget.prefs.setString('tun_stack', _tunStack);
-    widget.prefs.setString('stealth_sni', _stealthSniCtrl.text.trim());
+    widget.prefs.setString('dns_domain', _dnsDomainCtrl.text.trim());
     widget.prefs.setString('pbk', _pbkCtrl.text.trim());
     widget.prefs.setString('sid', _sidCtrl.text.trim());
     widget.prefs.setBool('mux_enabled', _muxEnabled);
@@ -236,12 +236,11 @@ class _SettingsScreenState extends State<SettingsScreen> {
                     setState(() {
                       _serverCtrl.text = host;
                       _keyCtrl.text = key;
-                      _stealthSniCtrl.text = uri.queryParameters['sni'] ?? '';
-                      _pbkCtrl.text = uri.queryParameters['pbk'] ?? '';
-                      _sidCtrl.text = uri.queryParameters['sid'] ?? '';
-                      _wss = uri.queryParameters['wss'] == 'true';
-                      final type = uri.queryParameters['type'] ?? 'udp';
-                      _transportMode = type == 'tcp' || type == 'http' ? 'uot' : 'udp';
+                      _dnsDomainCtrl.text = uri.queryParameters['domain'] ?? '';
+                      _dnsRegion = uri.queryParameters['region'] ?? 'Global';
+                      
+                      final type = uri.queryParameters['type'];
+                      _transportMode = type == 'tcp' || type == 'http' ? 'uot' : (type == 'dns' ? 'dns' : 'udp');
                       _importCtrl.clear();
 
                       _saveSettings();
@@ -292,8 +291,8 @@ class _SettingsScreenState extends State<SettingsScreen> {
                       RadioListTile<String>(
                         value: 'udp',
                         groupValue: _transportMode,
-                        title: const Text('UDP (по умолчанию)', style: TextStyle(fontWeight: FontWeight.w600)),
-                        subtitle: const Text('Быстро, работает через Wi-Fi и большинство сетей', style: TextStyle(color: Colors.white54, fontSize: 12)),
+                        title: const Text('UDP (Default)', style: TextStyle(fontWeight: FontWeight.w600)),
+                        subtitle: const Text('Fast, works on Wi-Fi and most networks', style: TextStyle(color: Colors.white54, fontSize: 12)),
                         activeColor: Theme.of(context).colorScheme.secondary,
                         onChanged: (v) => setState(() { _transportMode = v!; _saveSettings(); }),
                       ),
@@ -301,110 +300,85 @@ class _SettingsScreenState extends State<SettingsScreen> {
                       RadioListTile<String>(
                         value: 'uot',
                         groupValue: _transportMode,
-                        title: Wrap(
-                          crossAxisAlignment: WrapCrossAlignment.center,
-                          spacing: 8,
-                          children: [
-                            const Text('UoT (UDP-over-TCP)', style: TextStyle(fontWeight: FontWeight.w600)),
-                            Container(
-                              padding: const EdgeInsets.symmetric(horizontal: 7, vertical: 2),
-                              decoration: BoxDecoration(
-                                color: const Color(0xFF6C72FF).withOpacity(0.2),
-                                borderRadius: BorderRadius.circular(6),
-                              ),
-                              child: const Text('xHTTP Стелс', style: TextStyle(fontSize: 10, color: Color(0xFF6C72FF), fontWeight: FontWeight.bold)),
-                            ),
-                          ],
-                        ),
-                        subtitle: const Text('Маскировка под HTTP-поток, обходит белые списки (уровень 1)', style: TextStyle(color: Colors.white54, fontSize: 12)),
+                        title: const Text('UoT (UDP-over-TCP)', style: TextStyle(fontWeight: FontWeight.w600)),
+                        subtitle: const Text('Masks as HTTP stream, bypasses whitelists', style: TextStyle(color: Colors.white54, fontSize: 12)),
                         activeColor: Theme.of(context).colorScheme.primary,
+                        onChanged: (v) => setState(() { _transportMode = v!; _saveSettings(); }),
+                      ),
+                      Divider(color: Colors.white.withOpacity(0.05), height: 1),
+                      RadioListTile<String>(
+                        value: 'dns',
+                        groupValue: _transportMode,
+                        title: const Text('DNS Proxy (Last Resort)', style: TextStyle(fontWeight: FontWeight.w600)),
+                        subtitle: const Text('Very slow, but works under strict DPI blocks', style: TextStyle(color: Colors.orangeAccent, fontSize: 12)),
+                        activeColor: Colors.orangeAccent,
                         onChanged: (v) => setState(() { _transportMode = v!; _saveSettings(); }),
                       ),
                     ],
                   ),
                 ),
+                
                 const SizedBox(height: 16),
-                _buildToggle('WebSocket (WSS)', 'Инкапсулировать транспорт в RFC 6455 (для строгого DPI)', _wss, (val) {
-                  setState(() {
-                    _wss = val;
-                  });
-                }),
-                const SizedBox(height: 16),
-
-                // Stealth parameters
+                
+                // DNS Proxy parameters
                 AnimatedCrossFade(
                   duration: const Duration(milliseconds: 250),
-                  crossFadeState: _transportMode == 'uot' ? CrossFadeState.showFirst : CrossFadeState.showSecond,
+                  crossFadeState: _transportMode == 'dns' ? CrossFadeState.showFirst : CrossFadeState.showSecond,
                   firstChild: Container(
                     padding: const EdgeInsets.all(16),
                     decoration: BoxDecoration(
-                      color: const Color(0xFF6C72FF).withOpacity(0.06),
+                      color: Colors.orangeAccent.withOpacity(0.06),
                       borderRadius: BorderRadius.circular(16),
-                      border: Border.all(color: const Color(0xFF6C72FF).withOpacity(0.2)),
+                      border: Border.all(color: Colors.orangeAccent.withOpacity(0.2)),
                     ),
                     child: Column(
                       crossAxisAlignment: CrossAxisAlignment.start,
                       children: [
                         Row(
                           children: [
-                            const Icon(Icons.security, size: 16, color: Color(0xFF6C72FF)),
+                            const Icon(Icons.dns, size: 16, color: Colors.orangeAccent),
                             const SizedBox(width: 8),
-                            const Text('Стелс параметры', style: TextStyle(fontWeight: FontWeight.bold, color: Color(0xFF6C72FF), fontSize: 14)),
+                            const Text('DNS Proxy Settings', style: TextStyle(fontWeight: FontWeight.bold, color: Colors.orangeAccent, fontSize: 14)),
                           ],
                         ),
                         const SizedBox(height: 4),
                         const Text(
-                          'Укажи домен из белого списка. OSTP подключится к серверу и подделает SNI / HTTP Host.',
+                          'Specify the domain pointing to your server. Details in Wiki.',
                           style: TextStyle(fontSize: 12, color: Colors.white38),
                         ),
                         const SizedBox(height: 16),
-                        Builder(builder: (context) {
-                          final List<String> domains = [
-                            'yastatic.net', 'mc.yandex.ru', 'st.mycdn.me',
-                            'top-fwz1.mail.ru', 'sso.passport.yandex.ru',
-                            'sberbank.ru', 'ad.mail.ru', 'ads.vk.com',
-                            'login.vk.com', 'api.sberbank.ru', 'ok.ru',
-                            'rostelecom.ru', 'rt.ru', 'tinkoff.ru',
-                            'x5.ru', 'ozon.ru', 'wildberries.ru', 'gosuslugi.ru', 'vk.com'
-                          ];
-                          String currentVal = _stealthSniCtrl.text.trim();
-                          if (currentVal.isEmpty) currentVal = 'vk.com';
-                          if (!domains.contains(currentVal)) {
-                            domains.add(currentVal);
-                          }
-                          return DropdownButtonFormField<String>(
-                            value: currentVal,
-                            dropdownColor: const Color(0xFF1E1E2C),
-                            style: const TextStyle(color: Colors.white, fontSize: 14),
-                            decoration: InputDecoration(
-                              labelText: 'Стелс Домен (Автоподставление)',
-                              labelStyle: const TextStyle(color: Colors.white54, fontSize: 13),
-                              border: OutlineInputBorder(borderRadius: BorderRadius.circular(12)),
-                              contentPadding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
-                            ),
-                            items: domains.map((String domain) {
-                              return DropdownMenuItem<String>(
-                                value: domain,
-                                child: Text(domain),
-                              );
-                            }).toList(),
-                            onChanged: (String? newValue) {
-                              if (newValue != null) {
-                                setState(() {
-                                  _stealthSniCtrl.text = newValue;
-                                  _saveSettings();
-                                });
-                              }
-                            },
-                          );
-                        }),
-
+                        _buildTextField('Domain (Points to Server)', _dnsDomainCtrl, hint: 'tunnel.myvpn.com'),
+                        const SizedBox(height: 16),
+                        DropdownButtonFormField<String>(
+                          value: _dnsRegion,
+                          dropdownColor: const Color(0xFF1E1E2C),
+                          style: const TextStyle(color: Colors.white, fontSize: 14),
+                          decoration: InputDecoration(
+                            labelText: 'DNS Resolver Region',
+                            labelStyle: const TextStyle(color: Colors.white54, fontSize: 13),
+                            border: OutlineInputBorder(borderRadius: BorderRadius.circular(12)),
+                            contentPadding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
+                          ),
+                          items: ['Global', 'Russia', 'China', 'Iran'].map((String region) {
+                            return DropdownMenuItem<String>(
+                              value: region,
+                              child: Text(region),
+                            );
+                          }).toList(),
+                          onChanged: (String? newValue) {
+                            if (newValue != null) {
+                              setState(() {
+                                _dnsRegion = newValue;
+                                _saveSettings();
+                              });
+                            }
+                          },
+                        ),
                       ],
                     ),
                   ),
                   secondChild: const SizedBox.shrink(),
                 ),
-
 
                 const SizedBox(height: 16),
                 _buildToggle('Multiplexing (Mux)', 'Combine multiple TCP streams to bypass throttling', _muxEnabled, (v) => setState(() => _muxEnabled = v)),
@@ -552,17 +526,17 @@ class _SettingsScreenState extends State<SettingsScreen> {
     if (host.isEmpty || key.isEmpty) return '';
 
     final queryParams = <String>[];
-    if (_stealthSniCtrl.text.trim().isNotEmpty) {
-      queryParams.add('sni=${Uri.encodeComponent(_stealthSniCtrl.text.trim())}');
+    if (_dnsDomainCtrl.text.trim().isNotEmpty) {
+      queryParams.add('domain=${Uri.encodeComponent(_dnsDomainCtrl.text.trim())}');
+    }
+    if (_dnsRegion != 'Global') {
+      queryParams.add('region=${Uri.encodeComponent(_dnsRegion)}');
     }
     if (_pbkCtrl.text.trim().isNotEmpty) {
       queryParams.add('pbk=${Uri.encodeComponent(_pbkCtrl.text.trim())}');
     }
     if (_sidCtrl.text.trim().isNotEmpty) {
       queryParams.add('sid=${Uri.encodeComponent(_sidCtrl.text.trim())}');
-    }
-    if (_wss) {
-      queryParams.add('wss=true');
     }
     if (_transportMode != 'udp') {
       queryParams.add('type=$_transportMode');

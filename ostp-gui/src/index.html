@@ -196,27 +196,31 @@
           <div class="field-group">
             <label class="field-label" for="in-transport" data-i18n="label_transport">Transport Protocol</label>
             <select id="in-transport" class="field-input">
-              <option value="udp">UDP (Default)</option>
-              <option value="uot">TCP (UoT)</option>
+              <option value="udp" data-i18n="opt_udp">UDP (Default)</option>
+              <option value="uot" data-i18n="opt_uot">TCP (UoT)</option>
+              <option value="dns" data-i18n="opt_dns">DNS Proxy (Last Resort)</option>
             </select>
           </div>
 
-          <div class="field-group">
-            <label class="field-label" for="in-stealth-sni" data-i18n="label_sni">Stealth SNI</label>
-            <input id="in-stealth-sni" class="field-input" type="text" placeholder="www.microsoft.com" spellcheck="false" />
-          </div>
-
-          <div class="toggle-row" id="group-wss">
-            <div class="toggle-text">
-              <span class="toggle-name">WebSocket (WSS)</span>
-              <span class="toggle-hint">Use RFC 6455 framing for strict DPI bypass</span>
+          <div id="group-dns-proxy" style="display: none;">
+            <div class="field-group">
+              <label class="field-label" for="in-dns-domain" style="color: var(--c-warning);" data-i18n="label_dns_domain">Domain (Points to Server)</label>
+              <input id="in-dns-domain" class="field-input" type="text" placeholder="tunnel.myvpn.com" spellcheck="false" />
+              <div style="font-size: 0.8rem; color: var(--c-sub); margin-top: 4px;">
+                <span data-i18n="dns_domain_hint">This is the "last resort" over public DNS servers. You need a domain pointing to your server (NS/A record).</span>
+                <span data-i18n="dns_guide">Detailed setup guide available in</span> <a href="https://github.com/ospab/ostp/wiki/DNS-Transport" target="_blank" style="color: var(--c-accent)" data-i18n="wiki_link">GitHub Wiki</a>.
+              </div>
             </div>
-            <label class="toggle">
-              <input type="checkbox" id="in-wss" />
-              <span class="toggle-track">
-                <span class="toggle-thumb"></span>
-              </span>
-            </label>
+
+            <div class="field-group">
+              <label class="field-label" for="in-dns-region" data-i18n="label_dns_region">DNS Resolver Region (Prober)</label>
+              <select id="in-dns-region" class="field-input">
+                <option value="Global" data-i18n="opt_global">Global (Cloudflare, Google, etc)</option>
+                <option value="Russia" data-i18n="opt_russia">Russia (Yandex, VK, etc)</option>
+                <option value="China" data-i18n="opt_china">China (AliDNS, DNSPod, etc)</option>
+                <option value="Iran" data-i18n="opt_iran">Iran (Shatel, Electro, etc)</option>
+              </select>
+            </div>
           </div>
 
           <div class="field-group">

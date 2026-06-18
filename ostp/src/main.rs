@@ -5,68 +5,75 @@ use std::fs;
 use std::path::PathBuf;
 use colored::Colorize;
 
+mod dns_prober;
+
 #[derive(Parser, Debug)]
 #[command(author, version, about = "OSTP Core - Ospab Stealth Transport Protocol", long_about = None)]
 struct Args {
     /// Path to the JSON configuration file
-    #[cfg_attr(unix, arg(long, default_value = "/etc/ostp/config.json"))]
-    #[cfg_attr(windows, arg(long, default_value = "config.json"))]
+    #[cfg_attr(unix, arg(long, default_value = "/etc/ostp/config.json", help_heading = "Common Commands"))]
+    #[cfg_attr(windows, arg(long, default_value = "config.json", help_heading = "Common Commands"))]
     config: PathBuf,
 
     /// Optional mode to initialize the config for (client or server)
-    #[arg(short, long)]
+    #[arg(short, long, help_heading = "Common Commands")]
     init: Option<String>,
 
     /// Run the interactive setup wizard
-    #[arg(long)]
+    #[arg(long, help_heading = "Common Commands")]
     setup: bool,
 
     /// Generate a new secure access key and exit
-    #[arg(short = 'g', long)]
+    #[arg(short = 'g', long, help_heading = "Common Commands")]
     generate_key: bool,
 
     /// Format for generated key (hex, base64)
-    #[arg(long, default_value = "hex")]
+    #[arg(long, default_value = "hex", help_heading = "Common Commands")]
     format: String,
 
     /// Number of keys to generate
-    #[arg(short = 'c', long, default_value_t = 1)]
+    #[arg(short = 'c', long, default_value_t = 1, help_heading = "Common Commands")]
     count: usize,
 
     /// Output ready-to-use client sharing links (ostp://...) from the server configuration
-    #[arg(long)]
+    #[arg(long, help_heading = "Server Commands")]
     links: bool,
 
     /// Validate configuration file and exit
-    #[arg(long)]
+    #[arg(long, help_heading = "Common Commands")]
     check: bool,
 
     /// Optional client connection share link (ostp://ACCESS_KEY@HOST:PORT) to run instantly
+    #[arg(help_heading = "Client Commands")]
     url: Option<String>,
 
     /// Uninstall OSTP: stop service, remove binary and configuration files
-    #[arg(long)]
+    #[arg(long, help_heading = "Common Commands")]
     uninstall: bool,
 
     /// Update OSTP: re-run the install script to fetch and install the latest version
-    #[arg(long)]
+    #[arg(long, help_heading = "Common Commands")]
     update: bool,
 
     /// Import a share link (ostp://...) into the configuration file and exit
-    #[arg(long)]
+    #[arg(long, help_heading = "Client Commands")]
     import: Option<String>,
 
     /// Output shell export commands for proxy (eval $(ostp --proxy-env))
-    #[arg(long)]
+    #[arg(long, help_heading = "Client Commands")]
     proxy_env: bool,
 
     /// Output shell export commands to clear proxy (eval $(ostp --proxy-env-clear))
-    #[arg(long)]
+    #[arg(long, help_heading = "Client Commands")]
     proxy_env_clear: bool,
 
     /// Force migration of the configuration file to the latest format and exit
-    #[arg(long)]
+    #[arg(long, help_heading = "Common Commands")]
     migrate: bool,
+
+    /// Run the network prober to find the fastest DNS resolver for the DNS Transport
+    #[arg(long, help_heading = "Client Commands")]
+    prober: bool,
 }
 
 fn parse_ostp_link(link: &str) -> Result<serde_json::Value> {
@@ -90,6 +97,8 @@ fn parse_ostp_link(link: &str) -> Result<serde_json::Value> {
     let mut tun_enabled = false;
     let mut _tun_dns = None;
     let mut _wss_enabled = false;
+    let mut dns_domain = None;
+    let mut dns_pubkey = None;
 
     for (k, v) in parsed.query_pairs() {
         match &*k {
@@ -98,7 +107,22 @@ fn parse_ostp_link(link: &str) -> Result<serde_json::Value> {
             "tun" => tun_enabled = v == "true",
             "dns" => _tun_dns = Some(v.into_owned()),
             "wss" => _wss_enabled = v == "true",
+            "domain" => dns_domain = Some(v.into_owned()),
+            "pubkey" => dns_pubkey = Some(v.into_owned()),
             _ => {}
+        }
+    }
+
+    let mut transport_json = serde_json::json!({
+        "type": transport_mode
+    });
+    
+    if transport_mode == "dns" {
+        if let Some(d) = dns_domain {
+            transport_json["domain"] = serde_json::json!(d);
+        }
+        if let Some(p) = dns_pubkey {
+            transport_json["pubkey"] = serde_json::json!(p);
         }
     }
 
@@ -129,9 +153,7 @@ fn parse_ostp_link(link: &str) -> Result<serde_json::Value> {
                 "server": parsed.host_str().unwrap_or(""),
                 "port": parsed.port().unwrap_or(50000),
                 "access_key": access_key,
-                "transport": {
-                    "type": transport_mode
-                },
+                "transport": transport_json,
                 "multiplex": {
                     "enabled": false,
                     "sessions": 1
@@ -776,31 +798,36 @@ fn run_setup_wizard(config_path: &std::path::Path) -> Result<()> {
 
             wizard_step(3, TOTAL, "Service registration");
             // intentional: step text then daemon call below
+            let port_str = listen.split(':').last().unwrap_or("50000");
+            let port: u16 = port_str.parse().unwrap_or(50000);
             let server_json = serde_json::json!({
                 "mode": "server",
                 "version": "0.3.1",
                 "log": {
                     "level": "info"
                 },
-                "listen": listen,
-                "access_keys": access_keys,
-                "outbound": {
+                "dns_transport": {
                     "enabled": false,
-                    "protocol": "socks5",
-                    "address": "127.0.0.1",
-                    "port": 9050,
-                    "default_action": "proxy",
-                    "rules": []
+                    "listen": "0.0.0.0:53",
+                    "domain": "tunnel.yourdomain.com",
+                    "pubkey": "",
+                    "privkey": ""
                 },
-                "api": {
-                    "enabled": false,
-                    "bind": "0.0.0.0:9090",
-                    "webpath": "",
-                    "username": "",
-                    "password_hash": ""
-                },
-                "fallback": { "enabled": false, "listen": "0.0.0.0:443", "target": "127.0.0.1:8080" },
-                "debug": false
+                "inbounds": [
+                    {
+                        "type": "ostp",
+                        "tag": "ostp-in",
+                        "listen": "0.0.0.0",
+                        "port": port,
+                        "users": access_keys
+                    }
+                ],
+                "outbounds": [
+                    {
+                        "type": "direct",
+                        "tag": "direct"
+                    }
+                ]
             });
 
             let actual_path = wizard_save_config(config_path, &server_json)?;
@@ -897,6 +924,13 @@ fn run_setup_wizard(config_path: &std::path::Path) -> Result<()> {
                 "version": "0.3.1",
                 "log": {
                     "level": "info"
+                },
+                "dns_transport": {
+                    "enabled": false,
+                    "listen": "0.0.0.0:53",
+                    "domain": "tunnel.yourdomain.com",
+                    "pubkey": "",
+                    "privkey": ""
                 },
                 "inbounds": [
                     {
@@ -1383,7 +1417,18 @@ async fn run_app() -> Result<()> {
     "target": "127.0.0.1:8080"
   }},
 
-  "debug": false
+  "debug": false,
+
+  // [WARNING] This is a last-resort transport via public DNS.
+  // It requires a dedicated registered domain with NS records pointing to this server.
+  // Full setup guide: https://github.com/ospab/ostp/wiki/DNS-Tunneling
+  "dns_transport": {{
+    "enabled": false,
+    "listen": "0.0.0.0:53",
+    "domain": "tunnel.example.com",
+    "pubkey": "SERVER_PUBKEY_BASE64_HERE",
+    "privkey": "SERVER_PRIVKEY_BASE64_HERE"
+  }}
 }}"#, key)
         } else if mode_str == "relay" {
             r#"{
@@ -1498,6 +1543,11 @@ async fn run_app() -> Result<()> {
                 }
             }
         }
+        return Ok(());
+    }
+
+    if args.prober {
+        dns_prober::run_prober().await;
         return Ok(());
     }
 
@@ -1685,7 +1735,7 @@ async fn run_app() -> Result<()> {
                 host_port.0.to_string()
             };
 
-            ostp_server::run_server(listen_addrs, Some(host), access_keys_meta, outbound, api_config, fallback_config, debug, dns_cfg, Some(args.config)).await?;
+            ostp_server::run_server(listen_addrs, Some(host), access_keys_meta, outbound, api_config, fallback_config, debug, dns_cfg, server_cfg.dns_transport, Some(args.config)).await?;
         }
         AppMode::Client(client_cfg) => {
             println!("{}", include_str!("../../docs/banner.txt").blue().bold());

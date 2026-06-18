@@ -45,8 +45,9 @@ const inDns          = $('in-dns');
 
 const groupCustomDns = $('group-custom-dns');
 const inTransport    = $('in-transport');
-const inSni          = $('in-stealth-sni');
-const inWss          = $('in-wss');
+const groupDnsProxy  = $('group-dns-proxy');
+const inDnsDomain    = $('in-dns-domain');
+const inDnsRegion    = $('in-dns-region');
 const inMtu          = $('in-mtu');
 const inTun          = $('in-tun-mode');
 const inKillSwitch   = $('in-kill-switch');
@@ -55,6 +56,32 @@ const inMuxSessions  = $('in-mux-sessions');
 const inDebug          = $('in-debug');
 const inAutoconnect    = $('in-autoconnect');
 const inLaunchStartup  = $('in-launch-startup');
+
+function bindSettingsInputs() {
+  const ids = [
+    'in-server', 'in-key', 'in-socks', 'in-dns',
+    'in-transport', 'in-dns-domain', 'in-dns-region',
+    'in-mtu', 'in-mux-sessions',
+    'in-tun-mode', 'in-kill-switch', 'in-mux-mode',
+    'in-debug', 'in-autoconnect', 'in-launch-startup'
+  ];
+  ids.forEach(id => {
+    const el = $(id);
+    if (el) el.addEventListener('change', scheduleAutoSave);
+    if (el && el.type === 'text') el.addEventListener('input', scheduleAutoSave);
+    if (el && el.type === 'password') el.addEventListener('input', scheduleAutoSave);
+  });
+
+  if (inTransport) {
+    inTransport.addEventListener('change', () => {
+      if (inTransport.value === 'dns') {
+        groupDnsProxy.style.display = 'block';
+      } else {
+        groupDnsProxy.style.display = 'none';
+      }
+    });
+  }
+}
 
 const wintunModal        = $('wintun-modal');
 const btnWintunCancel    = $('btn-wintun-cancel');
@@ -338,8 +365,13 @@ async function loadConfigIntoForm() {
         inServer.value = ostpOut.server ? `${ostpOut.server}:${ostpOut.port || 50000}` : '';
         inKey.value = ostpOut.access_key || '';
         inTransport.value = ostpOut.transport?.type || 'udp';
-        inSni.value     = ostpOut.transport?.stealth_sni || '';
-        inWss.checked   = !!ostpOut.transport?.wss;
+        if (inTransport.value === 'dns') {
+          groupDnsProxy.style.display = 'block';
+          inDnsDomain.value = ostpOut.transport?.domain || '';
+          inDnsRegion.value = ostpOut.transport?.resolver || 'Global';
+        } else {
+          groupDnsProxy.style.display = 'none';
+        }
         inMux.checked   = !!ostpOut.multiplex?.enabled;
         inMuxSessions.value = ostpOut.multiplex?.sessions || '';
       }
@@ -382,8 +414,11 @@ async function loadConfigIntoForm() {
       inKey.value     = c.access_key    || '';
       inSocks.value   = c.socks5_bind   || '127.0.0.1:1088';
       inTransport.value = c.transport?.mode || 'udp';
-      inSni.value     = c.transport?.stealth_sni || '';
-      inWss.checked   = !!c.transport?.wss;
+      if (inTransport.value === 'dns') {
+        groupDnsProxy.style.display = 'block';
+      } else {
+        groupDnsProxy.style.display = 'none';
+      }
 
       inMtu.value     = c.mtu           || '';
       inTun.checked   = !!c.tun?.enable;
@@ -466,8 +501,8 @@ async function handleSave(silent = false) {
       access_key: key,
       transport: {
         type: inTransport.value,
-        stealth_sni: inSni.value.trim() || undefined,
-        wss: inWss.checked ? true : undefined
+        domain: inTransport.value === 'dns' ? inDnsDomain.value.trim() : undefined,
+        resolver: inTransport.value === 'dns' ? inDnsRegion.value : undefined
       },
       multiplex: inMux.checked ? {
         enabled: true,
@@ -527,7 +562,8 @@ function handleImport() {
     if (!key || !host) throw new Error('Incomplete link parameters');
     inServer.value = host;
     inKey.value    = key;
-    inSni.value    = url.searchParams.get('sni') || '';
+    inTransport.value = 'udp';
+    groupDnsProxy.style.display = 'none';
     
     const type = url.searchParams.get('type');
     if (type === 'tcp' || type === 'http') inTransport.value = 'uot';

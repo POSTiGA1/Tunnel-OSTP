@@ -71,6 +71,7 @@ pub async fn run_server(
     fallback_config: Option<FallbackConfig>,
     debug: bool,
     dns_config: Option<dns::DnsConfig>,
+    dns_transport: Option<crate::config::DnsTransportConfig>,
     config_path: Option<std::path::PathBuf>,
 ) -> Result<()> {
     let mut keys_map = HashMap::new();
@@ -319,7 +320,7 @@ pub async fn run_server(
     tracing::info!(listeners = bind_addrs.len(), keys = key_count, "server started");
     tracing::info!("ARQ config: max_reorder=16384, reorder_buf=8192, sent_history=32768, rto=100ms");
     tokio::select! {
-        res = run_server_loop(bind_addrs.clone(), primary_socket, sockets, dispatcher, ui_cmd_rx, ui_event_tx, shared_keys, router) => {
+        res = run_server_loop(bind_addrs.clone(), primary_socket, sockets, dispatcher, ui_cmd_rx, ui_event_tx, shared_keys, router, dns_transport.clone()) => {
             if let Err(e) = res {
                 tracing::error!("Server error: {e}");
             }
@@ -343,6 +344,7 @@ async fn run_server_loop(
     ui_event_tx: mpsc::UnboundedSender<UiEvent>,
     shared_keys: std::sync::Arc<std::sync::RwLock<HashMap<String, crate::api::UserMeta>>>,
     router: std::sync::Arc<crate::router::Router>,
+    dns_transport: Option<crate::config::DnsTransportConfig>,
 ) -> Result<()> {
     let mut remotes: HashMap<(u32, u16), RemoteState> = HashMap::new();
     let (stream_tx, mut stream_rx) = mpsc::unbounded_channel::<(u32, u16, Vec<u8>)>();
@@ -427,6 +429,22 @@ async fn run_server_loop(
                 tracing::warn!("Failed to bind TCP (UoT) listener to {}", addr);
             }
         });
+    }
+
+    if let Some(dns_cfg) = dns_transport {
+        if dns_cfg.enabled {
+            let dns_udp_tx = udp_tx.clone();
+            let dns_tcp_map = tcp_map.clone();
+            let dns_ui_tx = ui_event_tx.clone();
+            tokio::spawn(async move {
+                crate::transport::dns::start_dns_transport_server(
+                    dns_cfg,
+                    dns_udp_tx,
+                    dns_tcp_map,
+                    dns_ui_tx,
+                ).await;
+            });
+        }
     }
 
     drop(udp_tx); // Drop the original sender so the channel closes when all tasks end

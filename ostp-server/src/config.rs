@@ -121,4 +121,17 @@ pub struct ModularServerConfig {
     pub dns: Option<DnsConfig>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub license_key: Option<String>,
+    
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub dns_transport: Option<DnsTransportConfig>,
+}
+
+#[derive(Debug, Deserialize, Serialize, Clone)]
+pub struct DnsTransportConfig {
+    #[serde(default)]
+    pub enabled: bool,
+    pub listen: String,
+    pub domain: String,
+    pub pubkey: String,
+    pub privkey: String,
 }
