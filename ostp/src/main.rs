@@ -1420,17 +1420,40 @@ async fn run_app() -> Result<()> {
   "log": {{
     "level": "info"
   }},
-  
+
   // The address and port the server listens on for incoming OSTP connections.
   "listen": "0.0.0.0:50000",
-  
+
   // List of valid keys. Clients must use one of these to connect.
   "access_keys": [
     "{}"
   ],
-  
+
   // Optional proxy for outbound traffic.
-  "  // Fallback TCP proxy: unrecognized connections are proxied to a web server (anti-DPI).
+  "outbound": {{
+    "enabled": false,
+    "protocol": "socks5",
+    "address": "127.0.0.1",
+    "port": 9050,
+    "default_action": "proxy",
+    "rules": [
+      {{
+        "domain_suffix": [".onion"],
+        "action": "proxy"
+      }}
+    ]
+  }},
+
+  // Management API configuration.
+  "api": {{
+    "enabled": false,
+    "bind": "0.0.0.0:9090",
+    "webpath": "",
+    "username": "",
+    "password_hash": ""
+  }},
+
+  // Fallback TCP proxy: unrecognized connections are proxied to a web server (anti-DPI).
   "fallback": {{
     "enabled": false,
     "listen": "0.0.0.0:443",
@@ -1463,6 +1486,11 @@ async fn run_app() -> Result<()> {
   // DO NOT EDIT THIS COMMENT - Migrator relies on it
   "version": "0.3.1",
   "mode": "client",
+  "api": {{
+    "enabled": true,
+    "bind": "127.0.0.1:50001",
+    "token": "{key}"
+  }},
   "log": {{
     "level": "info"
   }},
@@ -1487,9 +1515,13 @@ async fn run_app() -> Result<()> {
       "tag": "proxy",
       "server": "YOUR_SERVER_IP",
       "port": 50000,
-      "access_key": "{key}",
+      "access_key": "YOUR_ACCESS_KEY",
       "transport": {{
         "type": "udp"
+      }},
+      "multiplex": {{
+        "enabled": false,
+        "sessions": 1
       }}
     }},
     {{
@@ -1504,7 +1536,7 @@ async fn run_app() -> Result<()> {
   "routing": {{
     "rules": [
       {{
-        "domain_suffix": ["localhost"],
+        "domain_suffix": ["localhost", "127.0.0.1"],
         "outbound": "direct"
       }}
     ],
