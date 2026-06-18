@@ -1610,7 +1610,33 @@ async fn run_app() -> Result<()> {
 
     let config_content = fs::read_to_string(&args.config)?;
     let mut stripped = json_comments::StripComments::new(config_content.as_bytes());
-    let config: UnifiedConfig = serde_json::from_reader(&mut stripped)
+    let mut raw_json: serde_json::Value = serde_json::from_reader(&mut stripped)
+        .map_err(|e| anyhow!("Failed to parse config as JSON: {}", e))?;
+
+    let is_migrated = raw_json.get("version").and_then(|v| v.as_str()) == Some("0.3.1");
+    if !is_migrated {
+        let is_server = raw_json.get("listen").is_some() || raw_json.get("access_keys").is_some();
+        if is_server {
+            raw_json["mode"] = serde_json::json!("server");
+            raw_json["version"] = serde_json::json!("0.3.1");
+            if let Some(log) = raw_json.get("log_level") {
+                raw_json["log"] = serde_json::json!({ "level": log.clone() });
+            }
+        } else {
+            let (migrated, _) = ostp_client::config::ClientConfig::migrate_json(raw_json);
+            raw_json = migrated;
+            raw_json["mode"] = serde_json::json!("client");
+        }
+        
+        // Save migrated config back
+        let serialized = serde_json::to_string_pretty(&raw_json)?;
+        let header = "// OSTP Configuration v0.3.1\n// DO NOT EDIT THIS COMMENT - Migrator relies on it\n";
+        let final_content = format!("{}{}", header, serialized);
+        let _ = fs::write(&args.config, final_content);
+        println!("{} Configuration automatically migrated to v0.3.1", "[ostp]".cyan().bold());
+    }
+
+    let config: UnifiedConfig = serde_json::from_value(raw_json)
         .map_err(|e| anyhow!("Failed to parse config: {}", e))?;
 
     config.validate()?;
