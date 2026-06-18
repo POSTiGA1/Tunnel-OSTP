@@ -63,6 +63,10 @@ struct Args {
     /// Output shell export commands to clear proxy (eval $(ostp --proxy-env-clear))
     #[arg(long)]
     proxy_env_clear: bool,
+
+    /// Force migration of the configuration file to the latest format and exit
+    #[arg(long)]
+    migrate: bool,
 }
 
 fn parse_ostp_link(link: &str) -> Result<serde_json::Value> {
@@ -1157,6 +1161,10 @@ async fn run_app() -> Result<()> {
         return cmd_update();
     }
 
+    if args.migrate {
+        return cmd_migrate(&args.config);
+    }
+
     // ── Setup wizard: explicit flag or first-time (no config) ────────
     if args.setup {
         return run_setup_wizard(&args.config);
@@ -1793,5 +1801,45 @@ async fn run_client_directly(client_cfg: serde_json::Value) -> Result<()> {
     
     // Launch the core runner directly.
     ostp_client::runner::run_client_core(client_conf, metrics, rx, None).await?;
+    Ok(())
+}
+
+fn cmd_migrate(config_path: &std::path::Path) -> Result<()> {
+    if !config_path.exists() {
+        anyhow::bail!("Configuration file not found at {:?}", config_path);
+    }
+
+    let config_content = fs::read_to_string(config_path)?;
+    let mut stripped = json_comments::StripComments::new(config_content.as_bytes());
+    let mut raw_json: serde_json::Value = serde_json::from_reader(&mut stripped)
+        .map_err(|e| anyhow!("Failed to parse config as JSON: {}", e))?;
+
+    let is_migrated = raw_json.get("version").and_then(|v| v.as_str()) == Some("0.3.1");
+    if is_migrated {
+        println!("{} Configuration is already up to date (v0.3.1)", "[ostp]".cyan().bold());
+        return Ok(());
+    }
+
+    let is_server = raw_json.get("listen").is_some() || raw_json.get("access_keys").is_some();
+    if is_server {
+        raw_json["mode"] = serde_json::json!("server");
+        raw_json["version"] = serde_json::json!("0.3.1");
+        if let Some(log) = raw_json.get("log_level") {
+            raw_json["log"] = serde_json::json!({ "level": log.clone() });
+        }
+        println!("{} Detected Server configuration.", "[ostp]".cyan().bold());
+    } else {
+        println!("{} Detected Client configuration.", "[ostp]".cyan().bold());
+        let (migrated, _) = ostp_client::config::ClientConfig::migrate_json(raw_json);
+        raw_json = migrated;
+        raw_json["mode"] = serde_json::json!("client");
+    }
+
+    let serialized = serde_json::to_string_pretty(&raw_json)?;
+    let header = "// OSTP Configuration v0.3.1\n// DO NOT EDIT THIS COMMENT - Migrator relies on it\n";
+    let final_content = format!("{}{}", header, serialized);
+    fs::write(config_path, final_content)?;
+    
+    println!("{} Successfully migrated configuration to v0.3.1!", "[ostp]".green().bold());
     Ok(())
 }
