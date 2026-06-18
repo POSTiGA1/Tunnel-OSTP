@@ -1422,64 +1422,13 @@ async fn run_app() -> Result<()> {
   ],
   
   // Optional proxy for outbound traffic.
-  "outbound": {{
-    "enabled": false,
-    "protocol": "socks5",
-    "address": "127.0.0.1",
-    "port": 9050,
-    // default_action: 'proxy' (all through proxy) or 'direct' (bypass proxy by default).
-    "default_action": "proxy",
-    "rules": [
-      {{
-        "domain_suffix": [".onion"],
-        "action": "proxy"
-      }}
-    ]
-  }},
-  
-  // Web control panel & Management API
-  "api": {{
-    "enabled": false,
-    "bind": "0.0.0.0:9090",
-    // Static API token for Relay servers (optional)
-    "token": "",
-    // Secret URL path to hide panel from scanners (e.g. "mySecret123")
-    "webpath": "",
-    // Login credentials for web panel (password stored as SHA256 hash)
-    "username": "",
-    "password_hash": ""
-  }},
-  
-  // Fallback TCP proxy: unrecognized connections are proxied to a web server (anti-DPI).
+  "  // Fallback TCP proxy: unrecognized connections are proxied to a web server (anti-DPI).
   "fallback": {{
     "enabled": false,
     "listen": "0.0.0.0:443",
     // Target web server (e.g., local nginx or caddy)
     "target": "127.0.0.1:8080"
   }},
-
-  // Transport settings
-  "transport": {{
-    "mode": "udp",
-    // Optional fake SNI for TLS masking (e.g. "www.microsoft.com")
-    "stealth_sni": null,
-    // Enable WebSockets masquerade (requires a reverse proxy)
-    "wss": false
-  }},
-
-  // Internal DNS server with AdBlock and DoH (DNS-over-HTTPS)
-  "dns": {{
-    "enabled": false,
-    // Intercept all UDP port 53 traffic going through the server to prevent DNS leaks
-    "intercept_all_port53": true,
-    "local_port": 50053,
-    "doh_upstream": "https://cloudflare-dns.com/dns-query",
-    "adblock_urls": [],
-    "custom_domains": {{}}
-  }},
-
-  // License Key (if using premium features)
-  // "license_key": "YOUR_LICENSE_KEY_HERE",
 
   "debug": false
 }}"#, key)
@@ -1506,31 +1455,17 @@ async fn run_app() -> Result<()> {
   // DO NOT EDIT THIS COMMENT - Migrator relies on it
   "version": "0.3.1",
   "mode": "client",
-
-  // Management API (used by ostp-control web panel)
-  "api": {{
-    "enabled": true,
-    "bind": "127.0.0.1:50001",
-    // Bearer token for API auth - keep this secret
-    "token": "{key}"
-  }},
-
-  // Logging
   "log": {{
     "level": "info"
   }},
-
-  // Inbound listeners - what the client exposes locally
   "inbounds": [
     {{
-      // TUN virtual adapter for full VPN mode (requires ostp-tun-helper)
       "type": "tun",
       "tag": "tun-in",
-      "auto_route": false,
+      "auto_route": true,
       "mtu": 1140
     }},
     {{
-      // SOCKS5/HTTP proxy listener (browser/system proxy)
       "type": "local_proxy",
       "tag": "socks-in",
       "protocol": "socks",
@@ -1538,47 +1473,30 @@ async fn run_app() -> Result<()> {
       "port": 1088
     }}
   ],
-
-  // Outbound connections
   "outbounds": [
     {{
-      // Primary OSTP proxy - connect to your server here
       "type": "ostp",
       "tag": "proxy",
       "server": "YOUR_SERVER_IP",
       "port": 50000,
       "access_key": "{key}",
       "transport": {{
-        // "udp" (default, WebRTC masquerade) or "uot" (TCP-over-UDP)
         "type": "udp"
-      }},
-      "multiplex": {{
-        "enabled": false,
-        "sessions": 1
       }}
     }},
     {{
-      // Direct (bypass) outbound
       "type": "direct",
       "tag": "direct"
     }},
     {{
-      // Block outbound
       "type": "block",
       "tag": "block"
     }}
   ],
-
-  // Routing rules - matched top-to-bottom, default_outbound is the fallback
   "routing": {{
     "rules": [
       {{
-        // Bypass local addresses
         "domain_suffix": ["localhost"],
-        "outbound": "direct"
-      }},
-      {{
-        "ip_cidr": ["127.0.0.0/8", "192.168.0.0/16", "10.0.0.0/8"],
         "outbound": "direct"
       }}
     ],
