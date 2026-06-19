@@ -159,7 +159,12 @@ pub async fn run_server(
                                 #[derive(serde::Deserialize)]
                                 #[serde(untagged)]
                                 enum ReloadUser {
-                                    Detailed { access_key: String, name: Option<String>, limit_bytes: Option<u64> },
+                                    Detailed { 
+                                        #[serde(rename = "key")]
+                                        access_key: String, 
+                                        name: Option<String>, 
+                                        limit_bytes: Option<u64> 
+                                    },
                                     KeyOnly(String),
                                 }
                                 #[derive(serde::Deserialize)]
