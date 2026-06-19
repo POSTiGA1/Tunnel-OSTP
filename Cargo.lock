@@ -1497,9 +1497,11 @@ dependencies = [
  "hkdf",
  "hmac",
  "rand 0.8.5",
+ "serde",
  "sha2",
  "snow",
  "thiserror 1.0.69",
+ "tokio",
  "tracing",
  "x25519-dalek",
 ]

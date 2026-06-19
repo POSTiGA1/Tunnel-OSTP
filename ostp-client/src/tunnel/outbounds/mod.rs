@@ -1,6 +1,5 @@
 use anyhow::{anyhow, Result};
 use std::sync::Arc;
-use tokio::net::TcpStream;
 use crate::tunnel::balancer::Balancer;
 use crate::config::OutboundConfig;
 

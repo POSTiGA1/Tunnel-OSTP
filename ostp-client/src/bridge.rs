@@ -18,7 +18,7 @@ impl Default for BridgeMetrics {
     }
 }
 
-pub fn set_socket_protector<F>(f: F)
+pub fn set_socket_protector<F>(_f: F)
 where
     F: Fn(i32) -> bool + Send + Sync + 'static,
 {

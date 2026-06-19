@@ -5,8 +5,9 @@ use tokio::net::UdpSocket;
 use tokio::sync::{mpsc, Mutex};
 use rand::Rng;
 
-use ostp_core::dns::{
-    DnsPacket, DnsRecordType, encode_payload_to_domain, decode_domain_to_payload,
+pub use ostp_core::dns::{
+    DnsPacket, DnsRecordType, encode_payload_to_domain,
+    decode_domain_to_payload,
 };
 use crate::transport::Transport;
 
@@ -64,7 +65,7 @@ pub async fn start_dns_transport(domain: String, resolver: String, _pubkey: Opti
     });
 
     // Receive task (reads from UDP socket, decodes DNS answer, sends to app)
-    let base_domain_rx = domain.clone();
+    let _base_domain_rx = domain.clone();
     tokio::spawn(async move {
         let mut buf = vec![0u8; 65535];
         loop {

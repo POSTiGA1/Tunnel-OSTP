@@ -38,7 +38,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
 
   bool _obscureKey = true;
   bool _debugMode = false;
-  String _dnsRegion = 'Global';
+  late TextEditingController _dnsRegionCtrl;
   String _transportMode = 'udp'; // 'udp' | 'uot'
   String _tunStack = 'ostp'; // 'system' | 'ostp'
   bool _muxEnabled = false;
@@ -58,9 +58,9 @@ class _SettingsScreenState extends State<SettingsScreen> {
     _ipsCtrl = TextEditingController(text: widget.prefs.getString('ex_ips') ?? '');
     _processesCtrl = TextEditingController(text: widget.prefs.getString('ex_processes') ?? '');
     _dnsDomainCtrl = TextEditingController(text: widget.prefs.getString('dns_domain') ?? '');
-    _pbkCtrl = TextEditingController(text: widget.prefs.getString('pbk') ?? '');
+    _dnsRegionCtrl = TextEditingController(text: widget.prefs.getString('dns_region') ?? '1.1.1.1');
+    _pbkCtrl = TextEditingController(text: widget.prefs.getString('tun_pbk') ?? '');
     _sidCtrl = TextEditingController(text: widget.prefs.getString('sid') ?? '');
-    _dnsRegion = widget.prefs.getString('dns_region') ?? 'Global';
     _transportMode = widget.prefs.getString('transport_mode') ?? 'udp';
     _tunStack = widget.prefs.getString('tun_stack') ?? 'ostp';
     _debugMode = widget.prefs.getBool('debug_mode') ?? false;
@@ -81,6 +81,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
     _ipsCtrl.dispose();
     _processesCtrl.dispose();
     _dnsDomainCtrl.dispose();
+    _dnsRegionCtrl.dispose();
     _pbkCtrl.dispose();
     _sidCtrl.dispose();
     _muxSessionsCtrl.dispose();
@@ -97,11 +98,11 @@ class _SettingsScreenState extends State<SettingsScreen> {
     widget.prefs.setString('ex_ips', _ipsCtrl.text.trim());
     widget.prefs.setString('ex_processes', _processesCtrl.text.trim());
     widget.prefs.setBool('debug_mode', _debugMode);
-    widget.prefs.setString('dns_region', _dnsRegion);
     widget.prefs.setString('transport_mode', _transportMode);
     widget.prefs.setString('tun_stack', _tunStack);
     widget.prefs.setString('dns_domain', _dnsDomainCtrl.text.trim());
-    widget.prefs.setString('pbk', _pbkCtrl.text.trim());
+    widget.prefs.setString('dns_region', _dnsRegionCtrl.text.trim());
+    widget.prefs.setString('tun_pbk', _pbkCtrl.text.trim());
     widget.prefs.setString('sid', _sidCtrl.text.trim());
     widget.prefs.setBool('mux_enabled', _muxEnabled);
     widget.prefs.setString('mux_sessions', _muxSessionsCtrl.text.trim());
@@ -237,7 +238,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
                       _serverCtrl.text = host;
                       _keyCtrl.text = key;
                       _dnsDomainCtrl.text = uri.queryParameters['domain'] ?? '';
-                      _dnsRegion = uri.queryParameters['region'] ?? 'Global';
+                      _dnsRegionCtrl.text = uri.queryParameters['resolver'] ?? '1.1.1.1';
                       
                       final type = uri.queryParameters['type'];
                       _transportMode = type == 'tcp' || type == 'http' ? 'uot' : (type == 'dns' ? 'dns' : 'udp');
@@ -349,30 +350,27 @@ class _SettingsScreenState extends State<SettingsScreen> {
                         const SizedBox(height: 16),
                         _buildTextField('Domain (Points to Server)', _dnsDomainCtrl, hint: 'tunnel.myvpn.com'),
                         const SizedBox(height: 16),
-                        DropdownButtonFormField<String>(
-                          value: _dnsRegion,
-                          dropdownColor: const Color(0xFF1E1E2C),
-                          style: const TextStyle(color: Colors.white, fontSize: 14),
-                          decoration: InputDecoration(
-                            labelText: 'DNS Resolver Region',
-                            labelStyle: const TextStyle(color: Colors.white54, fontSize: 13),
-                            border: OutlineInputBorder(borderRadius: BorderRadius.circular(12)),
-                            contentPadding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
-                          ),
-                          items: ['Global', 'Russia', 'China', 'Iran'].map((String region) {
-                            return DropdownMenuItem<String>(
-                              value: region,
-                              child: Text(region),
-                            );
-                          }).toList(),
-                          onChanged: (String? newValue) {
-                            if (newValue != null) {
-                              setState(() {
-                                _dnsRegion = newValue;
-                                _saveSettings();
-                              });
-                            }
-                          },
+                        Row(
+                          children: [
+                            Expanded(
+                              child: _buildTextField('DNS Resolver Server', _dnsRegionCtrl, hint: '1.1.1.1'),
+                            ),
+                            const SizedBox(width: 8),
+                            Padding(
+                              padding: const EdgeInsets.only(top: 24.0),
+                              child: ElevatedButton(
+                                onPressed: _showDnsProberDialog,
+                                style: ElevatedButton.styleFrom(
+                                  backgroundColor: Colors.orangeAccent.withOpacity(0.2),
+                                  foregroundColor: Colors.orangeAccent,
+                                  elevation: 0,
+                                  padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 14),
+                                  shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
+                                ),
+                                child: const Text('PROBER', style: TextStyle(fontWeight: FontWeight.bold, fontSize: 12)),
+                              ),
+                            )
+                          ],
                         ),
                       ],
                     ),
@@ -598,6 +596,97 @@ class _SettingsScreenState extends State<SettingsScreen> {
               child: const Text('Close'),
             )
           ],
+        );
+      }
+    );
+  }
+
+  Future<void> _showDnsProberDialog() async {
+    const channel = MethodChannel('com.ospab.ostp/vpn');
+    showDialog(
+      context: context,
+      barrierDismissible: false,
+      builder: (context) {
+        return StatefulBuilder(
+          builder: (context, setModalState) {
+            return AlertDialog(
+              backgroundColor: Theme.of(context).colorScheme.surface,
+              shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(20)),
+              title: const Text('DNS Prober', textAlign: TextAlign.center),
+              content: FutureBuilder<String?>(
+                future: channel.invokeMethod<String>('runDnsProber', {'domain': _dnsDomainCtrl.text.trim()}),
+                builder: (context, snapshot) {
+                  if (snapshot.connectionState == ConnectionState.waiting) {
+                    return const Column(
+                      mainAxisSize: MainAxisSize.min,
+                      children: [
+                        CircularProgressIndicator(),
+                        SizedBox(height: 16),
+                        Text('Sending real tunnel probes...', style: TextStyle(color: Colors.white54, fontSize: 13), textAlign: TextAlign.center),
+                      ],
+                    );
+                  }
+
+                  if (snapshot.hasError || !snapshot.hasData) {
+                    return Text('Error: ${snapshot.error}', style: const TextStyle(color: Colors.redAccent));
+                  }
+
+                  List<dynamic> results = [];
+                  try {
+                    results = jsonDecode(snapshot.data!);
+                  } catch (_) {}
+
+                  if (results.isEmpty) {
+                    return const Text('No results or all timed out.', style: TextStyle(color: Colors.redAccent));
+                  }
+
+                  return SizedBox(
+                    width: double.maxFinite,
+                    child: ListView.builder(
+                      shrinkWrap: true,
+                      itemCount: results.length,
+                      itemBuilder: (context, index) {
+                        final res = results[index];
+                        final name = res['name'] ?? '';
+                        final ip = res['ip'] ?? '';
+                        final latency = res['latency_ms'];
+                        
+                        final isBest = index == 0 && latency != null;
+                        
+                        return ListTile(
+                          onTap: latency != null ? () {
+                            setState(() {
+                              _dnsRegionCtrl.text = ip;
+                              _saveSettings();
+                            });
+                            Navigator.pop(context);
+                            ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text('DNS set to $ip')));
+                          } : null,
+                          title: Text('${isBest ? '⭐ ' : ''}$name', style: const TextStyle(fontSize: 14)),
+                          subtitle: Text(ip, style: const TextStyle(fontSize: 12, color: Colors.white54)),
+                          trailing: Text(
+                            latency != null ? '$latency ms' : 'TIMEOUT',
+                            style: TextStyle(
+                              color: latency == null ? Colors.redAccent : (latency < 100 ? Colors.greenAccent : Colors.orangeAccent),
+                              fontWeight: FontWeight.bold,
+                            ),
+                          ),
+                          tileColor: isBest ? Colors.blueAccent.withOpacity(0.1) : null,
+                          shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10)),
+                        );
+                      },
+                    ),
+                  );
+                },
+              ),
+              actions: [
+                TextButton(
+                  onPressed: () => Navigator.pop(context),
+                  child: const Text('Close'),
+                )
+              ],
+            );
+          }
         );
       }
     );

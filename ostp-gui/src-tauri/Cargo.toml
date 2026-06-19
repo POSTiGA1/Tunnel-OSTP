@@ -26,6 +26,7 @@ tokio = { version = "1", features = ["full"] }
 anyhow = "1"
 tracing = "0.1"
 ostp-client = { path = "../../ostp-client" }
+ostp-core = { path = "../../ostp-core" }
 portable-atomic = "1"
 json_comments = "0.2"
 rand = "0.8"

@@ -190,15 +190,15 @@ impl ClientConfig {
 
     /// Migrates old monolithic JSON to the new modular format.
     /// Returns the migrated JSON value and a boolean indicating if a migration occurred.
-    pub fn migrate_json(mut json: serde_json::Value) -> (serde_json::Value, bool) {
-        let is_migrated = json.get("version").and_then(|v| v.as_str()) == Some("0.3.1");
+    pub fn migrate_json(json: serde_json::Value) -> (serde_json::Value, bool) {
+        let is_migrated = json.get("version").and_then(|v| v.as_str()) == Some(env!("CARGO_PKG_VERSION"));
         if is_migrated {
             return (json, false);
         }
 
         // Needs migration
         let mut new_json = serde_json::json!({
-            "version": "0.3.1",
+            "version": env!("CARGO_PKG_VERSION"),
         });
 
         // 1. Log level

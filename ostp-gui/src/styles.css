@@ -5,27 +5,27 @@
 
 /* ── Tokens — Dark (default) ─────────────────────────────────────────────── */
 :root {
-  /* Colors */
-  --c-bg:          #08080f;
-  --c-surface:     #0f0f1a;
-  --c-card:        rgba(255,255,255,0.04);
-  --c-card-border: rgba(255,255,255,0.07);
+  /* Colors - Dark (default) */
+  --c-bg:          #030303;
+  --c-surface:     #09090b;
+  --c-card:        rgba(255,255,255,0.02);
+  --c-card-border: rgba(255,255,255,0.05);
 
-  --c-accent:      #6c72ff;
-  --c-accent-2:    #a78bfa;
-  --c-accent-glow: rgba(108,114,255,0.35);
-  --c-accent-dim:  rgba(108,114,255,0.12);
+  --c-accent:      #52525b;
+  --c-accent-2:    #71717a;
+  --c-accent-glow: rgba(255,255,255,0.05);
+  --c-accent-dim:  rgba(255,255,255,0.03);
 
-  --c-green:       #22d3a5;
-  --c-green-glow:  rgba(34,211,165,0.35);
-  --c-green-dim:   rgba(34,211,165,0.10);
+  --c-green:       #10b981;
+  --c-green-glow:  rgba(16,185,129,0.25);
+  --c-green-dim:   rgba(16,185,129,0.10);
 
   --c-amber:       #f59e0b;
-  --c-red:         #f87171;
+  --c-red:         #ef4444;
 
-  --c-txt-1:       #e2e4f0;
-  --c-txt-2:       #636882;
-  --c-txt-3:       #343647;
+  --c-txt-1:       #fdfdfd;
+  --c-txt-2:       #a1a1aa;
+  --c-txt-3:       #52525b;
 
   /* Radii */
   --r-xs:  6px;
@@ -46,26 +46,26 @@
 
 /* ── Tokens — Light theme override ────────────────────────────────────────── */
 [data-theme="light"] {
-  --c-bg:          #f0f2fa;
+  --c-bg:          #f4f4f5;
   --c-surface:     #ffffff;
-  --c-card:        rgba(255,255,255,0.75);
-  --c-card-border: rgba(0,0,0,0.08);
+  --c-card:        rgba(0,0,0,0.02);
+  --c-card-border: rgba(0,0,0,0.06);
 
-  --c-accent:      #5b61f0;
-  --c-accent-2:    #8b5cf6;
-  --c-accent-glow: rgba(91,97,240,0.25);
-  --c-accent-dim:  rgba(91,97,240,0.10);
+  --c-accent:      #e4e4e7;
+  --c-accent-2:    #d4d4d8;
+  --c-accent-glow: rgba(0,0,0,0.05);
+  --c-accent-dim:  rgba(0,0,0,0.03);
 
-  --c-green:       #10b981;
-  --c-green-glow:  rgba(16,185,129,0.25);
-  --c-green-dim:   rgba(16,185,129,0.10);
+  --c-green:       #059669;
+  --c-green-glow:  rgba(5,150,105,0.2);
+  --c-green-dim:   rgba(5,150,105,0.1);
 
   --c-amber:       #d97706;
-  --c-red:         #ef4444;
+  --c-red:         #dc2626;
 
-  --c-txt-1:       #0f1020;
-  --c-txt-2:       #5a5f7a;
-  --c-txt-3:       #b0b4cc;
+  --c-txt-1:       #09090b;
+  --c-txt-2:       #52525b;
+  --c-txt-3:       #a1a1aa;
 }
 
 /* ── Light theme element overrides ───────────────────────────────────────── */
@@ -73,9 +73,6 @@ html[data-theme="light"],
 html[data-theme="light"] body {
   background: var(--c-bg);
 }
-
-html[data-theme="light"] .blob-1 { opacity: 0.08; }
-html[data-theme="light"] .blob-2 { opacity: 0.06; }
 
 html[data-theme="light"] .power-btn {
   background: var(--c-surface);
@@ -198,41 +195,32 @@ input, textarea { font-family: inherit; }
   overflow: hidden;
 }
 
-/* ── Ambient blobs ────────────────────────────────────────────────────────── */
-.ambient {
+/* ── Watermark ────────────────────────────────────────────────────────────── */
+.watermark {
   position: absolute;
-  inset: 0;
+  top: 50%;
+  left: 50%;
+  transform: translate(-50%, -50%);
+  width: 80%;
+  max-width: 600px;
   pointer-events: none;
   z-index: 0;
-  overflow: hidden;
+  opacity: 0.05;
+  user-select: none;
+  display: flex;
+  align-items: center;
+  justify-content: center;
 }
 
-.blob {
-  position: absolute;
-  border-radius: 50%;
-  filter: blur(100px);
-  will-change: transform;
+.watermark img {
+  width: 100%;
+  height: auto;
+  object-fit: contain;
 }
 
-.blob-1 {
-  width: 400px; height: 400px;
-  background: var(--c-accent);
-  opacity: 0.15;
-  top: -150px; right: -100px;
-  animation: blob-drift 28s infinite alternate ease-in-out;
-}
-
-.blob-2 {
-  width: 350px; height: 350px;
-  background: var(--c-green);
-  opacity: 0.10;
-  bottom: -100px; left: -100px;
-  animation: blob-drift 22s infinite alternate-reverse ease-in-out;
-}
-
-@keyframes blob-drift {
-  from { transform: translate(0, 0); }
-  to   { transform: translate(30px, 20px); }
+html[data-theme="light"] .watermark {
+  opacity: 0.06;
+  filter: invert(1);
 }
 
 /* ── Screen system ────────────────────────────────────────────────────────── */

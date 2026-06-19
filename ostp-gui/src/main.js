@@ -75,7 +75,7 @@ function bindSettingsInputs() {
   if (inTransport) {
     inTransport.addEventListener('change', () => {
       if (inTransport.value === 'dns') {
-        groupDnsProxy.style.display = 'block';
+        groupDnsProxy.style.display = 'flex';
       } else {
         groupDnsProxy.style.display = 'none';
       }
@@ -87,6 +87,86 @@ const wintunModal        = $('wintun-modal');
 const btnWintunCancel    = $('btn-wintun-cancel');
 const btnWintunOpen      = $('btn-wintun-open');
 const wintunInstallPath  = $('wintun-install-path');
+
+const dnsProberModal     = $('dns-prober-modal');
+const proberStatus       = $('prober-status');
+const proberList         = $('prober-list');
+const btnProberClose     = $('btn-prober-close');
+const btnDnsProber       = $('btn-dns-prober');
+
+// ── DNS Prober ───────────────────────────────────────────────────────────────
+async function openDnsProber() {
+  dnsProberModal.classList.remove('hidden');
+  proberList.innerHTML = '';
+  proberStatus.textContent = 'Running probes...';
+
+  const domain = inDnsDomain?.value?.trim() || 'example.com';
+
+  let results;
+  try {
+    results = await invoke('run_dns_prober', { domain });
+  } catch (err) {
+    proberStatus.textContent = 'Error: ' + err;
+    return;
+  }
+
+  proberList.innerHTML = '';
+
+  if (!results || results.length === 0) {
+    proberStatus.textContent = 'No results.';
+    return;
+  }
+
+  let bestIp = null;
+
+  results.forEach((r, i) => {
+    const isBest = i === 0 && r.latency_ms != null;
+    if (isBest && !bestIp) bestIp = r.ip;
+
+    const row = document.createElement('div');
+    row.style.cssText = `
+      display: flex; align-items: center; justify-content: space-between;
+      padding: 6px 10px; border-radius: 6px; cursor: pointer;
+      background: ${isBest ? 'rgba(99,179,237,0.12)' : 'rgba(255,255,255,0.04)'};
+      border: 1px solid ${isBest ? 'rgba(99,179,237,0.35)' : 'transparent'};
+      transition: background 0.15s;
+    `;
+
+    const latText = r.latency_ms != null ? `${r.latency_ms} ms` : 'TIMEOUT';
+    const latColor = r.latency_ms == null ? '#f56565'
+      : r.latency_ms < 50 ? '#68d391'
+      : r.latency_ms < 150 ? '#f6e05e'
+      : '#fc8181';
+
+    row.innerHTML = `
+      <span style="font-size:0.78rem; color: var(--c-txt-1);">${isBest ? '⭐ ' : ''}${r.name}</span>
+      <span style="font-size:0.78rem; color: var(--c-txt-2);">${r.ip}</span>
+      <span style="font-size:0.78rem; font-weight:600; color:${latColor};">${latText}</span>
+    `;
+
+    if (r.latency_ms != null) {
+      row.addEventListener('click', () => {
+        inDnsRegion.value = r.ip;
+        scheduleAutoSave();
+        dnsProberModal.classList.add('hidden');
+        showToast('DNS server set to ' + r.ip, 'ok');
+      });
+      row.addEventListener('mouseenter', () => { row.style.background = 'rgba(99,179,237,0.18)'; });
+      row.addEventListener('mouseleave', () => { row.style.background = isBest ? 'rgba(99,179,237,0.12)' : 'rgba(255,255,255,0.04)'; });
+    }
+
+    proberList.appendChild(row);
+  });
+
+  if (bestIp) {
+    proberStatus.textContent = `✓ Best: ${bestIp} — click any row to select`;
+    // Auto-fill best
+    inDnsRegion.value = bestIp;
+    scheduleAutoSave();
+  } else {
+    proberStatus.textContent = 'All servers timed out.';
+  }
+}
 
 // ── Tag-input state ───────────────────────────────────────────────────────────
 // Map of tagId -> Set<string>
@@ -366,7 +446,7 @@ async function loadConfigIntoForm() {
         inKey.value = ostpOut.access_key || '';
         inTransport.value = ostpOut.transport?.type || 'udp';
         if (inTransport.value === 'dns') {
-          groupDnsProxy.style.display = 'block';
+          groupDnsProxy.style.display = 'flex';
           inDnsDomain.value = ostpOut.transport?.domain || '';
           inDnsRegion.value = ostpOut.transport?.resolver || 'Global';
         } else {
@@ -592,6 +672,7 @@ window.addEventListener('DOMContentLoaded', async () => {
   applyTranslations();
   setState('disconnected');
   updateKillSwitchVisibility();
+  bindSettingsInputs();
 
   // Event wiring
   if (window.__TAURI__ && window.__TAURI__.event) {
@@ -736,6 +817,22 @@ window.addEventListener('DOMContentLoaded', async () => {
   btnWintunCancel.addEventListener('click', () => {
     wintunModal.classList.add('hidden');
   });
+
+  // DNS Prober modal
+  if (btnDnsProber) {
+    btnDnsProber.addEventListener('click', openDnsProber);
+  }
+  if (btnProberClose) {
+    btnProberClose.addEventListener('click', () => {
+      dnsProberModal.classList.add('hidden');
+    });
+  }
+  // Close prober on backdrop click
+  if (dnsProberModal) {
+    dnsProberModal.addEventListener('click', (e) => {
+      if (e.target === dnsProberModal) dnsProberModal.classList.add('hidden');
+    });
+  }
 
   // Open wintun.net link — handled natively by <a target="_blank">, but also wire as fallback
   if (btnWintunOpen && window.__TAURI__) {

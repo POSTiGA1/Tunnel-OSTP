@@ -1,6 +1,5 @@
 use crate::config::{ClientConfig, OutboundConfig};
 use std::collections::HashMap;
-use std::sync::Arc;
 
 pub struct Balancer {
     outbounds: HashMap<String, OutboundConfig>,

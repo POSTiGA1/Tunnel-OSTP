@@ -50,4 +50,8 @@ object OstpClientSdk {
     @Keep
     @JvmStatic
     external fun notifyNetworkChanged()
+
+    @Keep
+    @JvmStatic
+    external fun nativeRunDnsProber(domain: String): String
 }

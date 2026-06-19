@@ -368,3 +368,31 @@ pub extern "system" fn Java_net_ostp_client_OstpClientSdk_notifyNetworkChanged(
 
     // No-op for now; multi-server handles network drops via keep-alives and reconnection
 }
+
+#[no_mangle]
+pub extern "system" fn Java_net_ostp_client_OstpClientSdk_nativeRunDnsProber(
+    mut env: JNIEnv,
+    _class: JClass,
+    domain: JString,
+) -> jstring {
+    let domain_str: String = match env.get_string(&domain) {
+        Ok(s) => s.into(),
+        Err(_) => return env.new_string("[]").unwrap().into_raw(),
+    };
+
+    let rt = tokio::runtime::Builder::new_current_thread()
+        .enable_all()
+        .build()
+        .unwrap();
+
+    let result = rt.block_on(async {
+        ostp_core::dns_prober::run_dns_prober(&domain_str).await
+    });
+
+    let json = match result {
+        Ok(res) => serde_json::to_string(&res).unwrap_or_else(|_| "[]".to_string()),
+        Err(_) => "[]".to_string(),
+    };
+
+    env.new_string(json).unwrap().into_raw()
+}

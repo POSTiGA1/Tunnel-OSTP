@@ -1,8 +1,7 @@
 use anyhow::Result;
 use std::sync::Arc;
-use tokio::sync::{mpsc, watch};
+use tokio::sync::watch;
 
-use crate::app::{BridgeCommand, ConnectionStatus, UiEvent};
 use crate::config::{ClientConfig, InboundConfig};
 use crate::tunnel::balancer::Balancer;
 use crate::tunnel::outbounds::OutboundManager;
@@ -10,9 +9,9 @@ use crate::tunnel::router::Router;
 
 pub async fn run_client_core(
     config: ClientConfig,
-    metrics: Arc<crate::bridge::BridgeMetrics>,
+    _metrics: Arc<crate::bridge::BridgeMetrics>,
     mut shutdown_rx_ext: watch::Receiver<bool>,
-    config_rx: Option<watch::Receiver<ClientConfig>>,
+    _config_rx: Option<watch::Receiver<ClientConfig>>,
 ) -> Result<()> {
     println!("[ostp] Starting run_client_core with multi-server architecture");
 

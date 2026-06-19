@@ -27,6 +27,15 @@ pub enum ServerInbound {
         username: Option<String>,
         #[serde(default, skip_serializing_if = "Option::is_none")]
         password_hash: Option<String>,
+    },
+    Dns {
+        tag: String,
+        listen: String,
+        domain: String,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        pubkey: Option<String>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        privkey: Option<String>,
     }
 }
 
@@ -121,9 +130,6 @@ pub struct ModularServerConfig {
     pub dns: Option<DnsConfig>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub license_key: Option<String>,
-    
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub dns_transport: Option<DnsTransportConfig>,
 }
 
 #[derive(Debug, Deserialize, Serialize, Clone)]

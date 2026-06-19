@@ -95,6 +95,15 @@ class MainActivity : FlutterActivity() {
                         result.error("ERROR", e.message, null)
                     }
                 }
+                "runDnsProber" -> {
+                    try {
+                        val domain = call.argument<String>("domain") ?: "example.com"
+                        val json = net.ostp.client.OstpClientSdk.nativeRunDnsProber(domain)
+                        result.success(json)
+                    } catch (e: Throwable) {
+                        result.error("ERROR", e.message, null)
+                    }
+                }
                 "getInstalledApps" -> {
                     try {
                         val pm = packageManager

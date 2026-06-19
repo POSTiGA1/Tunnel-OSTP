@@ -1,10 +1,9 @@
-use anyhow::{anyhow, Result};
+use anyhow::Result;
 use tokio::net::TcpStream;
 use crate::config::{TransportConfig, MultiplexConfig};
 
-use ostp_core::{NoiseRole, OstpEvent, ProtocolAction, ProtocolConfig, ProtocolMachine};
+use ostp_core::{OstpEvent, ProtocolAction, ProtocolConfig, ProtocolMachine};
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
-use tokio::net::UdpSocket;
 
 pub async fn dial_tcp(
     server: &str,

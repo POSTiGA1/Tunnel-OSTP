@@ -6,11 +6,15 @@ description = "Enables access to core OSTP commands"
 allow = [
   "start_tunnel",
   "stop_tunnel",
+  "reload_tunnel",
   "get_tunnel_status",
   "get_metrics",
   "get_config",
   "save_config",
   "get_wintun_install_path",
   "set_autostart",
-  "get_autostart"
+  "get_autostart",
+  "list_running_processes",
+  "kill_auto_search",
+  "run_dns_prober"
 ]

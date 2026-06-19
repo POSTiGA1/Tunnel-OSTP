@@ -12,10 +12,9 @@
 <body>
   <div class="app-root">
 
-    <!-- Ambient light blobs -->
-    <div class="ambient" aria-hidden="true">
-      <div class="blob blob-1"></div>
-      <div class="blob blob-2"></div>
+    <!-- Eagle Watermark -->
+    <div class="watermark" aria-hidden="true">
+      <img src="assets/logo.svg" alt="" />
     </div>
 
     <!-- ── HOME SCREEN ──────────────────────────────────────────── -->
@@ -202,24 +201,20 @@
             </select>
           </div>
 
-          <div id="group-dns-proxy" style="display: none;">
+          <div id="group-dns-proxy" style="display: none; flex-direction: column; gap: 14px;">
             <div class="field-group">
               <label class="field-label" for="in-dns-domain" style="color: var(--c-warning);" data-i18n="label_dns_domain">Domain (Points to Server)</label>
               <input id="in-dns-domain" class="field-input" type="text" placeholder="tunnel.myvpn.com" spellcheck="false" />
-              <div style="font-size: 0.8rem; color: var(--c-sub); margin-top: 4px;">
-                <span data-i18n="dns_domain_hint">This is the "last resort" over public DNS servers. You need a domain pointing to your server (NS/A record).</span>
-                <span data-i18n="dns_guide">Detailed setup guide available in</span> <a href="https://github.com/ospab/ostp/wiki/DNS-Transport" target="_blank" style="color: var(--c-accent)" data-i18n="wiki_link">GitHub Wiki</a>.
-              </div>
             </div>
 
             <div class="field-group">
-              <label class="field-label" for="in-dns-region" data-i18n="label_dns_region">DNS Resolver Region (Prober)</label>
-              <select id="in-dns-region" class="field-input">
-                <option value="Global" data-i18n="opt_global">Global (Cloudflare, Google, etc)</option>
-                <option value="Russia" data-i18n="opt_russia">Russia (Yandex, VK, etc)</option>
-                <option value="China" data-i18n="opt_china">China (AliDNS, DNSPod, etc)</option>
-                <option value="Iran" data-i18n="opt_iran">Iran (Shatel, Electro, etc)</option>
-              </select>
+              <label class="field-label" for="in-dns-region" data-i18n="label_dns_region">DNS Resolver Server</label>
+              <div class="input-wrap">
+                <input id="in-dns-region" class="field-input" type="text" placeholder="1.1.1.1" spellcheck="false" />
+                <button id="btn-dns-prober" class="peek-btn" tabindex="-1" title="Find fastest DNS server" style="width:auto; padding: 0 8px; font-size: 0.7rem; color: var(--c-accent);">
+                  PROBER
+                </button>
+              </div>
             </div>
           </div>
 
@@ -377,6 +372,23 @@
         <div class="modal-actions">
           <button id="btn-wintun-cancel" class="btn secondary" data-i18n="cancel_btn">Cancel</button>
           <a id="btn-wintun-open" href="https://www.wintun.net" target="_blank" class="btn primary" data-i18n="wintun_open_btn">Open wintun.net ↗</a>
+        </div>
+      </div>
+    </div>
+      </div>
+    </div>
+
+    <!-- DNS Prober Modal -->
+    <div id="dns-prober-modal" class="modal-overlay hidden">
+      <div class="modal-content" style="min-width: 300px; max-width: 420px;">
+        <h3 class="modal-title">DNS Prober</h3>
+        <p class="modal-text" style="font-size: 0.8rem; color: var(--c-txt-2); margin-bottom: 12px;">
+          Sends a real DNS tunnel probe through each resolver and measures the round-trip time to your server. The fastest one is selected automatically.
+        </p>
+        <div id="prober-status" style="font-size: 0.75rem; color: var(--c-accent); margin-bottom: 10px; min-height: 18px;"></div>
+        <div id="prober-list" style="display: flex; flex-direction: column; gap: 5px; max-height: 280px; overflow-y: auto;"></div>
+        <div class="modal-actions" style="margin-top: 16px;">
+          <button id="btn-prober-close" class="btn secondary">Close</button>
         </div>
       </div>
     </div>

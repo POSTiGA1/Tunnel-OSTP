@@ -13,7 +13,7 @@ pub async fn run_tun_inbound(
     outbound_manager: Arc<OutboundManager>,
     mut shutdown: watch::Receiver<bool>,
 ) -> Result<()> {
-    use std::net::ToSocketAddrs;
+    
     use netstack_smoltcp::StackBuilder;
     use tokio::io::{AsyncReadExt, AsyncWriteExt};
     use futures::{StreamExt, SinkExt};
@@ -72,7 +72,7 @@ pub async fn run_tun_inbound(
     #[allow(unused_variables)]
     let mut _route_guard = None;
 
-    let (mut tun_to_stack, mut stack_to_tun) = {
+    let (tun_to_stack, stack_to_tun) = {
         #[cfg(target_os = "android")]
         {
             if let Some(fd) = fd {
@@ -183,7 +183,7 @@ pub async fn run_tun_inbound(
     let router_tcp = router.clone();
     let tag_tcp = tag.clone();
     
-    let mut tcp_accept_task = tokio::spawn(async move {
+    let tcp_accept_task = tokio::spawn(async move {
         let Some(mut listener) = tcp_listener else { return; };
         while let Some((mut stream, local, remote)) = listener.next().await {
             let om = outbound_manager_tcp.clone();
@@ -249,7 +249,7 @@ pub async fn run_tun_inbound(
     let router_udp = router.clone();
     let tag_udp = tag.clone();
     
-    let mut udp_proxy_task = tokio::spawn(async move {
+    let udp_proxy_task = tokio::spawn(async move {
         if let Some(udp_sock) = udp_socket {
             let (mut udp_rx, _udp_tx) = udp_sock.split();
             while let Some((payload, local, remote)) = udp_rx.next().await {

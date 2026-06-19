@@ -6,6 +6,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import 'package:mobile_scanner/mobile_scanner.dart';
+import 'package:flutter_svg/flutter_svg.dart';
 import '../models/connection_state_enum.dart';
 import 'settings_screen.dart';
 import 'logs_screen.dart';
@@ -517,31 +518,16 @@ class _HomeScreenState extends State<HomeScreen> with TickerProviderStateMixin {
     return Scaffold(
       body: Stack(
         children: [
-          Positioned(
-            top: -150, right: -100,
-            child: Container(
-              width: 400, height: 400,
-              decoration: BoxDecoration(
-                shape: BoxShape.circle,
-                color: theme.colorScheme.primary.withOpacity(0.15),
-              ),
-              child: BackdropFilter(
-                filter: ImageFilter.blur(sigmaX: 100, sigmaY: 100),
-                child: Container(),
-              ),
-            ),
-          ),
-          Positioned(
-            bottom: -100, left: -100,
-            child: Container(
-              width: 350, height: 350,
-              decoration: BoxDecoration(
-                shape: BoxShape.circle,
-                color: theme.colorScheme.secondary.withOpacity(0.1),
-              ),
-              child: BackdropFilter(
-                filter: ImageFilter.blur(sigmaX: 100, sigmaY: 100),
-                child: Container(),
+          Center(
+            child: Opacity(
+              opacity: theme.brightness == Brightness.dark ? 0.05 : 0.06,
+              child: SvgPicture.asset(
+                'assets/logo.svg',
+                width: MediaQuery.of(context).size.width * 0.8,
+                fit: BoxFit.contain,
+                colorFilter: theme.brightness == Brightness.light 
+                    ? const ColorFilter.mode(Colors.black, BlendMode.srcIn) 
+                    : null,
               ),
             ),
           ),

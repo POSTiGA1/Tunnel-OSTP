@@ -85,7 +85,7 @@ async fn handle_socks5_connection(
     }
     
     let atyp = buf[3];
-    let (target_host, mut ip_addr) = match atyp {
+    let (target_host, ip_addr) = match atyp {
         0x01 => { // IPv4
             stream.read_exact(&mut buf[0..4]).await?;
             let ip = std::net::Ipv4Addr::new(buf[0], buf[1], buf[2], buf[3]);

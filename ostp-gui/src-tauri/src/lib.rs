@@ -8,6 +8,7 @@ use portable_atomic::Ordering;
 use tauri::Emitter;
 
 mod ipc_crypto;
+mod dns_prober;
 
 // ── Config types ─────────────────────────────────────────────────────────────
 
@@ -778,7 +779,7 @@ static SINGLE_INSTANCE_LOCK: std::sync::OnceLock<std::net::TcpListener> = std::s
 pub fn run() {
     if let Ok(listener) = std::net::TcpListener::bind("127.0.0.1:49153") {
         let _ = SINGLE_INSTANCE_LOCK.set(listener);
-    } else {
+    } else if !cfg!(debug_assertions) {
         show_error_dialog("Приложение OSTP GUI уже запущено!");
         return;
     }
@@ -874,7 +875,7 @@ pub fn run() {
             }
             _ => {}
         })
-        .invoke_handler(tauri::generate_handler![start_tunnel, stop_tunnel, reload_tunnel, get_tunnel_status, get_metrics, get_config, save_config, get_wintun_install_path, set_autostart, get_autostart, list_running_processes])
+        .invoke_handler(tauri::generate_handler![start_tunnel, stop_tunnel, reload_tunnel, get_tunnel_status, get_metrics, get_config, save_config, get_wintun_install_path, set_autostart, get_autostart, list_running_processes, dns_prober::run_dns_prober])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");
 }
