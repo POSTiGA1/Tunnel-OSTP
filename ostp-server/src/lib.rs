@@ -167,6 +167,8 @@ pub async fn run_server(
                                     mode: String,
                                     #[serde(default)]
                                     access_keys: Vec<ReloadUser>,
+                                    #[serde(default)]
+                                    inbounds: Vec<serde_json::Value>,
                                 }
                                 
                                 let mut stripped = json_comments::StripComments::new(content.as_bytes());
@@ -181,7 +183,23 @@ pub async fn run_server(
                                     Ok(cfg) => {
                                         if cfg.mode == "server" {
                                             let mut new_keys = HashMap::new();
-                                            for uc in cfg.access_keys {
+                                            let mut all_users = cfg.access_keys;
+                                            
+                                            for inbound in cfg.inbounds {
+                                                if let Some(protocol) = inbound.get("protocol").and_then(|p| p.as_str()) {
+                                                    if protocol == "ostp" {
+                                                        if let Some(users) = inbound.get("users").and_then(|u| u.as_array()) {
+                                                            for u in users {
+                                                                if let Ok(ru) = serde_json::from_value::<ReloadUser>(u.clone()) {
+                                                                    all_users.push(ru);
+                                                                }
+                                                            }
+                                                        }
+                                                    }
+                                                }
+                                            }
+
+                                            for uc in all_users {
                                                 let (k, m) = match uc {
                                                     ReloadUser::Detailed { access_key, name, limit_bytes } => (access_key, crate::api::UserMeta { name, limit_bytes }),
                                                     ReloadUser::KeyOnly(k) => (k, crate::api::UserMeta { name: None, limit_bytes: None }),
