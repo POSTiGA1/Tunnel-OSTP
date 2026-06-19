@@ -1,6 +1,7 @@
 use anyhow::{anyhow, Result};
 use std::sync::Arc;
 use crate::config::{ClientConfig, InboundConfig};
+#[allow(unused_imports)]
 use crate::tunnel::router::{Router, Session};
 use crate::tunnel::outbounds::OutboundManager;
 use tokio::sync::watch;

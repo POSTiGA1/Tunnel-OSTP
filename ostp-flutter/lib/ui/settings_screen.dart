@@ -527,8 +527,9 @@ class _SettingsScreenState extends State<SettingsScreen> {
     if (_dnsDomainCtrl.text.trim().isNotEmpty) {
       queryParams.add('domain=${Uri.encodeComponent(_dnsDomainCtrl.text.trim())}');
     }
-    if (_dnsRegion != 'Global') {
-      queryParams.add('region=${Uri.encodeComponent(_dnsRegion)}');
+    final resolver = _dnsRegionCtrl.text.trim();
+    if (resolver.isNotEmpty && resolver != '1.1.1.1') {
+      queryParams.add('resolver=${Uri.encodeComponent(resolver)}');
     }
     if (_pbkCtrl.text.trim().isNotEmpty) {
       queryParams.add('pbk=${Uri.encodeComponent(_pbkCtrl.text.trim())}');
