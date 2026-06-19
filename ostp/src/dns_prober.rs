@@ -98,11 +98,52 @@ const PUBLIC_DNS_SERVERS: &[(&str, &str)] = &[
     ("Pishgaman", "5.160.25.25"),
 ];
 
-pub async fn run_prober() {
-    println!("Enter your OSTP DNS Tunnel domain (e.g., tunnel.example.com):");
+pub async fn run_prober(config_path: &std::path::Path) {
     let mut target_domain = String::new();
-    std::io::stdin().read_line(&mut target_domain).unwrap();
-    let target_domain = target_domain.trim();
+
+    if config_path.exists() {
+        if let Ok(content) = std::fs::read_to_string(config_path) {
+            let mut stripped = json_comments::StripComments::new(content.as_bytes());
+            if let Ok(json_val) = serde_json::from_reader::<_, serde_json::Value>(&mut stripped) {
+                // Check if it's a server config
+                if let Some(inbounds) = json_val.get("inbounds").and_then(|i| i.as_array()) {
+                    for inbound in inbounds {
+                        if inbound.get("protocol").and_then(|p| p.as_str()) == Some("dns") {
+                            if let Some(domain) = inbound.get("domain").and_then(|d| d.as_str()) {
+                                target_domain = domain.to_string();
+                                break;
+                            }
+                        }
+                    }
+                }
+                // Check if it's a client config
+                if target_domain.is_empty() {
+                    if let Some(outbounds) = json_val.get("outbounds").and_then(|o| o.as_array()) {
+                        for outbound in outbounds {
+                            if let Some(transport) = outbound.get("transport") {
+                                if transport.get("type").and_then(|t| t.as_str()) == Some("dns") {
+                                    if let Some(domain) = transport.get("domain").and_then(|d| d.as_str()) {
+                                        target_domain = domain.to_string();
+                                        break;
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    if target_domain.is_empty() {
+        println!("Could not find DNS Tunnel configuration in config.json.");
+        println!("Enter your OSTP DNS Tunnel domain (e.g., tunnel.example.com):");
+        std::io::stdin().read_line(&mut target_domain).unwrap();
+        target_domain = target_domain.trim().to_string();
+    } else {
+        println!("Found DNS Tunnel domain in config.json: {}", target_domain);
+    }
+
     if target_domain.is_empty() {
         println!("Domain cannot be empty. Exiting prober.");
         return;

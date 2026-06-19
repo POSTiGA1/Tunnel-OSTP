@@ -1607,7 +1607,7 @@ async fn run_app() -> Result<()> {
     }
 
     if args.prober {
-        dns_prober::run_prober().await;
+        dns_prober::run_prober(&args.config).await;
         return Ok(());
     }
 
