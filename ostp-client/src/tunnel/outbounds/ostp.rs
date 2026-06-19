@@ -98,7 +98,7 @@ pub async fn dial_tcp(
             let mut buf = [0u8; 8192];
             let mut handshake_success = false;
             match tokio::time::timeout(
-                std::time::Duration::from_millis(3000),
+                std::time::Duration::from_millis(15000),
                 transport.recv(&mut buf),
             ).await {
                 Ok(Ok(n)) => {
@@ -108,7 +108,7 @@ pub async fn dial_tcp(
                     }
                 }
                 _ => {
-                    tracing::warn!("TCP handshake timeout for {}:{}", server_str, port);
+                    tracing::warn!("OSTP handshake timeout for {}:{}", server_str, port);
                     return;
                 }
             }
@@ -133,7 +133,7 @@ pub async fn dial_tcp(
         // The kernel will buffer incoming data from server_stream while we wait.
         let mut connect_ok = false;
         match tokio::time::timeout(
-            std::time::Duration::from_secs(10),
+            std::time::Duration::from_secs(30),
             async {
                 let mut wait_buf = [0u8; 8192];
                 loop {
@@ -247,14 +247,14 @@ pub async fn handle_udp(
     // Wait for handshake response (server sends HandshakePayload back)
     let mut buf = [0u8; 8192];
     match tokio::time::timeout(
-        std::time::Duration::from_millis(2000),
+        std::time::Duration::from_millis(15000),
         transport.recv(&mut buf),
     ).await {
         Ok(Ok(n)) => {
             let _ = machine.on_event(OstpEvent::Inbound(bytes::Bytes::copy_from_slice(&buf[..n])));
         }
         _ => {
-            tracing::warn!("UDP handshake timeout for {}:{}", server, port);
+            tracing::warn!("OSTP handshake timeout for {}:{}", server, port);
             return Ok(());
         }
     }
