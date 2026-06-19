@@ -1129,18 +1129,7 @@ async fn run_app() -> Result<()> {
         return cmd_migrate(&args.config);
     }
 
-    if args.config.exists() && !args.uninstall && !args.update {
-        if let Ok(config_content) = fs::read_to_string(&args.config) {
-            let mut stripped = json_comments::StripComments::new(config_content.as_bytes());
-            if let Ok(raw_json) = serde_json::from_reader::<_, serde_json::Value>(&mut stripped) {
-                if raw_json.get("version").and_then(|v| v.as_str()) != Some(env!("CARGO_PKG_VERSION")) {
-                    println!("{} Outdated configuration format detected.", "[ostp]".yellow().bold());
-                    println!("{} Please run '{}' to update your configuration to the latest modular format.", "[ostp]".yellow().bold(), "ostp --migrate".green());
-                    std::process::exit(1);
-                }
-            }
-        }
-    }
+
 
     // ── Setup wizard: explicit flag or first-time (no config) ────────
     if args.setup {
@@ -1552,6 +1541,25 @@ async fn run_app() -> Result<()> {
       }}
     }},
     {{
+      // DNS Tunneling connection to the remote OSTP server
+      // NOTE: DNS Tunneling is very slow and should be used only when UDP/TCP are blocked.
+      // Read the manual here: https://github.com/ospab/ostp/wiki/DNS-Tunneling
+      "type": "ostp",
+      "tag": "proxy-dns",
+      "server": "1.1.1.1",
+      "port": 53,
+      "access_key": "{key}",
+      "transport": {{
+        "type": "dns",
+        "domain": "tunnel.yourdomain.com",
+        "pubkey": "SERVER_PUBLIC_KEY_HERE"
+      }},
+      "multiplex": {{
+        "enabled": true,
+        "sessions": 5
+      }}
+    }},
+    {{
       "type": "direct",
       "tag": "direct"
     }},
@@ -1635,28 +1643,27 @@ async fn run_app() -> Result<()> {
     let mut raw_json: serde_json::Value = serde_json::from_reader(&mut stripped)
         .map_err(|e| anyhow!("Failed to parse config as JSON: {}", e))?;
 
-    let is_migrated = raw_json.get("version").and_then(|v| v.as_str()) == Some(env!("CARGO_PKG_VERSION"));
-    if !is_migrated {
-        let is_server = raw_json.get("listen").is_some() || raw_json.get("access_keys").is_some();
-        if is_server {
-            raw_json["mode"] = serde_json::json!("server");
-            raw_json["version"] = serde_json::json!(env!("CARGO_PKG_VERSION"));
-            if let Some(log) = raw_json.get("log_level") {
-                raw_json["log"] = serde_json::json!({ "level": log.clone() });
-            }
-        } else {
-            let (migrated, _) = ostp_client::config::ClientConfig::migrate_json(raw_json);
-            raw_json = migrated;
-            raw_json["mode"] = serde_json::json!("client");
+
+    // Hard stop if config is not in current format — user must run --migrate explicitly
+    {
+        let has_new_format = raw_json.get("inbounds").and_then(|v| v.as_array()).is_some()
+            && raw_json.get("outbounds").and_then(|v| v.as_array()).is_some();
+        let version_ok = raw_json.get("version").and_then(|v| v.as_str()) == Some(env!("CARGO_PKG_VERSION"));
+        if !has_new_format {
+            eprintln!();
+            eprintln!("{} Your configuration file is in an outdated format.", "[ostp]".yellow().bold());
+            eprintln!("{} Run the following command to upgrade it:", "[ostp]".yellow().bold());
+            eprintln!();
+            eprintln!("    {}", "ostp --migrate".green().bold());
+            eprintln!();
+            std::process::exit(1);
         }
-        
-        // Save migrated config back
-        let serialized = serde_json::to_string_pretty(&raw_json)?;
-        let header = "// OSTP Configuration v0.3.1\n// DO NOT EDIT THIS COMMENT - Migrator relies on it\n";
-        let final_content = format!("{}{}", header, serialized);
-        let _ = fs::write(&args.config, final_content);
-        println!("{} Configuration automatically migrated to v0.3.1", "[ostp]".cyan().bold());
+        if !version_ok {
+            // New format but wrong version — silently fix just the version field in memory (no write)
+            raw_json["version"] = serde_json::json!(env!("CARGO_PKG_VERSION"));
+        }
     }
+
 
     let config: UnifiedConfig = serde_json::from_value(raw_json)
         .map_err(|e| anyhow!("Failed to parse config: {}", e))?;
@@ -1949,145 +1956,528 @@ fn cmd_migrate(config_path: &std::path::Path) -> Result<()> {
 
     let config_content = fs::read_to_string(config_path)?;
     let mut stripped = json_comments::StripComments::new(config_content.as_bytes());
-    let mut raw_json: serde_json::Value = serde_json::from_reader(&mut stripped)
+    let old: serde_json::Value = serde_json::from_reader(&mut stripped)
         .map_err(|e| anyhow!("Failed to parse config as JSON: {}", e))?;
 
-    let is_migrated = raw_json.get("version").and_then(|v| v.as_str()) == Some(env!("CARGO_PKG_VERSION"));
-    if is_migrated {
-        println!("{} Configuration is already up to date (v0.3.5)", "[ostp]".cyan().bold());
-        return Ok(());
-    }
+    // --- Determine config type ---
+    let mode = old.get("mode").and_then(|m| m.as_str()).unwrap_or("");
+    let is_server = mode == "server"
+        || old.get("listen").is_some()
+        || old.get("access_keys").is_some()
+        || old.get("inbounds").and_then(|v| v.as_array()).map(|arr| {
+            arr.iter().any(|i| {
+                i.get("protocol").and_then(|p| p.as_str()) == Some("ostp")
+                || i.get("type").and_then(|t| t.as_str()) == Some("ostp")
+            })
+        }).unwrap_or(false);
+    let is_relay = mode == "relay" || old.get("upstream_tcp").is_some();
+    let _is_client = !is_server && !is_relay;
 
-    let is_server = raw_json.get("listen").is_some() || raw_json.get("access_keys").is_some() || raw_json.get("mode").and_then(|m| m.as_str()) == Some("server");
+    // --- Helper: extract log level ---
+    let log_level = old.get("log").and_then(|l| l.get("level")).and_then(|v| v.as_str())
+        .or_else(|| old.get("log_level").and_then(|v| v.as_str()))
+        .unwrap_or("info");
+
+    // --- Backup original ---
+    let bak_path = config_path.with_extension("json.bak");
+    fs::copy(config_path, &bak_path)?;
+    println!("{} Original config backed up to {:?}", "[ostp]".cyan().bold(), bak_path);
+
+    let new_content: String;
+
     if is_server {
-        raw_json["mode"] = serde_json::json!("server");
-        raw_json["version"] = serde_json::json!(env!("CARGO_PKG_VERSION"));
-        if let Some(log) = raw_json.get("log_level") {
-            raw_json["log"] = serde_json::json!({ "level": log.clone() });
-        }
-        
-        let mut inbounds = Vec::new();
-        let mut outbounds = Vec::new();
-        let mut routing = serde_json::json!({
-            "rules": [],
-            "default_outbound": "direct"
-        });
+        println!("{} Detected: Server configuration", "[ostp]".cyan().bold());
 
-        // Migrate Ostp inbound
-        let listen = raw_json.get("listen").and_then(|l| l.as_str()).unwrap_or("0.0.0.0:50000");
-        let parts: Vec<&str> = listen.split(':').collect();
-        let host = parts.get(0).unwrap_or(&"0.0.0.0");
-        let port: u16 = parts.get(1).and_then(|p| p.parse().ok()).unwrap_or(50000);
-        
-        let mut users = Vec::new();
-        if let Some(keys) = raw_json.get("access_keys").and_then(|a| a.as_array()) {
-            for k in keys {
-                users.push(serde_json::json!({
-                    "key": k.as_str().unwrap_or("")
-                }));
-            }
-        }
-        
-        let mut ostp_inbound = serde_json::json!({
-            "protocol": "ostp",
-            "tag": "ostp-in",
-            "listen": host,
-            "port": port,
-            "users": users
-        });
-        
-        if let Some(fallback) = raw_json.get("fallback") {
-            ostp_inbound["fallback"] = fallback.clone();
-        }
-        inbounds.push(ostp_inbound);
+        // --- Extract server data ---
+        // Listen host:port
+        let (listen_host, listen_port) = extract_server_listen(&old);
 
-        // Migrate Api inbound
-        if let Some(api) = raw_json.get("api") {
-            let mut api_inbound = api.clone();
-            api_inbound["protocol"] = serde_json::json!("api");
-            api_inbound["tag"] = serde_json::json!("api-in");
-            let bind = api.get("bind").and_then(|b| b.as_str()).unwrap_or("127.0.0.1:9090");
-            let parts: Vec<&str> = bind.split(':').collect();
-            api_inbound["listen"] = serde_json::json!(parts.get(0).unwrap_or(&"127.0.0.1"));
-            api_inbound["port"] = serde_json::json!(parts.get(1).and_then(|p| p.parse::<u16>().ok()).unwrap_or(9090));
-            inbounds.push(api_inbound);
-        }
+        // Access keys — support old flat list and new inbounds format
+        let users_json = extract_server_users(&old);
 
-        // Migrate Outbound
-        outbounds.push(serde_json::json!({
-            "protocol": "direct",
-            "tag": "direct"
-        }));
-        outbounds.push(serde_json::json!({
-            "protocol": "block",
-            "tag": "block"
-        }));
-        
-        if let Some(ob) = raw_json.get("outbound") {
-            if ob.get("enabled").and_then(|e| e.as_bool()).unwrap_or(false) {
-                let tag = "socks5-legacy";
-                let socks = serde_json::json!({
-                    "protocol": "socks5",
-                    "tag": tag,
-                    "server": ob.get("address").and_then(|a| a.as_str()).unwrap_or("127.0.0.1"),
-                    "port": ob.get("port").and_then(|p| p.as_u64()).unwrap_or(9050)
-                });
-                outbounds.push(socks);
-                
-                if let Some(rules) = ob.get("rules").and_then(|r| r.as_array()) {
-                    let mut new_rules = Vec::new();
-                    for rule in rules {
-                        let mut new_rule = rule.clone();
-                        new_rule["outbound"] = serde_json::json!(tag);
-                        new_rules.push(new_rule);
-                    }
-                    routing["rules"] = serde_json::json!(new_rules);
-                }
-                
-                let default_action = ob.get("default_action").and_then(|a| a.as_str()).unwrap_or("proxy");
-                if default_action == "proxy" {
-                    routing["default_outbound"] = serde_json::json!(tag);
-                } else if default_action == "block" {
-                    routing["default_outbound"] = serde_json::json!("block");
-                }
-            }
-        }
+        // Fallback
+        let (fallback_enabled, fallback_listen, fallback_target) = extract_server_fallback(&old);
 
-        // DNS migrate
-        if let Some(dns) = raw_json.get("dns_transport") {
-            let mut dns_inbound = dns.clone();
-            dns_inbound["protocol"] = serde_json::json!("dns");
-            dns_inbound["tag"] = serde_json::json!("dns-tunnel");
-            inbounds.push(dns_inbound);
-        }
+        // API
+        let (api_listen, api_port, api_token, api_webpath, api_username, api_pass_hash) =
+            extract_server_api(&old);
 
-        raw_json["inbounds"] = serde_json::json!(inbounds);
-        raw_json["outbounds"] = serde_json::json!(outbounds);
-        raw_json["routing"] = routing;
-        
-        // Remove legacy fields
-        let obj = raw_json.as_object_mut().unwrap();
-        obj.remove("listen");
-        obj.remove("access_keys");
-        obj.remove("fallback");
-        obj.remove("api");
-        obj.remove("outbound");
-        obj.remove("log_level");
-        obj.remove("dns_transport");
-        
-        println!("{} Detected Server configuration.", "[ostp]".cyan().bold());
+        // DNS transport
+        let (dns_listen, dns_domain, dns_pubkey, dns_privkey) = extract_server_dns(&old);
+
+        // Routing rules (preserve if present)
+        let routing_rules_str = extract_routing_rules_str(&old);
+        let default_outbound = old.get("routing").and_then(|r| r.get("default_outbound"))
+            .and_then(|v| v.as_str()).unwrap_or("direct");
+
+        let users_str = users_json.iter()
+            .map(|k| format!(
+                r#"        {{
+          "key": "{}"
+        }}
+"#, k))
+            .collect::<Vec<_>>()
+            .join(",\n");
+        let users_str = if users_str.is_empty() {
+            format!(r#"        {{
+          "key": "{}"
+        }}
+"#, generate_secure_key("hex"))
+        } else { users_str };
+
+        new_content = format!(r#"{{
+  // OSTP Server Configuration
+  "version": "{ver}",
+  "mode": "server",
+  "log": {{
+    // Log levels: trace, debug, info, warn, error
+    "level": "{log_level}"
+  }},
+  "inbounds": [
+    {{
+      // Primary OSTP protocol listener
+      "protocol": "ostp",
+      "tag": "ostp-in",
+      "listen": "{listen_host}",
+      "port": {listen_port},
+      "users": [
+{users_str}      ],
+      "fallback": {{
+        // Fallback protection: redirects unauthorized probes to a real website
+        "enabled": {fallback_enabled},
+        "listen": "{fallback_listen}",
+        "target": "{fallback_target}"
+      }}
+    }},
+    {{
+      // Web Administration API
+      "protocol": "api",
+      "tag": "api-in",
+      "listen": "{api_listen}",
+      "port": {api_port},
+      "token": "{api_token}",
+      "webpath": "{api_webpath}",
+      "username": "{api_username}",
+      "password_hash": "{api_pass_hash}"
+    }},
+    {{
+      // DNS Tunnel Inbound
+      // [WARNING] This is a last-resort transport via public DNS.
+      // It requires a dedicated registered domain with NS records pointing to this server.
+      // Full setup guide: https://github.com/ospab/ostp/wiki/DNS-Tunneling
+      "protocol": "dns",
+      "tag": "dns-tunnel",
+      "listen": "{dns_listen}",
+      "domain": "{dns_domain}",
+      "pubkey": "{dns_pubkey}",
+      "privkey": "{dns_privkey}"
+    }}
+  ],
+  "outbounds": [
+    {{
+      // Example local SOCKS5 proxy (e.g. for Tor network)
+      "protocol": "socks5",
+      "tag": "socks5-local",
+      "server": "127.0.0.1",
+      "port": 9050
+    }},
+    {{
+      // Default direct internet access
+      "protocol": "direct",
+      "tag": "direct"
+    }},
+    {{
+      // Blackhole for blocked connections
+      "protocol": "block",
+      "tag": "block"
+    }}
+  ],
+  "routing": {{
+    // Rule-based routing of client traffic
+    "rules": [{routing_rules}],
+    // If no rules match, use the default outbound
+    "default_outbound": "{default_outbound}"
+  }},
+  "debug": false
+}}
+"#,
+            ver = env!("CARGO_PKG_VERSION"),
+            log_level = log_level,
+            listen_host = listen_host,
+            listen_port = listen_port,
+            users_str = users_str,
+            fallback_enabled = fallback_enabled,
+            fallback_listen = fallback_listen,
+            fallback_target = fallback_target,
+            api_listen = api_listen,
+            api_port = api_port,
+            api_token = api_token,
+            api_webpath = api_webpath,
+            api_username = api_username,
+            api_pass_hash = api_pass_hash,
+            dns_listen = dns_listen,
+            dns_domain = dns_domain,
+            dns_pubkey = dns_pubkey,
+            dns_privkey = dns_privkey,
+            routing_rules = routing_rules_str,
+            default_outbound = default_outbound,
+        );
+
+    } else if is_relay {
+        println!("{} Detected: Relay configuration", "[ostp]".cyan().bold());
+
+        let upstream_tcp = old.get("upstream_tcp").and_then(|v| v.as_str()).unwrap_or("TARGET_SERVER_IP:50000");
+        let upstream_udp = old.get("upstream_udp").and_then(|v| v.as_str()).unwrap_or(upstream_tcp);
+        let api_url = old.get("upstream_api_url").and_then(|v| v.as_str()).unwrap_or("http://TARGET_SERVER_IP:9090");
+        let api_token = old.get("upstream_api_token").and_then(|v| v.as_str()).unwrap_or("");
+        let sync_interval = old.get("sync_interval_secs").and_then(|v| v.as_u64()).unwrap_or(30);
+        let listen = old.get("listen").and_then(|v| v.as_str()).unwrap_or("0.0.0.0:50000");
+
+        new_content = format!(r#"{{
+  // OSTP Relay Configuration
+  "version": "{ver}",
+  "mode": "relay",
+  "log": {{
+    // Log levels: trace, debug, info, warn, error
+    "level": "{log_level}"
+  }},
+  // Local port for the relay to listen on
+  "listen": "{listen}",
+  // Upstream server details
+  "upstream_tcp": "{upstream_tcp}",
+  "upstream_udp": "{upstream_udp}",
+  // Upstream Control Panel API for automatic key synchronization
+  "upstream_api_url": "{api_url}",
+  "upstream_api_token": "{api_token}",
+  "sync_interval_secs": {sync_interval},
+  "debug": false
+}}
+"#,
+            ver = env!("CARGO_PKG_VERSION"),
+            log_level = log_level,
+            listen = listen,
+            upstream_tcp = upstream_tcp,
+            upstream_udp = upstream_udp,
+            api_url = api_url,
+            api_token = api_token,
+            sync_interval = sync_interval,
+        );
+
     } else {
-        println!("{} Detected Client configuration.", "[ostp]".cyan().bold());
-        let (migrated, _) = ostp_client::config::ClientConfig::migrate_json(raw_json.clone());
-        raw_json = migrated;
-        raw_json["mode"] = serde_json::json!("client");
-        raw_json["version"] = serde_json::json!(env!("CARGO_PKG_VERSION"));
+        println!("{} Detected: Client configuration", "[ostp]".cyan().bold());
+
+        // Extract client data
+        let (server_ip, server_port, access_key, transport_type) = extract_client_server(&old);
+        let (socks_listen, socks_port) = extract_client_socks(&old);
+        let tun_enabled = extract_client_tun(&old);
+        let mux_enabled = old.get("mux").and_then(|m| m.get("enabled")).and_then(|v| v.as_bool())
+            .or_else(|| old.get("outbounds").and_then(|o| o.as_array()).and_then(|arr| {
+                arr.iter().find(|o| o.get("type").and_then(|t| t.as_str()) == Some("ostp"))
+                    .and_then(|o| o.get("multiplex")).and_then(|m| m.get("enabled")).and_then(|v| v.as_bool())
+            }))
+            .unwrap_or(false);
+        let mux_sessions = old.get("mux").and_then(|m| m.get("sessions")).and_then(|v| v.as_u64())
+            .or_else(|| old.get("outbounds").and_then(|o| o.as_array()).and_then(|arr| {
+                arr.iter().find(|o| o.get("type").and_then(|t| t.as_str()) == Some("ostp"))
+                    .and_then(|o| o.get("multiplex")).and_then(|m| m.get("sessions")).and_then(|v| v.as_u64())
+            }))
+            .unwrap_or(1);
+        let routing_rules_str = extract_routing_rules_str(&old);
+        let default_outbound = old.get("routing").and_then(|r| r.get("default_outbound"))
+            .and_then(|v| v.as_str()).unwrap_or("proxy");
+
+        let tun_block = if tun_enabled {
+            r#"    {{
+      // Virtual network interface for transparent proxying
+      "type": "tun",
+      "tag": "tun-in",
+      "auto_route": true,
+      "mtu": 1140
+    }},
+"#
+        } else {
+            r#"    // Uncomment below to enable TUN (VPN) mode:
+    // {{ "type": "tun", "tag": "tun-in", "auto_route": true, "mtu": 1140 }},
+"#
+        };
+
+        new_content = format!(r#"{{
+  // OSTP Client Configuration
+  "version": "{ver}",
+  "mode": "client",
+  "log": {{
+    "level": "{log_level}"
+  }},
+  "inbounds": [
+{tun_block}    {{
+      // Local SOCKS5 proxy server for browser configuration
+      "type": "local_proxy",
+      "tag": "socks-in",
+      "protocol": "socks",
+      "listen": "{socks_listen}",
+      "port": {socks_port}
+    }}
+  ],
+  "outbounds": [
+    {{
+      // Connection to the remote OSTP server
+      "type": "ostp",
+      "tag": "proxy",
+      "server": "{server_ip}",
+      "port": {server_port},
+      "access_key": "{access_key}",
+      "transport": {{
+        "type": "{transport_type}"
+      }},
+      "multiplex": {{
+        "enabled": {mux_enabled},
+        "sessions": {mux_sessions}
+      }}
+    }},
+    {{
+      "type": "direct",
+      "tag": "direct"
+    }},
+    {{
+      "type": "block",
+      "tag": "block"
+    }}
+  ],
+  "routing": {{
+    "rules": [{routing_rules}],
+    "default_outbound": "{default_outbound}"
+  }}
+}}
+"#,
+            ver = env!("CARGO_PKG_VERSION"),
+            log_level = log_level,
+            tun_block = tun_block,
+            socks_listen = socks_listen,
+            socks_port = socks_port,
+            server_ip = server_ip,
+            server_port = server_port,
+            access_key = access_key,
+            transport_type = transport_type,
+            mux_enabled = mux_enabled,
+            mux_sessions = mux_sessions,
+            routing_rules = routing_rules_str,
+            default_outbound = default_outbound,
+        );
     }
 
-    let serialized = serde_json::to_string_pretty(&raw_json)?;
-    let final_content = format!("{}", serialized);
-    fs::write(config_path, final_content)?;
-    
-    println!("{} Successfully migrated configuration to v0.3.5!", "[ostp]".green().bold());
+    fs::write(config_path, &new_content)?;
+    println!("{} Configuration successfully migrated to v{}!", "[ostp]".green().bold(), env!("CARGO_PKG_VERSION"));
+    println!("{} Backup saved at {:?}", "[ostp]".dimmed(), bak_path);
     Ok(())
+}
+
+// ---------------------------------------------------------------------------
+// Migration helper extractors
+// ---------------------------------------------------------------------------
+
+/// Extract listen host and port for server from old or new format
+fn extract_server_listen(old: &serde_json::Value) -> (String, u16) {
+    // New format: inbounds[type=ostp].listen + port
+    if let Some(arr) = old.get("inbounds").and_then(|v| v.as_array()) {
+        for inbound in arr {
+            let proto = inbound.get("protocol").or(inbound.get("type")).and_then(|v| v.as_str()).unwrap_or("");
+            if proto == "ostp" {
+                let h = inbound.get("listen").and_then(|v| v.as_str()).unwrap_or("0.0.0.0").to_string();
+                let p = inbound.get("port").and_then(|v| v.as_u64()).unwrap_or(50000) as u16;
+                return (h, p);
+            }
+        }
+    }
+    // Old format: "listen": "0.0.0.0:50000"
+    if let Some(s) = old.get("listen").and_then(|v| v.as_str()) {
+        let parts: Vec<&str> = s.split(':').collect();
+        let h = parts.get(0).unwrap_or(&"0.0.0.0").to_string();
+        let p = parts.get(1).and_then(|x| x.parse().ok()).unwrap_or(50000);
+        return (h, p);
+    }
+    ("0.0.0.0".to_string(), 50000)
+}
+
+/// Extract access keys as list of strings
+fn extract_server_users(old: &serde_json::Value) -> Vec<String> {
+    // New format: inbounds[type=ostp].users[].key
+    if let Some(arr) = old.get("inbounds").and_then(|v| v.as_array()) {
+        for inbound in arr {
+            let proto = inbound.get("protocol").or(inbound.get("type")).and_then(|v| v.as_str()).unwrap_or("");
+            if proto == "ostp" {
+                if let Some(users) = inbound.get("users").and_then(|v| v.as_array()) {
+                    return users.iter().filter_map(|u| {
+                        u.get("key").and_then(|k| k.as_str()).map(|s| s.to_string())
+                        .or_else(|| u.as_str().map(|s| s.to_string()))
+                    }).collect();
+                }
+            }
+        }
+    }
+    // Old flat format: "access_keys": ["key1", "key2"]
+    if let Some(keys) = old.get("access_keys").and_then(|v| v.as_array()) {
+        return keys.iter().filter_map(|k| k.as_str().map(|s| s.to_string())).collect();
+    }
+    vec![]
+}
+
+/// Extract fallback config
+fn extract_server_fallback(old: &serde_json::Value) -> (bool, String, String) {
+    // New format: inbounds[type=ostp].fallback
+    if let Some(arr) = old.get("inbounds").and_then(|v| v.as_array()) {
+        for inbound in arr {
+            let proto = inbound.get("protocol").or(inbound.get("type")).and_then(|v| v.as_str()).unwrap_or("");
+            if proto == "ostp" {
+                if let Some(fb) = inbound.get("fallback") {
+                    let enabled = fb.get("enabled").and_then(|v| v.as_bool()).unwrap_or(false);
+                    let listen = fb.get("listen").and_then(|v| v.as_str()).unwrap_or("0.0.0.0:443").to_string();
+                    let target = fb.get("target").and_then(|v| v.as_str()).unwrap_or("127.0.0.1:8080").to_string();
+                    return (enabled, listen, target);
+                }
+            }
+        }
+    }
+    // Old flat format
+    if let Some(fb) = old.get("fallback") {
+        let enabled = fb.get("enabled").and_then(|v| v.as_bool()).unwrap_or(false);
+        let listen = fb.get("listen").and_then(|v| v.as_str()).unwrap_or("0.0.0.0:443").to_string();
+        let target = fb.get("target").and_then(|v| v.as_str()).unwrap_or("127.0.0.1:8080").to_string();
+        return (enabled, listen, target);
+    }
+    (false, "0.0.0.0:443".to_string(), "127.0.0.1:8080".to_string())
+}
+
+/// Extract API config
+fn extract_server_api(old: &serde_json::Value) -> (String, u16, String, String, String, String) {
+    let default_hash = "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855".to_string();
+    // New format: inbounds[protocol=api]
+    if let Some(arr) = old.get("inbounds").and_then(|v| v.as_array()) {
+        for inbound in arr {
+            let proto = inbound.get("protocol").or(inbound.get("type")).and_then(|v| v.as_str()).unwrap_or("");
+            if proto == "api" {
+                let listen = inbound.get("listen").and_then(|v| v.as_str()).unwrap_or("127.0.0.1").to_string();
+                let port = inbound.get("port").and_then(|v| v.as_u64()).unwrap_or(9090) as u16;
+                let token = inbound.get("token").and_then(|v| v.as_str()).unwrap_or("YOUR_SECRET_TOKEN").to_string();
+                let webpath = inbound.get("webpath").and_then(|v| v.as_str()).unwrap_or("/admin").to_string();
+                let username = inbound.get("username").and_then(|v| v.as_str()).unwrap_or("admin").to_string();
+                let pass = inbound.get("password_hash").and_then(|v| v.as_str()).unwrap_or(&default_hash).to_string();
+                return (listen, port, token, webpath, username, pass);
+            }
+        }
+    }
+    // Old format: "api": { "bind": "127.0.0.1:9090", ... }
+    if let Some(api) = old.get("api") {
+        let bind = api.get("bind").and_then(|v| v.as_str()).unwrap_or("127.0.0.1:9090");
+        let parts: Vec<&str> = bind.split(':').collect();
+        let listen = parts.get(0).unwrap_or(&"127.0.0.1").to_string();
+        let port = parts.get(1).and_then(|p| p.parse().ok()).unwrap_or(9090);
+        let token = api.get("token").and_then(|v| v.as_str()).unwrap_or("YOUR_SECRET_TOKEN").to_string();
+        let webpath = api.get("webpath").and_then(|v| v.as_str()).unwrap_or("/admin").to_string();
+        let username = api.get("username").and_then(|v| v.as_str()).unwrap_or("admin").to_string();
+        let pass = api.get("password_hash").and_then(|v| v.as_str()).unwrap_or(&default_hash).to_string();
+        return (listen, port, token, webpath, username, pass);
+    }
+    ("127.0.0.1".to_string(), 9090, "YOUR_SECRET_TOKEN".to_string(), "/admin".to_string(), "admin".to_string(), default_hash)
+}
+
+/// Extract DNS transport config
+fn extract_server_dns(old: &serde_json::Value) -> (String, String, String, String) {
+    // New format: inbounds[protocol=dns]
+    if let Some(arr) = old.get("inbounds").and_then(|v| v.as_array()) {
+        for inbound in arr {
+            let proto = inbound.get("protocol").or(inbound.get("type")).and_then(|v| v.as_str()).unwrap_or("");
+            if proto == "dns" {
+                let listen = inbound.get("listen").and_then(|v| v.as_str()).unwrap_or("0.0.0.0:53").to_string();
+                let domain = inbound.get("domain").and_then(|v| v.as_str()).unwrap_or("tunnel.example.com").to_string();
+                let pubkey = inbound.get("pubkey").and_then(|v| v.as_str()).unwrap_or("").to_string();
+                let privkey = inbound.get("privkey").and_then(|v| v.as_str()).unwrap_or("").to_string();
+                return (listen, domain, pubkey, privkey);
+            }
+        }
+    }
+    // Old flat format: "dns_transport": {...}
+    if let Some(dns) = old.get("dns_transport") {
+        let listen = dns.get("listen").and_then(|v| v.as_str()).unwrap_or("0.0.0.0:53").to_string();
+        let domain = dns.get("domain").and_then(|v| v.as_str()).unwrap_or("tunnel.example.com").to_string();
+        let pubkey = dns.get("pubkey").and_then(|v| v.as_str()).unwrap_or("").to_string();
+        let privkey = dns.get("privkey").and_then(|v| v.as_str()).unwrap_or("").to_string();
+        return (listen, domain, pubkey, privkey);
+    }
+    let new_pub = generate_secure_key("base64");
+    let new_priv = generate_secure_key("base64");
+    ("0.0.0.0:53".to_string(), "tunnel.example.com".to_string(), new_pub, new_priv)
+}
+
+/// Extract routing rules as a formatted JSON string for embedding in template
+fn extract_routing_rules_str(old: &serde_json::Value) -> String {
+    if let Some(rules) = old.get("routing").and_then(|r| r.get("rules")).and_then(|v| v.as_array()) {
+        if !rules.is_empty() {
+            let parts: Vec<String> = rules.iter()
+                .filter_map(|r| serde_json::to_string_pretty(r).ok())
+                .collect();
+            return format!("\n      {}\n    ", parts.join(",\n      "));
+        }
+    }
+    String::new()
+}
+
+/// Extract client server address, port, key, transport
+fn extract_client_server(old: &serde_json::Value) -> (String, u16, String, String) {
+    // New format: outbounds[type=ostp]
+    if let Some(arr) = old.get("outbounds").and_then(|v| v.as_array()) {
+        for ob in arr {
+            let t = ob.get("type").and_then(|v| v.as_str()).unwrap_or("");
+            if t == "ostp" {
+                let server = ob.get("server").and_then(|v| v.as_str()).unwrap_or("YOUR_SERVER_IP").to_string();
+                let port = ob.get("port").and_then(|v| v.as_u64()).unwrap_or(50000) as u16;
+                let key = ob.get("access_key").and_then(|v| v.as_str()).unwrap_or("").to_string();
+                let transport = ob.get("transport").and_then(|t| t.get("type")).and_then(|v| v.as_str()).unwrap_or("udp").to_string();
+                return (server, port, key, transport);
+            }
+        }
+    }
+    // Old flat format
+    let server_full = old.get("server").and_then(|v| v.as_str()).unwrap_or("YOUR_SERVER_IP:50000");
+    let parts: Vec<&str> = server_full.split(':').collect();
+    let server = parts.get(0).unwrap_or(&"YOUR_SERVER_IP").to_string();
+    let port = parts.get(1).and_then(|p| p.parse().ok()).unwrap_or(50000);
+    let key = old.get("access_key").and_then(|v| v.as_str()).unwrap_or("").to_string();
+    let transport = old.get("transport").and_then(|t| t.get("mode").or(t.get("type"))).and_then(|v| v.as_str()).unwrap_or("udp").to_string();
+    (server, port, key, transport)
+}
+
+/// Extract client SOCKS listen address and port
+fn extract_client_socks(old: &serde_json::Value) -> (String, u16) {
+    // New format: inbounds[type=local_proxy]
+    if let Some(arr) = old.get("inbounds").and_then(|v| v.as_array()) {
+        for inbound in arr {
+            let t = inbound.get("type").and_then(|v| v.as_str()).unwrap_or("");
+            if t == "local_proxy" {
+                let listen = inbound.get("listen").and_then(|v| v.as_str()).unwrap_or("127.0.0.1").to_string();
+                let port = inbound.get("port").and_then(|v| v.as_u64()).unwrap_or(1088) as u16;
+                return (listen, port);
+            }
+        }
+    }
+    // Old flat format
+    let bind = old.get("socks5_bind").and_then(|v| v.as_str()).unwrap_or("127.0.0.1:1088");
+    let parts: Vec<&str> = bind.split(':').collect();
+    let listen = parts.get(0).unwrap_or(&"127.0.0.1").to_string();
+    let port = parts.get(1).and_then(|p| p.parse().ok()).unwrap_or(1088);
+    (listen, port)
+}
+
+/// Check if TUN is enabled in old config
+fn extract_client_tun(old: &serde_json::Value) -> bool {
+    // New format: inbounds[type=tun]
+    if let Some(arr) = old.get("inbounds").and_then(|v| v.as_array()) {
+        for inbound in arr {
+            let t = inbound.get("type").and_then(|v| v.as_str()).unwrap_or("");
+            if t == "tun" {
+                return inbound.get("auto_route").and_then(|v| v.as_bool()).unwrap_or(true);
+            }
+        }
+    }
+    // Old flat format
+    old.get("tun").and_then(|t| t.get("enable")).and_then(|v| v.as_bool()).unwrap_or(false)
 }

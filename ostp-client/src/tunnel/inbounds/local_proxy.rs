@@ -14,12 +14,19 @@ pub async fn run_socks_inbound(
     outbound_manager: Arc<OutboundManager>,
     mut shutdown: watch::Receiver<bool>,
 ) -> Result<()> {
-    let InboundConfig::LocalProxy { tag, protocol, listen, port } = inbound_config else {
+    let InboundConfig::LocalProxy { tag, protocol, listen, port, set_system_proxy } = inbound_config else {
         return Err(anyhow!("Invalid config for LocalProxy inbound"));
     };
 
     let bind_addr = format!("{}:{}", listen, port);
     tracing::info!("Starting {} proxy inbound on {} (tag: {})", protocol, bind_addr, tag);
+
+    let _proxy_guard = if set_system_proxy {
+        let proxy_host = if listen == "0.0.0.0" { "127.0.0.1" } else { &listen };
+        Some(crate::sysproxy::SystemProxyGuard::enable(&format!("{}:{}", proxy_host, port)))
+    } else {
+        None
+    };
 
     let listener = TcpListener::bind(&bind_addr).await?;
 

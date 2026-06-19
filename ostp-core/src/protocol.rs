@@ -393,23 +393,9 @@ impl ProtocolMachine {
         } else {
             // Gap detected
             if self.reorder_buffer.len() >= self.max_reorder_buffer {
-                tracing::warn!("Reorder buffer full ({}/{}), forcing gap recovery to prevent packet drops",
-                    self.reorder_buffer.len(), self.max_reorder_buffer
+                tracing::warn!("Reorder buffer full ({}/{}), dropping new frame nonce={} to wait for recovery of nonce={}",
+                    self.reorder_buffer.len(), self.max_reorder_buffer, nonce, self.expected_recv_nonce
                 );
-                if let Some(&first_buffered) = self.reorder_buffer.keys().next() {
-                    let skipped = first_buffered.saturating_sub(self.expected_recv_nonce);
-                    self.expected_recv_nonce = first_buffered;
-                    self.last_recv_advance = Instant::now();
-
-                    let mut delivered = 0u64;
-                    while let Some(buffered_action) = self.reorder_buffer.remove(&self.expected_recv_nonce) {
-                        app_actions.push(buffered_action);
-                        self.expected_recv_nonce = self.expected_recv_nonce.saturating_add(1);
-                        delivered += 1;
-                    }
-                    self.ack_pending = true;
-                    tracing::debug!("Forced Gap recovery: skipped {} lost frames, delivered {} buffered frames", skipped, delivered);
-                }
             }
 
             if nonce >= self.expected_recv_nonce {
@@ -532,32 +518,6 @@ impl ProtocolMachine {
 
     fn handle_tick(&mut self) -> Result<ProtocolAction, ProtocolError> {
         let mut actions = Vec::new();
-
-        // ── Gap Recovery ──────────────────────────────────────────────
-        // If expected_recv_nonce hasn't advanced for 500ms+ and there
-        // are buffered frames waiting, the sender likely evicted the lost
-        // frame from sent_history. Skip the gap to restore data flow.
-        // This trades a small amount of data loss for connection liveness.
-        if !self.reorder_buffer.is_empty()
-            && self.last_recv_advance.elapsed() > Duration::from_millis(500)
-        {
-            if let Some(&first_buffered) = self.reorder_buffer.keys().next() {
-                let skipped = first_buffered.saturating_sub(self.expected_recv_nonce);
-                self.expected_recv_nonce = first_buffered;
-                self.last_recv_advance = Instant::now();
-
-                let mut delivered = 0u64;
-                while let Some(buffered_action) = self.reorder_buffer.remove(&self.expected_recv_nonce) {
-                    actions.push(buffered_action);
-                    self.expected_recv_nonce = self.expected_recv_nonce.saturating_add(1);
-                    delivered += 1;
-                }
-                self.ack_pending = true;
-                tracing::debug!("Gap recovery: skipped {} lost frames, delivered {} buffered frames (reorder_buf={})",
-                    skipped, delivered, self.reorder_buffer.len()
-                );
-            }
-        }
 
         // ── Pending ACK flush ─────────────────────────────────────────
         if let Some(ack_frame) = self.build_ack_if_due()? {

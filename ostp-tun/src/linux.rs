@@ -12,6 +12,8 @@ struct LinuxRouteGuard {
 
 impl Drop for LinuxRouteGuard {
     fn drop(&mut self) {
+        let _ = Command::new("ip").args(["route", "del", "0.0.0.0/1", "dev", "ostp_tun"]).output();
+        let _ = Command::new("ip").args(["route", "del", "128.0.0.0/1", "dev", "ostp_tun"]).output();
         let _ = Command::new("ip").args(["route", "del", "default", "dev", "ostp_tun"]).output();
         let _ = Command::new("ip").args(["route", "del", &format!("{}/32", self.server_ip)]).output();
         for route in &self.bypass_routes {
@@ -70,7 +72,9 @@ pub async fn create(opts: OstpTunOptions) -> Result<OstpTunInterface> {
             bypass_routes.push(route);
         }
 
-        let _ = Command::new("ip").args(["route", "add", "default", "dev", "ostp_tun"]).output();
+        // Override default route gracefully by adding more specific /1 routes
+        let _ = Command::new("ip").args(["route", "add", "0.0.0.0/1", "dev", "ostp_tun"]).output();
+        let _ = Command::new("ip").args(["route", "add", "128.0.0.0/1", "dev", "ostp_tun"]).output();
         
         if opts.kill_switch {
             tracing::info!("Kill Switch: deleting original default route to prevent leakage.");

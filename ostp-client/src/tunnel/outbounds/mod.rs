@@ -39,7 +39,7 @@ impl OutboundManager {
                 block::dial_tcp(target_host, target_port).await
             }
             OutboundConfig::Ostp { server, port, access_key, transport, multiplex, .. } => {
-                ostp::dial_tcp(server, *port, access_key, transport, multiplex).await
+                ostp::dial_tcp(target_host, target_port, server, *port, access_key, transport, multiplex).await
             }
             OutboundConfig::Socks { server, port, .. } => {
                 socks::dial_tcp(target_host, target_port, server, *port).await

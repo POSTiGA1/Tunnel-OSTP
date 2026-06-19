@@ -50,6 +50,8 @@ pub enum InboundConfig {
         protocol: String, // "socks" or "http"
         listen: String,
         port: u16,
+        #[serde(default)]
+        set_system_proxy: bool,
     },
 }
 
@@ -172,18 +174,15 @@ impl ClientConfig {
             .with_context(|| format!("failed to parse JSON from {}", path.display()))?;
 
         let (migrated_json, was_migrated) = Self::migrate_json(raw_json);
-        
         if was_migrated {
-            tracing::info!("Config was migrated to v0.3.1. Saving to {}", path.display());
-            let serialized = serde_json::to_string_pretty(&migrated_json)?;
-            let header = "// OSTP Configuration v0.3.1\n// DO NOT EDIT THIS COMMENT - Migrator relies on it\n";
-            let final_content = format!("{}{}", header, serialized);
-            std::fs::write(&path, final_content)
-                .with_context(|| format!("failed to save migrated config to {}", path.display()))?;
+            tracing::warn!(
+                "Config at {} is in an outdated format. Run 'ostp --migrate' to upgrade it.",
+                path.display()
+            );
         }
 
         let config: ClientConfig = serde_json::from_value(migrated_json)
-            .with_context(|| format!("failed to deserialize migrated config from {}", path.display()))?;
+            .with_context(|| format!("failed to deserialize config from {}", path.display()))?;
 
         Ok(config)
     }
@@ -191,8 +190,20 @@ impl ClientConfig {
     /// Migrates old monolithic JSON to the new modular format.
     /// Returns the migrated JSON value and a boolean indicating if a migration occurred.
     pub fn migrate_json(json: serde_json::Value) -> (serde_json::Value, bool) {
-        let is_migrated = json.get("version").and_then(|v| v.as_str()) == Some(env!("CARGO_PKG_VERSION"));
-        if is_migrated {
+        // Consider the config already migrated if:
+        // 1. Version matches exactly, OR
+        // 2. The JSON already has the new modular format (inbounds + outbounds arrays)
+        let has_version = json.get("version").and_then(|v| v.as_str()) == Some(env!("CARGO_PKG_VERSION"));
+        let has_new_format = json.get("inbounds").and_then(|v| v.as_array()).is_some()
+            && json.get("outbounds").and_then(|v| v.as_array()).is_some();
+        
+        if has_version || has_new_format {
+            // If format is already new but version is old, just bump the version
+            if has_new_format && !has_version {
+                let mut updated = json.clone();
+                updated["version"] = serde_json::json!(env!("CARGO_PKG_VERSION"));
+                return (updated, false);
+            }
             return (json, false);
         }
 

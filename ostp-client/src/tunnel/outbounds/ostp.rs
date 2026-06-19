@@ -71,6 +71,7 @@ pub async fn dial_tcp(
     transport_cfg: &TransportConfig,
     _multiplex: &MultiplexConfig,
 ) -> Result<TcpStream> {
+    tracing::info!("Dialing OSTP server {}:{} for target {}:{}", server, port, target_host, target_port);
     let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await?;
     let local_addr = listener.local_addr()?;
     let client_stream = tokio::net::TcpStream::connect(local_addr).await?;
@@ -124,6 +125,61 @@ pub async fn dial_tcp(
             handle_action(action, &transport, &mut server_stream).await;
         }
 
+        // ── Wait for ConnectOk before forwarding any data ─────────────────
+        // This is critical: if we enter the data loop immediately, the TLS
+        // ClientHello arrives at the server before it has established the
+        // outbound TCP connection, causing it to drop the packet as
+        // "Relay DATA for unknown stream".
+        // The kernel will buffer incoming data from server_stream while we wait.
+        let mut connect_ok = false;
+        match tokio::time::timeout(
+            std::time::Duration::from_secs(10),
+            async {
+                let mut wait_buf = [0u8; 8192];
+                loop {
+                    tokio::select! {
+                        Ok(n) = transport.recv(&mut wait_buf) => {
+                            if let Ok(action) = machine.on_event(OstpEvent::Inbound(
+                                bytes::Bytes::copy_from_slice(&wait_buf[..n]),
+                            )) {
+                                // Check for ConnectOk or Error before dispatching
+                                let result = check_connect_result(&action);
+                                handle_action(action, &transport, &mut server_stream).await;
+                                match result {
+                                    Some(true) => return true,
+                                    Some(false) => return false,
+                                    None => {}
+                                }
+                            }
+                        }
+                        _ = tokio::time::sleep(std::time::Duration::from_millis(10)) => {
+                            if let Ok(action) = machine.on_event(OstpEvent::Tick) {
+                                handle_action(action, &transport, &mut server_stream).await;
+                            }
+                        }
+                    }
+                }
+            },
+        )
+        .await
+        {
+            Ok(true) => {
+                tracing::debug!("ConnectOk received for {}:{}, starting data forwarding", target_host_str, target_port);
+                connect_ok = true;
+            }
+            Ok(false) => {
+                tracing::warn!("Server refused connection to {}:{}", target_host_str, target_port);
+            }
+            Err(_) => {
+                tracing::warn!("ConnectOk timeout for {}:{}", target_host_str, target_port);
+            }
+        }
+
+        if !connect_ok {
+            return;
+        }
+
+        // ── Main bidirectional data forwarding loop ───────────────────────
         let mut buf = [0u8; 65535];
         let mut udp_buf = [0u8; 65535];
 
@@ -150,6 +206,7 @@ pub async fn dial_tcp(
             }
         }
     });
+
 
     Ok(client_stream)
 }
@@ -303,5 +360,32 @@ async fn handle_action(action: ProtocolAction, transport: &crate::transport::Tra
             }
         }
         _ => {}
+    }
+}
+
+/// Inspect a ProtocolAction for ConnectOk / Error relay messages.
+/// Returns Some(true) on ConnectOk, Some(false) on Error, None if neither.
+/// Works recursively through Multiple actions.
+fn check_connect_result(action: &ProtocolAction) -> Option<bool> {
+    match action {
+        ProtocolAction::DeliverApp(_stream_id, payload) => {
+            if let Ok(msg) = ostp_core::relay::RelayMessage::decode(payload) {
+                match msg {
+                    ostp_core::relay::RelayMessage::ConnectOk => return Some(true),
+                    ostp_core::relay::RelayMessage::Error(_) => return Some(false),
+                    _ => {}
+                }
+            }
+            None
+        }
+        ProtocolAction::Multiple(actions) => {
+            for a in actions {
+                if let Some(result) = check_connect_result(a) {
+                    return Some(result);
+                }
+            }
+            None
+        }
+        _ => None,
     }
 }

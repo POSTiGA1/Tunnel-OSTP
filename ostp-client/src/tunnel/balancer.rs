@@ -59,6 +59,7 @@ impl Balancer {
     /// Fetches the config for a concrete outbound
     pub fn get_concrete_outbound(&self, tag: &str) -> Option<&OutboundConfig> {
         let resolved_tag = self.resolve_outbound(tag);
+        tracing::debug!("Balancer: tag '{}' resolved to '{}'", tag, resolved_tag);
         self.outbounds.get(&resolved_tag)
     }
 }
