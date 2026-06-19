@@ -204,7 +204,9 @@ async fn make_transport(
                 .unwrap_or_else(|| "tunnel.example.com".to_string());
             let resolver = transport_cfg.resolver.clone()
                 .unwrap_or_else(|| "8.8.8.8".to_string());
-            crate::transport::dns::start_dns_transport(domain, resolver, transport_cfg.pubkey.clone()).await
+            let transport = crate::transport::dns::start_dns_transport(domain, resolver, transport_cfg.pubkey.clone()).await
+                .map_err(|e| anyhow::anyhow!(e))?;
+            Ok(transport)
         }
         _ => {
             let udp = tokio::net::UdpSocket::bind("0.0.0.0:0").await?;
