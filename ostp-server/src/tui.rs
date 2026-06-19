@@ -12,7 +12,7 @@ pub enum UiEvent {
     PeerSeen { peer: IpAddr },
     Rx { peer: IpAddr, bytes: usize },
     Tx { peer: IpAddr, bytes: usize },
-    UnauthorizedProbe { peer: IpAddr, bytes: usize },
+    UnauthorizedProbe { peer: IpAddr, bytes: usize, reason: String },
     KeyCreated { key: String },
     Log(String),
     KeyCount(usize),

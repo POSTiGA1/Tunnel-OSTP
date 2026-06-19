@@ -84,31 +84,33 @@ pub async fn dial_tcp(
 
     let target_host_str = target_host.to_string();
 
-    // Spawn bridge task
-    tokio::spawn(async move {
-        // Send initial handshake
-        if let Ok(action) = machine.on_event(OstpEvent::Start) {
-            handle_action(action, &transport, &mut server_stream).await;
-        }
-
-        // Wait for handshake response (server sends HandshakePayload back)
-        let mut buf = [0u8; 8192];
-        let mut handshake_success = false;
-        match tokio::time::timeout(
-            std::time::Duration::from_millis(3000),
-            transport.recv(&mut buf),
-        ).await {
-            Ok(Ok(n)) => {
-                if let Ok(action) = machine.on_event(OstpEvent::Inbound(bytes::Bytes::copy_from_slice(&buf[..n]))) {
-                    handle_action(action, &transport, &mut server_stream).await;
-                    handshake_success = true;
+        let server_str = server.to_string();
+        
+        // Spawn bridge task
+        tokio::spawn(async move {
+            // Send initial handshake
+            if let Ok(action) = machine.on_event(OstpEvent::Start) {
+                handle_action(action, &transport, &mut server_stream).await;
+            }
+    
+            // Wait for handshake response (server sends HandshakePayload back)
+            let mut buf = [0u8; 8192];
+            let mut handshake_success = false;
+            match tokio::time::timeout(
+                std::time::Duration::from_millis(3000),
+                transport.recv(&mut buf),
+            ).await {
+                Ok(Ok(n)) => {
+                    if let Ok(action) = machine.on_event(OstpEvent::Inbound(bytes::Bytes::copy_from_slice(&buf[..n]))) {
+                        handle_action(action, &transport, &mut server_stream).await;
+                        handshake_success = true;
+                    }
+                }
+                _ => {
+                    tracing::warn!("TCP handshake timeout for {}:{}", server_str, port);
+                    return;
                 }
             }
-            _ => {
-                tracing::warn!("TCP handshake timeout for {}:{}", server, port);
-                return;
-            }
-        }
 
         if !handshake_success {
             tracing::warn!("TCP handshake failed or protocol machine error");

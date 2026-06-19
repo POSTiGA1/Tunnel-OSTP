@@ -45,7 +45,7 @@ pub(crate) enum UiEvent {
     PeerSeen { peer: IpAddr },
     #[allow(dead_code)] Rx { peer: IpAddr, bytes: usize },
     #[allow(dead_code)] Tx { peer: IpAddr, bytes: usize },
-    UnauthorizedProbe { peer: IpAddr, bytes: usize },
+    UnauthorizedProbe { peer: IpAddr, bytes: usize, reason: String },
     KeyCreated { key: String },
     Log(String),
     #[allow(dead_code)]
@@ -328,10 +328,9 @@ pub async fn run_server(
                 UiEvent::KeyCreated { key } => {
                     tracing::info!("Access key created: {key}");
                 }
-                UiEvent::UnauthorizedProbe { peer, bytes } => {
-                    if debug {
-                        tracing::debug!("Unauthorized probe from {peer} ({bytes} bytes)");
-                    }
+                UiEvent::UnauthorizedProbe { peer, bytes, reason } => {
+                    // Make it a warn so it's always visible outside debug mode!
+                    tracing::warn!("Unauthorized probe from {peer} ({bytes} bytes): {reason}");
                 }
                 UiEvent::PeerSeen { .. } => {}
                 _ => {}
@@ -576,8 +575,8 @@ async fn handle_udp_packet(
 ) -> Result<()> {
     let size = packet.len();
     match dispatcher.on_datagram(peer, packet) {
-        Ok(DispatchOutcome::Unauthorized) => {
-            let _ = ui_event_tx.send(UiEvent::UnauthorizedProbe { peer: peer.ip(), bytes: size });
+        Ok(DispatchOutcome::Unauthorized(reason)) => {
+            let _ = ui_event_tx.send(UiEvent::UnauthorizedProbe { peer: peer.ip(), bytes: size, reason });
         }
         Ok(DispatchOutcome::Accepted { responses, app_payloads, peer_addr }) => {
             let peer_ip = peer_addr.ip();
