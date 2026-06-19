@@ -392,12 +392,34 @@ impl ProtocolMachine {
             self.last_recv_advance = Instant::now();
         } else {
             // Gap detected
-            if self.reorder_buffer.len() < self.max_reorder_buffer {
-                self.reorder_buffer.insert(nonce, action);
-            } else {
-                tracing::warn!("Reorder buffer full ({}/{}), dropping frame nonce={}",
-                    self.reorder_buffer.len(), self.max_reorder_buffer, nonce
+            if self.reorder_buffer.len() >= self.max_reorder_buffer {
+                tracing::warn!("Reorder buffer full ({}/{}), forcing gap recovery to prevent packet drops",
+                    self.reorder_buffer.len(), self.max_reorder_buffer
                 );
+                if let Some(&first_buffered) = self.reorder_buffer.keys().next() {
+                    let skipped = first_buffered.saturating_sub(self.expected_recv_nonce);
+                    self.expected_recv_nonce = first_buffered;
+                    self.last_recv_advance = Instant::now();
+
+                    let mut delivered = 0u64;
+                    while let Some(buffered_action) = self.reorder_buffer.remove(&self.expected_recv_nonce) {
+                        app_actions.push(buffered_action);
+                        self.expected_recv_nonce = self.expected_recv_nonce.saturating_add(1);
+                        delivered += 1;
+                    }
+                    self.ack_pending = true;
+                    tracing::debug!("Forced Gap recovery: skipped {} lost frames, delivered {} buffered frames", skipped, delivered);
+                }
+            }
+
+            if nonce >= self.expected_recv_nonce {
+                if self.reorder_buffer.len() < self.max_reorder_buffer {
+                    self.reorder_buffer.insert(nonce, action);
+                } else {
+                    tracing::warn!("Reorder buffer still full after gap recovery, dropping frame nonce={}", nonce);
+                }
+            } else {
+                tracing::debug!("Frame nonce={} arrived too late after gap recovery, dropping", nonce);
             }
 
             // Rate-limited NACK: send at most once per 30ms to prevent retransmit storms.
