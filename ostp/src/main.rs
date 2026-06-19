@@ -80,6 +80,83 @@ struct Args {
     prober: bool,
 }
 
+fn patch_existing_client_config(config_path: &std::path::Path, new_client_inner: serde_json::Value) -> serde_json::Value {
+    let unified_new = serde_json::to_value(UnifiedConfig {
+        mode: AppMode::Client(new_client_inner.clone()),
+        version: Some(env!("CARGO_PKG_VERSION").to_string()),
+        log: Some(serde_json::json!({ "level": "info" })),
+    }).unwrap();
+
+    if !config_path.exists() {
+        return unified_new;
+    }
+    
+    let content = match std::fs::read_to_string(config_path) {
+        Ok(c) => c,
+        Err(_) => return unified_new,
+    };
+    
+    let mut stripped = json_comments::StripComments::new(content.as_bytes());
+    let mut existing: serde_json::Value = match serde_json::from_reader(&mut stripped) {
+        Ok(v) => v,
+        Err(_) => return unified_new,
+    };
+    
+    if existing.get("mode").and_then(|m| m.as_str()) != Some("client") {
+        return unified_new;
+    }
+    
+    let mut new_proxy = None;
+    if let Some(outbounds) = new_client_inner.get("outbounds").and_then(|o| o.as_array()) {
+        for ob in outbounds {
+            if ob.get("tag").and_then(|t| t.as_str()) == Some("proxy") {
+                new_proxy = Some(ob.clone());
+                break;
+            }
+        }
+    }
+    
+    if let Some(new_proxy) = new_proxy {
+        if let Some(existing_outbounds) = existing.get_mut("outbounds").and_then(|o| o.as_array_mut()) {
+            let mut replaced = false;
+            for ob in existing_outbounds.iter_mut() {
+                if ob.get("tag").and_then(|t| t.as_str()) == Some("proxy") {
+                    *ob = new_proxy.clone();
+                    replaced = true;
+                    break;
+                }
+            }
+            if !replaced {
+                existing_outbounds.insert(0, new_proxy);
+            }
+        } else {
+            existing["outbounds"] = serde_json::json!([new_proxy]);
+        }
+    }
+    
+    if let Some(new_inbounds) = new_client_inner.get("inbounds").and_then(|i| i.as_array()) {
+        for new_ib in new_inbounds {
+            if new_ib.get("type").and_then(|t| t.as_str()) == Some("tun") {
+                if let Some(auto_route) = new_ib.get("auto_route").and_then(|a| a.as_bool()) {
+                    if auto_route {
+                        if let Some(existing_inbounds) = existing.get_mut("inbounds").and_then(|i| i.as_array_mut()) {
+                            for existing_ib in existing_inbounds.iter_mut() {
+                                if existing_ib.get("type").and_then(|t| t.as_str()) == Some("tun") {
+                                    existing_ib["auto_route"] = serde_json::json!(true);
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+    
+    existing["version"] = serde_json::json!(env!("CARGO_PKG_VERSION"));
+    
+    existing
+}
+
 fn parse_ostp_link(link: &str) -> Result<serde_json::Value> {
     let parsed = url::Url::parse(link)
         .map_err(|e| anyhow!("Failed to parse share link URL: {e}"))?;
@@ -1224,12 +1301,8 @@ async fn run_app() -> Result<()> {
         println!("{} Importing configuration from share link...", "[ostp]".cyan().bold());
         let client_cfg = parse_ostp_link(&import_url)
             .map_err(|e| anyhow!("Share Link Error: {e}"))?;
-        let unified = UnifiedConfig {
-            mode: AppMode::Client(client_cfg),
-            version: Some("0.3.1".to_string()),
-            log: Some(serde_json::json!({ "level": "info" })),
-        };
-        let content = serde_json::to_string_pretty(&unified)?;
+        let patched = patch_existing_client_config(&args.config, client_cfg);
+        let content = serde_json::to_string_pretty(&patched)?;
         if let Some(parent) = args.config.parent() {
             if !parent.as_os_str().is_empty() {
                 fs::create_dir_all(parent)?;
@@ -1301,7 +1374,8 @@ async fn run_app() -> Result<()> {
             client_cfg["log"]["level"] = serde_json::json!("debug");
         }
 
-        return run_client_directly(client_cfg).await;
+        let patched = patch_existing_client_config(&args.config, client_cfg);
+        return run_client_directly(patched).await;
     }
 
     // Handle --check: validate config and exit
