@@ -55,6 +55,10 @@ struct Args {
     #[arg(long, help_heading = "Common Commands")]
     update: bool,
 
+    /// Specify a target version for the update command (e.g., -v 0.2.98)
+    #[arg(short = 'v', long = "version", help_heading = "Common Commands")]
+    target_version: Option<String>,
+
     /// Import a share link (ostp://...) into the configuration file and exit
     #[arg(long, help_heading = "Client Commands")]
     import: Option<String>,

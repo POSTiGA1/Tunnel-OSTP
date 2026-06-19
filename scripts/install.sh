@@ -85,10 +85,33 @@ esac
 
 echo "Platform: linux/$ARCH"
 
+# ── Parse arguments ────────────────────────────────────────────────────
+TARGET_VERSION=""
+while [[ $# -gt 0 ]]; do
+  case $1 in
+    -v|--version)
+      TARGET_VERSION="$2"
+      shift 2
+      ;;
+    *)
+      shift
+      ;;
+  esac
+done
+
 # ── Download binary ──────────────────────────────────────────────────
 
-echo "Fetching latest release..."
-LATEST_RELEASE=$(curl -s "https://api.github.com/repos/${GITHUB_REPO}/releases/latest" | grep '"tag_name":' | sed -E 's/.*"([^"]+)".*/\1/')
+if [ -n "$TARGET_VERSION" ]; then
+    LATEST_RELEASE="$TARGET_VERSION"
+    # Ensure it starts with 'v' if it's supposed to
+    if [[ ! "$LATEST_RELEASE" =~ ^v ]]; then
+        LATEST_RELEASE="v$LATEST_RELEASE"
+    fi
+    echo "Fetching requested release $LATEST_RELEASE..."
+else
+    echo "Fetching latest release..."
+    LATEST_RELEASE=$(curl -s "https://api.github.com/repos/${GITHUB_REPO}/releases/latest" | grep '"tag_name":' | sed -E 's/.*"([^"]+)".*/\1/')
+fi
 
 if [ -z "$LATEST_RELEASE" ] || [[ "$LATEST_RELEASE" == *"null"* ]]; then
     echo "[notice] Could not determine latest release automatically."

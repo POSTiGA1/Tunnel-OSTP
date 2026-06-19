@@ -99,18 +99,27 @@ const PUBLIC_DNS_SERVERS: &[(&str, &str)] = &[
 ];
 
 pub async fn run_prober() {
-    println!("Starting DNS resolver prober to find the fastest server for DNS Transport...");
+    println!("Enter your OSTP DNS Tunnel domain (e.g., tunnel.example.com):");
+    let mut target_domain = String::new();
+    std::io::stdin().read_line(&mut target_domain).unwrap();
+    let target_domain = target_domain.trim();
+    if target_domain.is_empty() {
+        println!("Domain cannot be empty. Exiting prober.");
+        return;
+    }
+
+    println!("\nStarting DNS resolver prober for domain: {}", target_domain);
     println!("{:<15} | {:<15} | {:<10}", "Name", "IP Address", "Latency");
     println!("{:-<15}-+-{:-<15}-+-{:-<10}", "", "", "");
 
     let mut best_server = "8.8.8.8";
     let mut best_latency = Duration::from_secs(10);
     
-    // We send a random TXT query to test DNS resolution time
+    // Send a real OSTP ping packet encoded as a domain
+    let payload = b"PING";
+    let encoded_domain = ostp_core::dns::encode_payload_to_domain(payload, target_domain);
+
     let mut rng = rand::thread_rng();
-    let id: u16 = rng.gen();
-    let packet = DnsPacket::new_query(id, "example.com", DnsRecordType::TXT);
-    let payload = packet.encode();
 
     for (name, ip) in PUBLIC_DNS_SERVERS {
         let sock = match tokio::net::UdpSocket::bind("0.0.0.0:0").await {
@@ -122,8 +131,12 @@ pub async fn run_prober() {
             continue;
         }
 
+        let id: u16 = rng.gen();
+        let packet = DnsPacket::new_query(id, &encoded_domain, DnsRecordType::TXT);
+        let payload_bytes = packet.encode();
+
         let start = Instant::now();
-        if sock.send(&payload).await.is_ok() {
+        if sock.send(&payload_bytes).await.is_ok() {
             let mut buf = [0u8; 512];
             match tokio::time::timeout(Duration::from_secs(2), sock.recv(&mut buf)).await {
                 Ok(Ok(_)) => {
