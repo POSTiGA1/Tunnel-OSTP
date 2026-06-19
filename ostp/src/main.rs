@@ -286,6 +286,7 @@ impl UserConfig {
     }
 }
 
+#[allow(dead_code)]
 #[derive(Debug, Deserialize, Serialize)]
 struct OutboundConfig {
     enabled: bool,
@@ -297,6 +298,7 @@ struct OutboundConfig {
     default_action: Option<String>,
 }
 
+#[allow(dead_code)]
 #[derive(Debug, Deserialize, Serialize)]
 struct OutboundRule {
     domain_suffix: Option<Vec<String>>,
@@ -305,6 +307,7 @@ struct OutboundRule {
     action: Option<String>,
 }
 
+#[allow(dead_code)]
 #[derive(Debug, Deserialize, Serialize, Clone)]
 struct TransportConfigRaw {
     mode: Option<String>,
@@ -360,6 +363,7 @@ impl ListenConfig {
     }
 }
 
+#[allow(dead_code)]
 #[derive(Debug, Deserialize, Serialize)]
 struct ApiConfig {
     enabled: Option<bool>,
@@ -370,6 +374,7 @@ struct ApiConfig {
     password_hash: Option<String>,
 }
 
+#[allow(dead_code)]
 #[derive(Debug, Deserialize, Serialize)]
 struct FallbackCfg {
     enabled: Option<bool>,
@@ -922,7 +927,7 @@ fn run_setup_wizard(config_path: &std::path::Path) -> Result<()> {
             };
 
             wizard_step(4, TOTAL, "Saving configuration");
-            let panel_bind = format!("0.0.0.0:{}", panel_port);
+            let _panel_bind = format!("0.0.0.0:{}", panel_port);
             let server_json = serde_json::json!({
                 "mode": "server",
                 "version": "{}",
@@ -1324,7 +1329,7 @@ async fn run_app() -> Result<()> {
                     AppMode::Server(s) => {
                         println!("{} Config OK: server mode", "[ostp]".green().bold());
                         let mut keys_count = 0;
-                        let mut has_outbound = false;
+                        let mut _has_outbound = false;
                         for inbound in &s.inbounds {
                             match inbound {
                                 ostp_server::config::ServerInbound::Ostp { listen, port, users, fallback, .. } => {
@@ -1348,7 +1353,7 @@ async fn run_app() -> Result<()> {
                         for ob in &s.outbounds {
                             if let ostp_server::config::ServerOutbound::Socks { server, port, .. } = ob {
                                 println!("  Outbound Proxy: SOCKS5 {}:{}", server.cyan(), port.to_string().cyan());
-                                has_outbound = true;
+                                _has_outbound = true;
                             }
                         }
                         if let Some(dns) = &s.dns {
@@ -2021,7 +2026,7 @@ fn cmd_migrate(config_path: &std::path::Path) -> Result<()> {
         if let Some(ob) = raw_json.get("outbound") {
             if ob.get("enabled").and_then(|e| e.as_bool()).unwrap_or(false) {
                 let tag = "socks5-legacy";
-                let mut socks = serde_json::json!({
+                let socks = serde_json::json!({
                     "protocol": "socks5",
                     "tag": tag,
                     "server": ob.get("address").and_then(|a| a.as_str()).unwrap_or("127.0.0.1"),

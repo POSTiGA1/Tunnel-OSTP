@@ -1,5 +1,5 @@
 use byteorder::{BigEndian, ReadBytesExt, WriteBytesExt};
-use std::io::{Cursor, Read, Write};
+use std::io::{Cursor, Read};
 
 const BASE32_ALPHABET: &[u8] = b"abcdefghijklmnopqrstuvwxyz234567";
 

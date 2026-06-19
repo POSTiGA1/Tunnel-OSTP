@@ -66,7 +66,7 @@ pub fn bind_socket_to_interface(socket: &tokio::net::TcpSocket, _is_ipv6: bool, 
     Ok(())
 }
 
-pub async fn dial_tcp(target_host: &str, target_port: u16, phys_if_idx: Option<u32>) -> Result<TcpStream> {
+pub async fn dial_tcp(target_host: &str, target_port: u16, _phys_if_idx: Option<u32>) -> Result<TcpStream> {
     let addrs = tokio::net::lookup_host((target_host, target_port)).await?.collect::<Vec<_>>();
     if addrs.is_empty() {
         return Err(anyhow!("Could not resolve target host: {}", target_host));
@@ -79,7 +79,7 @@ pub async fn dial_tcp(target_host: &str, target_port: u16, phys_if_idx: Option<u
     };
 
     #[cfg(target_os = "windows")]
-    if let Some(idx) = phys_if_idx {
+    if let Some(idx) = _phys_if_idx {
         if let Err(e) = bind_socket_to_interface(&socket, target_addr.is_ipv6(), idx) {
             tracing::warn!("DIRECT: Failed to bind to physical interface {}: {}", idx, e);
         }

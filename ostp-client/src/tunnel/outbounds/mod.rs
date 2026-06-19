@@ -11,7 +11,7 @@ pub mod socks;
 pub struct OutboundManager {
     balancer: Arc<Balancer>,
     phys_if_index: Option<u32>,
-    phys_if_name: Option<String>,
+    _phys_if_name: Option<String>,
 }
 
 impl OutboundManager {
@@ -23,7 +23,7 @@ impl OutboundManager {
         Self {
             balancer,
             phys_if_index,
-            phys_if_name,
+            _phys_if_name: phys_if_name,
         }
     }
 

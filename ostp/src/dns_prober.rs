@@ -158,7 +158,7 @@ pub async fn run_prober(config_path: &std::path::Path) {
     
     // Send a real OSTP ping packet encoded as a domain
     let payload = b"PING";
-    let encoded_domain = ostp_core::dns::encode_payload_to_domain(payload, target_domain);
+    let encoded_domain = ostp_core::dns::encode_payload_to_domain(payload, &target_domain);
 
     let mut rng = rand::thread_rng();
 

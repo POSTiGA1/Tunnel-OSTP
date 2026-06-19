@@ -126,7 +126,6 @@ pub fn get_process_name_from_port(port: u16) -> Option<String> {
     use std::fs;
     use std::io::{BufRead, BufReader};
 
-    let mut target_inode = None;
     let hex_port = format!("{:04X}", port);
 
     let check_net_file = |path: &str| -> Option<u64> {
@@ -146,12 +145,11 @@ pub fn get_process_name_from_port(port: u16) -> Option<String> {
         None
     };
 
-    target_inode = check_net_file("/proc/net/tcp")
+    let target_inode = check_net_file("/proc/net/tcp")
         .or_else(|| check_net_file("/proc/net/tcp6"))
         .or_else(|| check_net_file("/proc/net/udp"))
-        .or_else(|| check_net_file("/proc/net/udp6"));
+        .or_else(|| check_net_file("/proc/net/udp6"))?;
 
-    let target_inode = target_inode?;
     let socket_str = format!("socket:[{}]", target_inode);
 
     for entry in fs::read_dir("/proc").ok()?.filter_map(Result::ok) {

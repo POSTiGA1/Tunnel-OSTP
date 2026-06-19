@@ -6,7 +6,7 @@ use std::net::SocketAddr;
 use bytes::Bytes;
 use tokio::time::Duration;
 
-use ostp_core::dns::{DnsPacket, DnsRecordType, decode_domain_to_payload, encode_payload_to_domain};
+use ostp_core::dns::{DnsPacket, DnsRecordType, decode_domain_to_payload};
 use crate::config::DnsTransportConfig;
 use crate::UiEvent;
 

@@ -1,5 +1,5 @@
 use serde::{Deserialize, Serialize};
-use crate::{api::ApiConfig, fallback::FallbackConfig, outbound::OutboundConfig, dns::DnsConfig};
+use crate::{fallback::FallbackConfig, dns::DnsConfig};
 
 #[derive(Debug, Deserialize, Serialize, Clone)]
 #[serde(tag = "protocol", rename_all = "snake_case")]
