@@ -304,7 +304,7 @@ async fn make_transport(
             let domain = transport_cfg.domain.clone()
                 .unwrap_or_else(|| "tunnel.example.com".to_string());
             let resolver = transport_cfg.resolver.clone()
-                .unwrap_or_else(|| "8.8.8.8".to_string());
+                .unwrap_or_else(|| server.to_string());
             let transport = crate::transport::dns::start_dns_transport(domain, resolver, transport_cfg.pubkey.clone()).await
                 .map_err(|e| anyhow::anyhow!(e))?;
             Ok(transport)
