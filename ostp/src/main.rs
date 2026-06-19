@@ -131,7 +131,7 @@ fn parse_ostp_link(link: &str) -> Result<serde_json::Value> {
     }
 
     Ok(serde_json::json!({
-        "version": "{}",
+        "version": env!("CARGO_PKG_VERSION"),
         "log": {
             "level": "info"
         },
@@ -709,7 +709,7 @@ fn run_setup_wizard(config_path: &std::path::Path) -> Result<()> {
 
             let client_json = serde_json::json!({
                 "mode": "client",
-                "version": "{}",
+                "version": env!("CARGO_PKG_VERSION"),
                 "log": {
                     "level": "info"
                 },
