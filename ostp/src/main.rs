@@ -1407,6 +1407,7 @@ async fn run_app() -> Result<()> {
     {{
       // Primary OSTP protocol listener
       "protocol": "ostp",
+      "tag": "ostp-in",
       "listen": "0.0.0.0",
       "port": 50000,
       "users": [
@@ -1425,6 +1426,7 @@ async fn run_app() -> Result<()> {
     {{
       // Web Administration API
       "protocol": "api",
+      "tag": "api-in",
       "listen": "127.0.0.1",
       "port": 9090,
       "token": "YOUR_SECRET_TOKEN",
@@ -1979,6 +1981,7 @@ fn cmd_migrate(config_path: &std::path::Path) -> Result<()> {
         
         let mut ostp_inbound = serde_json::json!({
             "protocol": "ostp",
+            "tag": "ostp-in",
             "listen": host,
             "port": port,
             "users": users
@@ -1993,6 +1996,7 @@ fn cmd_migrate(config_path: &std::path::Path) -> Result<()> {
         if let Some(api) = raw_json.get("api") {
             let mut api_inbound = api.clone();
             api_inbound["protocol"] = serde_json::json!("api");
+            api_inbound["tag"] = serde_json::json!("api-in");
             let bind = api.get("bind").and_then(|b| b.as_str()).unwrap_or("127.0.0.1:9090");
             let parts: Vec<&str> = bind.split(':').collect();
             api_inbound["listen"] = serde_json::json!(parts.get(0).unwrap_or(&"127.0.0.1"));

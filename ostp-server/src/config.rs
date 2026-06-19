@@ -2,7 +2,7 @@ use serde::{Deserialize, Serialize};
 use crate::{api::ApiConfig, fallback::FallbackConfig, outbound::OutboundConfig, dns::DnsConfig};
 
 #[derive(Debug, Deserialize, Serialize, Clone)]
-#[serde(tag = "type", rename_all = "snake_case")]
+#[serde(tag = "protocol", rename_all = "snake_case")]
 pub enum ServerInbound {
     Ostp {
         tag: String,
@@ -82,8 +82,9 @@ pub struct TransportConfigRaw {
 }
 
 #[derive(Debug, Deserialize, Serialize, Clone)]
-#[serde(tag = "type", rename_all = "snake_case")]
+#[serde(tag = "protocol", rename_all = "snake_case")]
 pub enum ServerOutbound {
+    #[serde(rename = "socks5")]
     Socks {
         tag: String,
         server: String,
