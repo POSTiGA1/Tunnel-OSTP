@@ -136,13 +136,17 @@ impl DnsPacket {
                 qtype: rtype.clone(),
                 qclass: 1, // IN
             }],
-            answers: vec![DnsAnswer {
-                name: name.to_string(),
-                rtype,
-                rclass: 1,
-                ttl: 0, // No caching
-                rdata,
-            }],
+            answers: if rdata.is_empty() {
+                vec![]
+            } else {
+                vec![DnsAnswer {
+                    name: name.to_string(),
+                    rtype,
+                    rclass: 1,
+                    ttl: 0, // No caching
+                    rdata,
+                }]
+            },
         }
     }
 

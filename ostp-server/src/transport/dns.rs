@@ -168,9 +168,17 @@ async fn handle_dns_query(
     if dns_req.questions.is_empty() { return; }
     let query = &dns_req.questions[0];
 
-    // Must be TXT query for our subdomain
-    if query.qtype != DnsRecordType::TXT && query.qtype != DnsRecordType::NULL { return; }
-    if !query.name.ends_with(&base_domain) { return; }
+    if query.qtype != DnsRecordType::TXT && query.qtype != DnsRecordType::NULL {
+        let resp = build_dns_response(&dns_req, &query.name, query.qtype.clone(), vec![]);
+        let _ = socket.send_to(&resp, peer).await;
+        return;
+    }
+    if !query.name.ends_with(&base_domain) {
+        let mut resp = DnsPacket::new_response(dns_req.id, &query.name, query.qtype.clone(), vec![]);
+        resp.flags = 0x8183; // NXDOMAIN
+        let _ = socket.send_to(&resp.encode(), peer).await;
+        return;
+    }
 
     // Strip base domain and labels separator to get base32 subdomain
     let subdomain = {
