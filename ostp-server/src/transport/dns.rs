@@ -224,6 +224,8 @@ async fn handle_dns_query(
     let frag_idx = raw[11];
     let payload = raw[HEADER_LEN..].to_vec();
 
+    let fake_peer = client_id_to_fake_addr(&client_id);
+
     tracing::trace!("DNS: client={} msg={} frag={}/{} payload={}B",
         hex::encode(&client_id.0), msg_id, frag_idx + 1, total_frags, payload.len());
 
@@ -263,16 +265,16 @@ async fn handle_dns_query(
     };
 
     // ── Create per-query response channel ────────────────────────────────────
-    // We use the peer SocketAddr as the routing key in tcp_map.
+    // We use the stable fake_peer as the routing key in tcp_map.
     // For each query we create a fresh one-shot channel.
     let (resp_tx, mut resp_rx) = mpsc::channel::<Bytes>(MAX_RESPONSE_PACKETS);
-    tcp_map.write().await.insert(peer, resp_tx);
+    tcp_map.write().await.insert(fake_peer, resp_tx.clone());
 
     // ── Forward complete OSTP packet to dispatcher ────────────────────────────
     if let Some(ostp_pkt) = complete_packet {
         tracing::debug!("DNS: forwarding {}B OSTP packet from client={} to dispatcher",
             ostp_pkt.len(), hex::encode(&client_id.0));
-        let _ = udp_tx.send((Bytes::from(ostp_pkt), peer)).await;
+        let _ = udp_tx.send((Bytes::from(ostp_pkt), fake_peer)).await;
     }
 
     // ── Wait for OSTP response(s) ─────────────────────────────────────────────
@@ -295,7 +297,15 @@ async fn handle_dns_query(
         }
     }
 
-    tcp_map.write().await.remove(&peer);
+    // Only remove if it's still our channel
+    {
+        let mut map = tcp_map.write().await;
+        if let Some(existing_tx) = map.get(&fake_peer) {
+            if existing_tx.same_channel(&resp_tx) {
+                map.remove(&fake_peer);
+            }
+        }
+    }
 
     // ── Build DNS TXT response ────────────────────────────────────────────────
     // Bundle all response packets as length-prefixed data in TXT rdata:
@@ -324,4 +334,13 @@ fn build_dns_response(
 ) -> Vec<u8> {
     let resp = DnsPacket::new_response(req.id, name, rtype, rdata);
     resp.encode()
+}
+
+fn client_id_to_fake_addr(client_id: &ClientId) -> SocketAddr {
+    let mut ip_bytes = [10, 255, 0, 0];
+    ip_bytes[2] = client_id.0[0];
+    ip_bytes[3] = client_id.0[1];
+    let port = u16::from_be_bytes([client_id.0[2], client_id.0[3]]);
+    let port = if port == 0 { 1 } else { port };
+    SocketAddr::from((ip_bytes, port))
 }
