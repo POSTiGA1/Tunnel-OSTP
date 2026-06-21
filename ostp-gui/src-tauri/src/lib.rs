@@ -40,7 +40,7 @@ struct UIMetrics {
 #[serde(tag = "type", rename_all = "lowercase")]
 enum HelperMsg {
     Status { value: u8 },
-    Log { message: String },
+    Log { #[allow(dead_code)] message: String },
     Metrics { bytes_sent: u64, bytes_recv: u64, rtt_ms: u32 },
     Error { message: String },
 }
@@ -59,6 +59,7 @@ struct HelperState {
     pipe_state: Arc<Mutex<HelperPipeState>>,
     cmd_tx: tokio::sync::mpsc::Sender<String>,
     token: String,
+    #[allow(dead_code)]
     port: u16,
 }
 
