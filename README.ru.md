@@ -142,8 +142,13 @@ irm https://raw.githubusercontent.com/ospab/ostp/master/scripts/install.ps1 | ie
 
 ## Сборка из исходников
 
+### Зависимости для сборки
+
+- Rust 1.70+
+- Go 1.20+ (необходимо для сборки встроенного DNS-туннеля dnstt)
+
+> **Благодарности:** Этот проект использует [dnstt](https://www.bamsoftware.com/software/dnstt/) от Bamsoftware для обеспечения устойчивого туннелирования поверх DNS. Бинарники dnstt автоматически компилируются и встраиваются в ядро OSTP.
 ```bash
-# Требования: Rust 1.75+
 cargo build --release
 
 # Кросс-компиляция для Linux

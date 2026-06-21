@@ -22,6 +22,7 @@ By contributing to this project, you agree to abide by our code of conduct and l
 To build and test OSTP locally, you will need:
 
 *   **Rust Toolchain**: Install via [rustup](https://rustup.rs/) (stable channel).
+*   **Go 1.20+**: Required to compile the embedded `dnstt` tunnel binaries.
 *   **Node.js (18+) & npm**: Required to compile Tauri GUI resources.
 *   **Git**: For version control.
 

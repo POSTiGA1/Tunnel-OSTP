@@ -1464,8 +1464,15 @@ async fn run_app() -> Result<()> {
     if let Some(ref mode_str) = args.init {
         let is_server = mode_str == "server";
         let key = generate_secure_key("hex");
-        let dns_pub = generate_secure_key("base64");
-        let dns_priv = generate_secure_key("base64");
+        
+        let (dns_priv, dns_pub) = if is_server {
+            ostp_core::dnstt::generate_keypair().unwrap_or_else(|e| {
+                tracing::warn!("Failed to generate dnstt keys: {}. Using placeholders.", e);
+                ("YOUR_PRIVKEY".to_string(), "YOUR_PUBKEY".to_string())
+            })
+        } else {
+            ("".to_string(), "".to_string())
+        };
                 let content = if is_server {
             format!(r#"{{
   // OSTP Server Configuration

@@ -1,14 +1,22 @@
 use anyhow::Result;
 use bytes::Bytes;
-use std::collections::HashMap;
-use std::net::IpAddr;
+use std::collections::{HashMap, VecDeque};
+use std::net::{IpAddr, SocketAddr};
+use std::sync::Arc;
 
 use dispatcher::{DispatchOutcome, Dispatcher};
 use ostp_core::relay::RelayMessage;
 use signal::wait_for_shutdown_signal;
 use tokio::net::UdpSocket;
-use tokio::sync::mpsc;
+use tokio::sync::{mpsc, RwLock};
 use tokio::time::{interval, Duration, Instant};
+
+use std::sync::OnceLock;
+
+pub fn dns_queue() -> &'static Arc<RwLock<HashMap<SocketAddr, VecDeque<Bytes>>>> {
+    static DNS_QUEUE: OnceLock<Arc<RwLock<HashMap<SocketAddr, VecDeque<Bytes>>>>> = OnceLock::new();
+    DNS_QUEUE.get_or_init(|| Arc::new(RwLock::new(HashMap::new())))
+}
 
 mod dispatcher;
 pub mod outbound;
@@ -120,6 +128,29 @@ pub async fn run_server(
 
     let dispatcher = Dispatcher::new(protocol_config, shared_keys.clone());
 
+    // Launch dnstt-server if configured
+    let _dnstt_guard = if let Some(dns) = &dns_transport {
+        let pub_ip = server_public_ip.clone().unwrap_or_else(|| {
+            let p = config_path.as_ref()
+                .and_then(|p| p.parent())
+                .unwrap_or_else(|| std::path::Path::new("."))
+                .join(".ostp_public_ip");
+            std::fs::read_to_string(p).unwrap_or_else(|_| "127.0.0.1".to_string()).trim().to_string()
+        });
+        
+        match ostp_core::dnstt::spawn_server(&pub_ip, 50000, &dns.privkey, debug) {
+            Ok(guard) => {
+                tracing::info!("dnstt-server initialized on {}:53 with pubkey: {}", pub_ip, dns.pubkey);
+                Some(guard)
+            }
+            Err(e) => {
+                tracing::error!("Failed to initialize dnstt-server: {}", e);
+                None
+            }
+        }
+    } else {
+        None
+    };
     // Background config hot-reloader for access keys
     let shared_keys_clone = shared_keys.clone();
     let user_stats_clone = dispatcher.user_stats_ref();
@@ -455,17 +486,9 @@ async fn run_server_loop(
 
     if let Some(dns_cfg) = dns_transport {
         if dns_cfg.enabled {
-            let dns_udp_tx = udp_tx.clone();
-            let dns_tcp_map = tcp_map.clone();
-            let dns_ui_tx = ui_event_tx.clone();
-            tokio::spawn(async move {
-                crate::transport::dns::start_dns_transport_server(
-                    dns_cfg,
-                    dns_udp_tx,
-                    dns_tcp_map,
-                    dns_ui_tx,
-                ).await;
-            });
+            // DNS transport is now handled entirely by dnstt-server launched at startup.
+            // We just trace it here.
+            tracing::info!("DNS Transport via dnstt is enabled");
         }
     }
 
@@ -585,7 +608,11 @@ async fn handle_udp_packet(
             if !peer_available.get(&peer_ip).copied().unwrap_or(false) {
                 peer_available.insert(peer_ip, true);
                 let is_tcp = tcp_map.read().await.contains_key(&peer_addr);
-                let proto = if is_tcp { "TCP (UoT)" } else { "UDP" };
+                let is_dns = match peer_ip {
+                    std::net::IpAddr::V4(v4) => v4.octets()[0] == 10 && v4.octets()[1] == 255,
+                    _ => false,
+                };
+                let proto = if is_dns { "DNS-tunnel" } else if is_tcp { "TCP (UoT)" } else { "UDP" };
                 let _ = ui_event_tx.send(UiEvent::Log(format!("Client {peer_ip} connected via {proto}")));
             }
 
@@ -609,7 +636,21 @@ async fn handle_udp_packet(
                     }
                 }
                 if !sent_tcp {
-                    let _ = socket.send_to(&resp, peer_addr).await?;
+                    // Check if this is a DNS tunnel virtual IP (10.255.x.x)
+                    let is_dns_ip = match peer_addr.ip() {
+                        std::net::IpAddr::V4(v4) => v4.octets()[0] == 10 && v4.octets()[1] == 255,
+                        _ => false,
+                    };
+                    if is_dns_ip {
+                        // Queue the packet for the next DNS poll query
+                        let mut dq = crate::dns_queue().write().await;
+                        let queue = dq.entry(peer_addr).or_insert_with(std::collections::VecDeque::new);
+                        if queue.len() < 256 {
+                            queue.push_back(resp);
+                        }
+                    } else {
+                        let _ = socket.send_to(&resp, peer_addr).await?;
+                    }
                 }
                 let _ = ui_event_tx.send(UiEvent::Tx { peer: peer_ip, bytes: resp_len });
             }
@@ -635,6 +676,9 @@ async fn handle_udp_packet(
                     tcp_map,
                 ).await?;
             }
+        }
+        Ok(DispatchOutcome::Ignored) => {
+            // Handshake replay, safely ignored
         }
         Err(err) => {
             let _ = ui_event_tx.send(UiEvent::Log(format!("Protocol error for {peer}: {err}")));
@@ -672,7 +716,19 @@ async fn handle_tick(
             }
         }
         if !sent_tcp {
-            let _ = socket.send_to(&frame, peer_addr).await?;
+            let is_dns_ip = match peer_addr.ip() {
+                std::net::IpAddr::V4(v4) => v4.octets()[0] == 10 && v4.octets()[1] == 255,
+                _ => false,
+            };
+            if is_dns_ip {
+                let mut dq = crate::dns_queue().write().await;
+                let queue = dq.entry(peer_addr).or_insert_with(std::collections::VecDeque::new);
+                if queue.len() < 256 {
+                    queue.push_back(frame);
+                }
+            } else {
+                let _ = socket.send_to(&frame, peer_addr).await;
+            }
         }
     }
     for sid in dropped_sessions {

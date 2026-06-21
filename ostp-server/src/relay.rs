@@ -247,18 +247,58 @@ pub async fn send_relay_to_stream(
     tcp_map: &std::sync::Arc<tokio::sync::RwLock<HashMap<std::net::SocketAddr, tokio::sync::mpsc::Sender<Bytes>>>>,
 ) -> Result<()> {
     let payload = Bytes::from(msg.encode());
-    if let Some((frame, peer_addr)) = dispatcher.outbound_to_session(session_id, stream_id, payload)? {
+    for (frame, peer_addr) in dispatcher.outbound_to_session(session_id, stream_id, payload)? {
         let response_len = frame.len();
         let mut sent_tcp = false;
         {
             let map = tcp_map.read().await;
             if let Some(tx) = map.get(&peer_addr) {
-                let _ = tx.try_send(frame.clone());
-                sent_tcp = true;
+                // Use a bounded async send with a generous timeout instead of try_send.
+                // try_send silently drops frames when the channel is full (common with
+                // bursty traffic), causing spurious retransmits and throughput collapse.
+                // 200ms matches roughly one RTO — if we can't deliver in that window
+                // the receiver is definitely stalled and we should log it.
+                let tx = tx.clone();
+                let frame_clone = frame.clone();
+                match tokio::time::timeout(
+                    std::time::Duration::from_millis(200),
+                    tx.send(frame_clone),
+                ).await {
+                    Ok(Ok(())) => { sent_tcp = true; }
+                    Ok(Err(_)) => {
+                        tracing::warn!(
+                            "relay: TCP channel closed for peer={}, frame dropped (session={}, stream={})",
+                            peer_addr, session_id, stream_id
+                        );
+                        sent_tcp = true; // channel gone, don't fall through to UDP
+                    }
+                    Err(_timeout) => {
+                        tracing::warn!(
+                            "relay: TCP channel full / timeout for peer={}, falling back to UDP (session={}, stream={})",
+                            peer_addr, session_id, stream_id
+                        );
+                        // sent_tcp stays false → will fall through to UDP send below
+                    }
+                }
             }
         }
         if !sent_tcp {
-            let _ = socket.send_to(&frame, peer_addr).await?;
+            let is_dns_ip = match peer_addr.ip() {
+                std::net::IpAddr::V4(v4) => v4.octets()[0] == 10 && v4.octets()[1] == 255,
+                _ => false,
+            };
+            if is_dns_ip {
+                // DNS virtual IP — queue for next poll
+                let mut dq = crate::dns_queue().write().await;
+                let queue = dq.entry(peer_addr).or_insert_with(std::collections::VecDeque::new);
+                if queue.len() < 256 {
+                    queue.push_back(frame);
+                } else {
+                    tracing::warn!("relay: dns_queue full for peer={}, frame dropped", peer_addr);
+                }
+            } else {
+                let _ = socket.send_to(&frame, peer_addr).await;
+            }
         }
         let _ = ui_event_tx.send(UiEvent::Tx {
             peer: peer_addr.ip(),
@@ -267,3 +307,4 @@ pub async fn send_relay_to_stream(
     }
     Ok(())
 }
+
