@@ -12,12 +12,13 @@ use portable_atomic::AtomicU64;
 // const MAX_SESSIONS removed because dynamic limit is used
 
 pub enum DispatchOutcome {
-    Unauthorized(String),
     Accepted {
         responses: Vec<Bytes>,
         app_payloads: Vec<(u32, u16, Bytes)>, // session_id, stream_id, payload
         peer_addr: SocketAddr,
     },
+    Unauthorized(String),
+    Ignored,
 }
 
 /// Per-user traffic statistics.
@@ -83,7 +84,6 @@ pub struct Dispatcher {
     last_token_regen: std::time::Instant,
 }
 
-#[allow(dead_code)]
 impl Dispatcher {
     pub fn new(machine_config: ProtocolConfig, access_keys: Arc<RwLock<HashMap<String, crate::api::UserMeta>>>) -> Self {
         let mut initial_stats = HashMap::new();
@@ -108,6 +108,7 @@ impl Dispatcher {
     }
 
     /// Snapshot all user stats for API responses.
+    #[allow(dead_code)]
     pub fn snapshot_all_users(&self) -> Vec<UserStatsSnapshot> {
         let stats = self.user_stats.read().unwrap_or_else(|e| e.into_inner());
         let mut online_keys: HashMap<String, std::time::Instant> = HashMap::new();
@@ -161,6 +162,7 @@ impl Dispatcher {
     }
 
     /// Set traffic limit for a user.
+    #[allow(dead_code)]
     pub fn set_user_limit(&self, key: &str, limit: Option<u64>) {
         let mut stats = self.user_stats.write().unwrap_or_else(|e| e.into_inner());
         let entry = stats.entry(key.to_string())
@@ -176,6 +178,7 @@ impl Dispatcher {
     }
 
     /// Active session count.
+    #[allow(dead_code)]
     pub fn active_sessions(&self) -> usize {
         self.peer_machines.len()
     }
@@ -376,15 +379,19 @@ impl Dispatcher {
                             continue;
                         }
 
-                        if !self.replay_cache.contains_key(&payload.to_vec()) {
-                            if self.replay_cache.len() >= 50_000 {
-                                tracing::warn!("Replay cache full (100000 entries), rejecting handshake from {}", peer);
-                                return Ok(DispatchOutcome::Unauthorized("replay cache full".to_string()));
-                            }
+                        if self.replay_cache.contains_key(&payload.to_vec()) {
+                            tracing::debug!("Replay detected from {}, ignoring", peer);
+                            return Ok(DispatchOutcome::Ignored);
+                        }
 
-                            self.replay_cache.insert(payload.to_vec(), ts);
+                        if self.replay_cache.len() >= 50_000 {
+                            tracing::warn!("Replay cache full (50000 entries), rejecting handshake from {}", peer);
+                            return Ok(DispatchOutcome::Unauthorized("replay cache full".to_string()));
+                        }
 
-                            machine.set_session_keys(candidate_session_id, secrets.obfuscation_key);
+                        self.replay_cache.insert(payload.to_vec(), ts);
+
+                        machine.set_session_keys(candidate_session_id, secrets.obfuscation_key);
 
                             // Track per-user connection count
                             let user_stats = self.get_or_create_user_stats(&candidate_key);
@@ -414,7 +421,6 @@ impl Dispatcher {
                                 app_payloads: Vec::new(),
                                 peer_addr: peer,
                             });
-                        }
                     }
                 }
             }
@@ -429,23 +435,35 @@ impl Dispatcher {
         Ok(DispatchOutcome::Unauthorized(reason))
     }
 
-    pub fn outbound_to_session(&mut self, session_id: u32, stream_id: u16, payload: Bytes) -> Result<Option<(Bytes, SocketAddr)>> {
+    pub fn outbound_to_session(&mut self, session_id: u32, stream_id: u16, payload: Bytes) -> Result<Vec<(Bytes, SocketAddr)>> {
         let peer_state = if let Some(existing) = self.peer_machines.get_mut(&session_id) {
             existing
         } else {
-            return Ok(None);
+            return Ok(Vec::new());
         };
 
         let addr = peer_state.last_addr;
         let key = peer_state.access_key.clone();
-        match peer_state.machine.on_event(OstpEvent::Outbound(stream_id, payload))? {
-            ProtocolAction::SendDatagram(frame) => {
-                // Track outbound bytes per user
-                track_user_bytes_down(&self.user_stats, &self.access_keys, &key, frame.len() as u64);
-                Ok(Some((frame, addr)))
+        let action = peer_state.machine.on_event(OstpEvent::Outbound(stream_id, payload))?;
+        
+        let mut frames = Vec::new();
+        let mut queue = vec![action];
+        while let Some(current) = queue.pop() {
+            match current {
+                ProtocolAction::Multiple(list) => {
+                    for item in list {
+                        queue.push(item);
+                    }
+                }
+                ProtocolAction::SendDatagram(frame) => {
+                    track_user_bytes_down(&self.user_stats, &self.access_keys, &key, frame.len() as u64);
+                    frames.push((frame, addr));
+                }
+                _ => {}
             }
-            _ => Ok(None),
         }
+        
+        Ok(frames)
     }
 
     pub fn on_tick(&mut self) -> (Vec<(Bytes, SocketAddr)>, Vec<u32>) {
@@ -459,7 +477,7 @@ impl Dispatcher {
         let mut frames = Vec::new();
         let mut expired = Vec::new();
         let now = std::time::Instant::now();
-        let timeout_dur = std::time::Duration::from_secs(600); // 10 minute session timeout (mobile NAT can be up to 5-10min)
+        let timeout_dur = std::time::Duration::from_secs(600); // 10-minute session timeout (mobile NAT mappings can live 5–10 min)
 
         // Gather expired or invalid sessions
         for (&sid, peer_state) in &self.peer_machines {
@@ -477,7 +495,7 @@ impl Dispatcher {
                 let key_valid = self.access_keys.read().unwrap_or_else(|e| e.into_inner()).contains_key(&ps.access_key);
                 let user_stats = self.get_or_create_user_stats(&ps.access_key);
                 if now.duration_since(ps.last_seen) > timeout_dur {
-                    "inactive >5min"
+                    "inactive >10min"
                 } else if !key_valid {
                     "key deleted"
                 } else if user_stats.is_over_limit() {

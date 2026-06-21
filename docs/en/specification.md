@@ -94,7 +94,7 @@ OSTP executes a Noise Protocol Framework exchange utilizing the `Noise_NNpsk0_25
 2.  The PSK is integrated into the state at pattern position zero, authorizing and encrypting the very first handshaking datagram.
 3.  Ephemeral Curve25519 key exchange is evaluated to synthesize autonomous symmetric keys for subsequent read/write channels.
 
-The initial handshake payload includes a Unix timestamp to mitigate replay attacks. The server enforces a strict ±30-second synchronization window.
+The initial handshake payload includes a Unix timestamp to mitigate replay attacks. The server enforces a ±300-second synchronization window to accommodate clock drift and mobile roaming scenarios.
 
 ---
 

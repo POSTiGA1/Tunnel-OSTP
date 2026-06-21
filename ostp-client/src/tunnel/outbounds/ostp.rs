@@ -32,6 +32,13 @@ fn make_initiator_config(
         "dns" => 1100,
         _ => 1350,
     };
+    // For DNS transport: use larger ack_delay and rto to match DNS round-trip latency
+    // (each DNS query + reply takes 300-800ms end-to-end through Cloudflare).
+    // For UDP: minimize ack_delay to 1ms (ACK asap) and let CC drive the RTO.
+    let (ack_delay_ms, rto_ms) = match transport_cfg.r#type.as_str() {
+        "dns" => (50, 1500),
+        _ => (1, 200),
+    };
 
     ProtocolConfig {
         role: ostp_core::NoiseRole::Initiator,
@@ -43,8 +50,8 @@ fn make_initiator_config(
         obfuscation_key: secrets.obfuscation_key,
         max_reorder: 16384,
         max_reorder_buffer: 8192,
-        ack_delay_ms: 5,
-        rto_ms: 100,
+        ack_delay_ms,
+        rto_ms,
         max_retries: 8,
         max_sent_history: 32768,
         handshake_pad_min: secrets.handshake_pad_min,
@@ -180,12 +187,25 @@ pub async fn dial_tcp(
         }
 
         // ── Main bidirectional data forwarding loop ───────────────────────
+        // Backpressure: we track how many frames are in-flight vs the congestion
+        // window. When the window is full we stop reading from the TCP stream
+        // (the kernel buffers it) until the remote ACKs enough frames.
+        // This prevents overrunning the sender's sent_history and collapsing cwnd.
         let mut buf = [0u8; 65535];
         let mut udp_buf = [0u8; 65535];
 
         loop {
+            // Compute adaptive tick interval:
+            //   - If there is a pending ACK: tick = ack_delay (flush it quickly)
+            //   - Otherwise: tick = rto/4 (check retransmits without busy-spinning)
+            //   Floor at 1ms, ceiling at 50ms.
+            let tick_ms = (machine.rto().as_millis() / 4).clamp(1, 50) as u64;
+
+            let can_send = machine.in_flight_count() < machine.cwnd_packets().max(4);
+
             tokio::select! {
-                Ok(n) = server_stream.read(&mut buf) => {
+                // Only read from the application TCP stream when cwnd allows
+                Ok(n) = server_stream.read(&mut buf), if can_send => {
                     if n == 0 { break; }
                     let data_msg = ostp_core::relay::RelayMessage::Data(buf[..n].to_vec());
                     let encoded = data_msg.encode();
@@ -198,7 +218,7 @@ pub async fn dial_tcp(
                         handle_action(action, &transport, &mut server_stream).await;
                     }
                 }
-                _ = tokio::time::sleep(std::time::Duration::from_millis(10)) => {
+                _ = tokio::time::sleep(std::time::Duration::from_millis(tick_ms)) => {
                     if let Ok(action) = machine.on_event(OstpEvent::Tick) {
                         handle_action(action, &transport, &mut server_stream).await;
                     }
@@ -299,15 +319,62 @@ async fn make_transport(
     server: &str,
     port: u16,
 ) -> Result<crate::transport::Transport> {
+    let debug = tracing::enabled!(tracing::Level::DEBUG);
     match transport_cfg.r#type.as_str() {
         "dns" => {
             let domain = transport_cfg.domain.clone()
                 .unwrap_or_else(|| "tunnel.example.com".to_string());
+            let pubkey = transport_cfg.pubkey.clone()
+                .unwrap_or_else(|| "".to_string());
             let resolver = transport_cfg.resolver.clone()
                 .unwrap_or_else(|| server.to_string());
-            let transport = crate::transport::dns::start_dns_transport(domain, resolver, transport_cfg.pubkey.clone()).await
-                .map_err(|e| anyhow::anyhow!(e))?;
-            Ok(transport)
+            let resolver_with_port = if resolver.contains(':') {
+                resolver.clone()
+            } else {
+                format!("{}:53", resolver)
+            };
+                
+            let (local_port, process) = ostp_core::dnstt::spawn_client(&pubkey, &domain, &resolver_with_port, debug)?;
+            
+            // Wait for dnstt-client to start its local TCP listener
+            tokio::time::sleep(tokio::time::Duration::from_millis(100)).await;
+            
+            // Connect TCP to the local dnstt-client port
+            let stream = tokio::net::TcpStream::connect(("127.0.0.1", local_port)).await?;
+            let (mut rh, mut wh) = stream.into_split();
+            
+            let (tx_send, mut tx_recv) = tokio::sync::mpsc::channel::<bytes::Bytes>(1024);
+            let (rx_send, rx_recv) = tokio::sync::mpsc::channel::<bytes::Bytes>(1024);
+            
+            // Writer task
+            tokio::spawn(async move {
+                use tokio::io::AsyncWriteExt;
+                while let Some(data) = tx_recv.recv().await {
+                    let len = data.len() as u16;
+                    if wh.write_u16(len).await.is_err() { break; }
+                    if wh.write_all(&data).await.is_err() { break; }
+                }
+            });
+            
+            // Reader task
+            tokio::spawn(async move {
+                use tokio::io::AsyncReadExt;
+                loop {
+                    let len = match rh.read_u16().await {
+                        Ok(l) => l,
+                        Err(_) => break,
+                    };
+                    let mut buf = vec![0u8; len as usize];
+                    if rh.read_exact(&mut buf).await.is_err() { break; }
+                    if rx_send.send(bytes::Bytes::from(buf)).await.is_err() { break; }
+                }
+            });
+            
+            Ok(crate::transport::Transport::Dnstt {
+                tx: tx_send,
+                rx: std::sync::Arc::new(tokio::sync::Mutex::new(rx_recv)),
+                _guard: std::sync::Arc::new(tokio::sync::Mutex::new(process)),
+            })
         }
         _ => {
             let udp = tokio::net::UdpSocket::bind("0.0.0.0:0").await?;

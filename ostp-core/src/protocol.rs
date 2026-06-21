@@ -2,7 +2,7 @@ use bytes::Bytes;
 use rand::Rng;
 use sha2::{Digest, Sha256};
 use thiserror::Error;
-use std::collections::{BTreeMap, VecDeque};
+use std::collections::BTreeMap;
 use std::time::{Duration, Instant};
 
 use crate::congestion::CongestionController;
@@ -75,7 +75,7 @@ pub struct ProtocolMachine {
     send_nonce: u64,
     expected_recv_nonce: u64,
     reorder_buffer: BTreeMap<u64, ProtocolAction>,
-    sent_history: VecDeque<SentFrame>,
+    sent_history: BTreeMap<u64, SentFrame>,
     session_id: u32,
     handshake_payload: Vec<u8>,
     padder: AdaptivePadder,
@@ -83,7 +83,8 @@ pub struct ProtocolMachine {
     max_reorder: u64,
     max_reorder_buffer: usize,
     ack_delay: Duration,
-    rto: Duration,
+    /// Initial/fallback RTO from config (overridden by cc.rto() after first RTT sample)
+    rto_initial: Duration,
     max_retries: u8,
     max_sent_history: usize,
     ack_pending: bool,
@@ -100,11 +101,11 @@ pub struct ProtocolMachine {
         /// Key-derived handshake padding range
     handshake_pad_min: usize,
     handshake_pad_max: usize,
-    _mtu: usize,
 }
 
 #[derive(Debug, Clone)]
 struct SentFrame {
+    #[allow(dead_code)] // mirrored in BTreeMap key; kept for Debug output
     nonce: u64,
     bytes: Bytes,
     last_sent: Instant,
@@ -128,7 +129,7 @@ impl ProtocolMachine {
             send_nonce: 0,
             expected_recv_nonce: 0,
             reorder_buffer: BTreeMap::new(),
-            sent_history: VecDeque::with_capacity(config.max_sent_history.max(1)),
+            sent_history: BTreeMap::new(),
             session_id: config.session_id,
             handshake_payload: config.handshake_payload,
             padder: AdaptivePadder::new(config.mtu, config.max_padding, config.padding_strategy),
@@ -136,7 +137,7 @@ impl ProtocolMachine {
             max_reorder: config.max_reorder.max(1),
             max_reorder_buffer: config.max_reorder_buffer.max(1),
             ack_delay: Duration::from_millis(config.ack_delay_ms.max(1)),
-            rto: Duration::from_millis(config.rto_ms.max(1)),
+            rto_initial: Duration::from_millis(config.rto_ms.max(1)),
             max_retries: config.max_retries.max(1),
             max_sent_history: config.max_sent_history.max(1),
             ack_pending: false,
@@ -146,18 +147,23 @@ impl ProtocolMachine {
             cc: CongestionController::new(config.mtu as u64),
             handshake_pad_min: config.handshake_pad_min.max(8),
             handshake_pad_max: config.handshake_pad_max.max(config.handshake_pad_min + 16),
-            _mtu: config.mtu,
         })
     }
 
     pub fn in_flight_count(&self) -> usize {
         // COUNT ONLY retransmittable Data frames — control frames (Ack/Nack) must not
         // contribute to this counter or they will trigger false backpressure.
-        self.sent_history.iter().filter(|f| f.is_retransmittable).count()
+        self.sent_history.values().filter(|f| f.is_retransmittable).count()
     }
 
     pub fn cwnd_packets(&self) -> usize {
         self.cc.cwnd_packets() as usize
+    }
+
+    /// Returns the current adaptive RTO (from congestion controller after first RTT sample,
+    /// falls back to the config-specified initial value before any ACK is received).
+    pub fn rto(&self) -> Duration {
+        self.cc.rto()
     }
 
     pub fn on_send(&mut self, bytes: u64) {
@@ -207,13 +213,12 @@ impl ProtocolMachine {
                     .map(ProtocolAction::SendDatagram)
             }
             (OstpState::Closing, OstpEvent::Inbound(raw)) => {
-                // Process final in-flight packets to prevent data loss during teardown.
-                // The remote may still have data or ACKs in transit when we initiated Close.
-                let result = self.handle_inbound(raw);
-                self.state = OstpState::Closed;
-                result
+                // The remote may still have data or ACKs in transit.
+                // handle_inbound transitions to Closed when it receives a Close frame.
+                self.handle_inbound(raw)
             }
             (OstpState::Established, OstpEvent::Tick) => self.handle_tick(),
+            (OstpState::Closing, OstpEvent::Tick) => self.handle_tick(),
             (OstpState::Closed, _) => Ok(ProtocolAction::Noop),
             (_, OstpEvent::Close) => {
                 self.state = OstpState::Closed;
@@ -408,10 +413,10 @@ impl ProtocolMachine {
                 tracing::debug!("Frame nonce={} arrived too late after gap recovery, dropping", nonce);
             }
 
-            // Rate-limited NACK: send at most once per 30ms to prevent retransmit storms.
-            // Under high load with natural UDP reordering, sending a NACK per packet
-            // causes exponential retransmit explosion that saturates the channel.
-            let nack_cooldown = Duration::from_millis(30);
+            // Rate-limited NACK: send at most once per (rto/2) to prevent retransmit storms.
+            // Using rto/2 means we send a NACK before the sender's timer fires, prompting
+            // fast retransmit without flooding. Floor at 10ms to handle very low-RTT links.
+            let nack_cooldown = (self.cc.rto() / 2).max(Duration::from_millis(10));
             if self.last_nack_sent.elapsed() >= nack_cooldown {
                 self.last_nack_sent = Instant::now();
                 let nack_payload = self.expected_recv_nonce.to_be_bytes();
@@ -525,36 +530,39 @@ impl ProtocolMachine {
         }
 
         let now = Instant::now();
-        let base_rto_ms = self.rto.as_millis().max(1) as u64;
+        // Use the adaptive RTO from the congestion controller (RFC 6298 SRTT + 4*RTTVAR).
+        // Falls back to rto_initial before the first ACK is received.
+        let base_rto = self.cc.rto().max(self.rto_initial);
+        let base_rto_ms = base_rto.as_millis().max(1) as u64;
 
         // ── Zombie frame eviction ────────────────────────────────────
         // Evict frames that exceeded max_retries + 2 grace retries.
-        // Shorter grace period than before (was +4) to free memory faster
-        // after high-throughput bursts.
         let grace = self.max_retries.saturating_add(2);
         let before = self.sent_history.len();
-        self.sent_history.retain(|f| !f.is_retransmittable || f.retries <= grace);
+        self.sent_history.retain(|_, f| !f.is_retransmittable || f.retries <= grace);
         let evicted = before - self.sent_history.len();
         if evicted > 0 {
             tracing::debug!("Evicted {} zombie frames from sent_history (remaining={})", evicted, self.sent_history.len());
         }
 
         // ── Retransmit expired frames ────────────────────────────────
-        // Limit retransmits per tick to prevent bandwidth saturation
+        // Backoff starts from retry #0 (immediately effective):
+        //   effective_rto = base_rto * 2^retries, capped at 2^6 = 64×
+        // This ensures we do not flood with retransmits on the first few losses
+        // while still recovering quickly on a transient single loss.
         let mut retransmit_budget: usize = self.cc.retransmit_budget();
-        for frame in self.sent_history.iter_mut() {
+        for frame in self.sent_history.values_mut() {
             if !frame.is_retransmittable {
                 continue;
             }
 
-            let retry_over = frame.retries.saturating_sub(self.max_retries);
-            let backoff_factor = 1u64 << retry_over.min(6);
+            let backoff_factor = 1u64 << (frame.retries as u64).min(6);
             let effective_rto = Duration::from_millis(base_rto_ms.saturating_mul(backoff_factor));
 
             if now.duration_since(frame.last_sent) >= effective_rto {
                 frame.last_sent = now;
                 frame.retries = frame.retries.saturating_add(1);
-                
+
                 if retransmit_budget > 0 {
                     actions.push(ProtocolAction::SendDatagram(frame.bytes.clone()));
                     retransmit_budget -= 1;
@@ -654,7 +662,7 @@ impl ProtocolMachine {
     }
 
     fn lookup_sent_frame(&mut self, nonce: u64) -> Option<Bytes> {
-        if let Some(frame) = self.sent_history.iter_mut().rev().find(|f| f.nonce == nonce) {
+        if let Some(frame) = self.sent_history.get_mut(&nonce) {
             frame.last_sent = Instant::now();
             frame.retries = frame.retries.saturating_add(1);
             return Some(frame.bytes.clone());
@@ -666,7 +674,7 @@ impl ProtocolMachine {
         if is_retransmittable {
             self.cc.on_send(bytes.len() as u64);
         }
-        self.sent_history.push_back(SentFrame {
+        self.sent_history.insert(nonce, SentFrame {
             nonce,
             bytes,
             last_sent: Instant::now(),
@@ -679,7 +687,7 @@ impl ProtocolMachine {
                 overflow, self.max_sent_history
             );
             while self.sent_history.len() > self.max_sent_history {
-                self.sent_history.pop_front();
+                self.sent_history.pop_first();
             }
         }
     }
@@ -690,8 +698,8 @@ impl ProtocolMachine {
         let mut min_rtt = Duration::from_secs(60);
 
         // Compute RTT from the oldest acked frame's send timestamp
-        for frame in self.sent_history.iter() {
-            if nonce_in_ranges(frame.nonce, ranges) {
+        for (&nonce, frame) in &self.sent_history {
+            if nonce_in_ranges(nonce, ranges) {
                 acked_bytes += frame.bytes.len() as u64;
                 let rtt = now.duration_since(frame.last_sent);
                 if rtt < min_rtt {
@@ -700,7 +708,7 @@ impl ProtocolMachine {
             }
         }
 
-        self.sent_history.retain(|frame| !nonce_in_ranges(frame.nonce, ranges));
+        self.sent_history.retain(|&nonce, _| !nonce_in_ranges(nonce, ranges));
 
         // Notify congestion controller
         if acked_bytes > 0 {
