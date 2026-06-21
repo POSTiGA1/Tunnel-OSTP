@@ -13,7 +13,7 @@ pub async fn run_client_core(
     mut shutdown_rx_ext: watch::Receiver<bool>,
     _config_rx: Option<watch::Receiver<ClientConfig>>,
 ) -> Result<()> {
-    println!("[ostp] Starting run_client_core with multi-server architecture");
+    tracing::info!("starting client core");
 
     let router = Arc::new(Router::new(config.routing.clone()));
     let balancer = Arc::new(Balancer::new(&config));

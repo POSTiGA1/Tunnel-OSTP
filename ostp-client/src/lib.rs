@@ -9,3 +9,4 @@ pub mod tunnel;
 
 pub mod runner;
 pub mod logging;
+pub mod ipc_crypto;

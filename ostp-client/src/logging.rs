@@ -73,17 +73,21 @@ pub fn init_tracing(level: &str, app_name: &str, version: &str) -> Option<tracin
 
     if let Ok(file) = OpenOptions::new().create(true).append(true).open(&path) {
         let (file_writer, guard) = tracing_appender::non_blocking(file);
-        
+
+        let timer = tracing_subscriber::fmt::time::UtcTime::rfc_3339();
+
         let fmt_layer = tracing_subscriber::fmt::layer()
             .with_target(true)
-            .with_line_number(true)
+            .with_line_number(false)
             .with_thread_ids(false)
             .with_thread_names(false)
             .with_ansi(false)
+            .with_timer(timer.clone())
             .with_writer(file_writer);
-            
+
         let stderr_layer = tracing_subscriber::fmt::layer()
             .with_target(true)
+            .with_timer(timer)
             .with_writer(std::io::stderr);
 
         let _ = tracing_subscriber::registry()
@@ -107,6 +111,7 @@ pub fn init_tracing(level: &str, app_name: &str, version: &str) -> Option<tracin
         // Fallback: stderr only
         let stderr_layer = tracing_subscriber::fmt::layer()
             .with_target(true)
+            .with_timer(tracing_subscriber::fmt::time::UtcTime::rfc_3339())
             .with_writer(std::io::stderr);
         let _ = tracing_subscriber::registry()
             .with(EnvFilter::new(level))

@@ -9,7 +9,7 @@ anyhow.workspace = true
 bytes.workspace = true
 tokio.workspace = true
 tracing.workspace = true
-tracing-subscriber = { version = "0.3", features = ["env-filter"] }
+tracing-subscriber = { version = "0.3", features = ["env-filter", "time"] }
 tracing-appender = "0.2"
 ostp-core = { path = "../ostp-core" }
 ostp-tun = { path = "../ostp-tun" }
