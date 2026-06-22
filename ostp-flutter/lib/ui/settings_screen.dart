@@ -253,10 +253,10 @@ class _SettingsScreenState extends State<SettingsScreen> {
                 },
                 style: ElevatedButton.styleFrom(
                   padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 14),
-                  backgroundColor: Theme.of(context).colorScheme.primary,
+                  backgroundColor: Colors.white,
                   shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(20)),
                 ),
-                child: const Text('Import', style: TextStyle(fontWeight: FontWeight.bold, color: Colors.white)),
+                child: const Text('Import', style: TextStyle(fontWeight: FontWeight.bold, color: Colors.black)),
               )
             ],
           ),
@@ -302,7 +302,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
                         value: 'uot',
                         groupValue: _transportMode,
                         title: const Text('UoT (UDP-over-TCP)', style: TextStyle(fontWeight: FontWeight.w600)),
-                        subtitle: const Text('Masks as HTTP stream, bypasses whitelists', style: TextStyle(color: Colors.white54, fontSize: 12)),
+                        subtitle: const Text('Works reliably on mobile networks and strict firewalls', style: TextStyle(color: Colors.white54, fontSize: 12)),
                         activeColor: Theme.of(context).colorScheme.primary,
                         onChanged: (v) => setState(() { _transportMode = v!; _saveSettings(); }),
                       ),
@@ -310,7 +310,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
                       RadioListTile<String>(
                         value: 'dns',
                         groupValue: _transportMode,
-                        title: const Text('DNS Proxy (Last Resort)', style: TextStyle(fontWeight: FontWeight.w600)),
+                        title: const Text('DNS Tunnel', style: TextStyle(fontWeight: FontWeight.w600)),
                         subtitle: const Text('Very slow, but works under strict DPI blocks', style: TextStyle(color: Colors.orangeAccent, fontSize: 12)),
                         activeColor: Colors.orangeAccent,
                         onChanged: (v) => setState(() { _transportMode = v!; _saveSettings(); }),
