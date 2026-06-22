@@ -581,10 +581,10 @@ class _SettingsScreenState extends State<SettingsScreen> {
                   ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('Copied to clipboard')));
                   Navigator.pop(context);
                 },
-                icon: const Icon(Icons.copy_rounded, color: Colors.white),
-                label: const Text('Copy Link', style: TextStyle(color: Colors.white)),
+                icon: const Icon(Icons.copy_rounded, color: Colors.black),
+                label: const Text('Copy Link', style: TextStyle(color: Colors.black, fontWeight: FontWeight.bold)),
                 style: ElevatedButton.styleFrom(
-                  backgroundColor: Theme.of(context).colorScheme.primary,
+                  backgroundColor: Colors.white,
                   padding: const EdgeInsets.symmetric(horizontal: 24, vertical: 12),
                   shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
                 ),
