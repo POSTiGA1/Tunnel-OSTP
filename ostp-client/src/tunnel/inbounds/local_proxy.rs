@@ -14,6 +14,7 @@ pub async fn run_socks_inbound(
     outbound_manager: Arc<OutboundManager>,
     mut shutdown: watch::Receiver<bool>,
     metrics: Arc<crate::bridge::BridgeMetrics>,
+    is_primary: bool,
 ) -> Result<()> {
     use portable_atomic::Ordering;
     let InboundConfig::LocalProxy { tag, protocol, listen, port, set_system_proxy } = inbound_config else {
@@ -32,9 +33,17 @@ pub async fn run_socks_inbound(
 
     let listener = TcpListener::bind(&bind_addr).await?;
 
-    // Listener bound successfully — the proxy is ready to accept connections.
-    metrics.connection_state.store(2, Ordering::Relaxed);
-    tracing::info!("{} proxy inbound ready on {}, connection state = connected", protocol, bind_addr);
+    // Binding a local socket only proves the proxy can accept connections, not
+    // that the tunnel actually reaches the server. Only report "connected" from
+    // here when this proxy is the primary inbound (SOCKS-only mode). In TUN mode
+    // the TUN inbound owns the connected state — it is set after the device and
+    // server bypass route are in place — so we must not flip it prematurely.
+    if is_primary {
+        metrics.connection_state.store(2, Ordering::Relaxed);
+        tracing::info!("{} proxy inbound ready on {}, connection state = connected", protocol, bind_addr);
+    } else {
+        tracing::info!("{} proxy inbound ready on {}", protocol, bind_addr);
+    }
 
     loop {
         tokio::select! {

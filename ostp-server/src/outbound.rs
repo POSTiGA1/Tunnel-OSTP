@@ -22,12 +22,18 @@ pub struct OutboundRule {
     pub action: OutboundAction,
 }
 
+fn default_l4_protocol() -> String {
+    "all".to_string()
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct OutboundConfig {
     pub enabled: bool,
     pub protocol: String,
     pub address: String,
     pub port: u16,
+    #[serde(default = "default_l4_protocol")]
+    pub l4_protocol: String,
     pub rules: Vec<OutboundRule>,
     pub default_action: OutboundAction,
 }
@@ -42,23 +48,27 @@ pub async fn connect_target(
     let connect_timeout = Duration::from_secs(10);
     if let Some(outbound) = outbound {
         if outbound.enabled {
-            let action = select_outbound_action(target, "tcp", outbound, debug).await;
-            if action == OutboundAction::Block {
-                return Err(anyhow::anyhow!("blocked by outbound rule: {}", target));
-            }
-            if action == OutboundAction::Proxy {
-                let proxy_addr = format!("{}:{}", outbound.address, outbound.port);
-                return match outbound.protocol.as_str() {
-                    "socks5" => connect_via_socks5(&proxy_addr, target).await,
-                    "http" => connect_via_http(&proxy_addr, target).await,
-                    _ => tokio::time::timeout(connect_timeout, TcpStream::connect(target))
-                        .await
-                        .map_err(|_| anyhow::anyhow!("connect timeout ({}s): {}", connect_timeout.as_secs(), target))?
-                        .map_err(Into::into),
-                };
+            let l4 = outbound.l4_protocol.to_lowercase();
+            if l4 == "all" || l4 == "tcp" {
+                let action = select_outbound_action(target, "tcp", outbound, debug).await;
+                if action == OutboundAction::Block {
+                    return Err(anyhow::anyhow!("blocked by outbound rule: {}", target));
+                }
+                if action == OutboundAction::Proxy {
+                    let proxy_addr = format!("{}:{}", outbound.address, outbound.port);
+                    return match outbound.protocol.as_str() {
+                        "socks5" => connect_via_socks5(&proxy_addr, target).await,
+                        "http" => connect_via_http(&proxy_addr, target).await,
+                        _ => tokio::time::timeout(connect_timeout, TcpStream::connect(target))
+                            .await
+                            .map_err(|_| anyhow::anyhow!("connect timeout ({}s): {}", connect_timeout.as_secs(), target))?
+                            .map_err(Into::into),
+                    };
+                }
             }
         }
     }
+
 
     tokio::time::timeout(connect_timeout, TcpStream::connect(target))
         .await
@@ -320,19 +330,23 @@ pub async fn connect_udp_target(
 ) -> Result<UdpProxySocket> {
     if let Some(outbound) = outbound {
         if outbound.enabled {
-            let action = select_outbound_action(target, "udp", outbound, debug).await;
-            if action == OutboundAction::Block {
-                return Err(anyhow::anyhow!("blocked by outbound udp rule: {}", target));
-            }
-            if action == OutboundAction::Proxy {
-                let proxy_addr = format!("{}:{}", outbound.address, outbound.port);
-                if outbound.protocol == "socks5" {
-                    return connect_udp_via_socks5(&proxy_addr, server_udp).await;
+            let l4 = outbound.l4_protocol.to_lowercase();
+            if l4 == "all" || l4 == "udp" {
+                let action = select_outbound_action(target, "udp", outbound, debug).await;
+                if action == OutboundAction::Block {
+                    return Err(anyhow::anyhow!("blocked by outbound udp rule: {}", target));
                 }
-                // HTTP CONNECT does not support UDP. Fallback to direct.
+                if action == OutboundAction::Proxy {
+                    let proxy_addr = format!("{}:{}", outbound.address, outbound.port);
+                    if outbound.protocol == "socks5" {
+                        return connect_udp_via_socks5(&proxy_addr, server_udp).await;
+                    }
+                    // HTTP CONNECT does not support UDP. Fallback to direct.
+                }
             }
         }
     }
+
     Ok(UdpProxySocket::Direct(server_udp))
 }
 

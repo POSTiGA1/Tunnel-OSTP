@@ -160,20 +160,24 @@ pub async fn run_tun_inbound(
             _route_guard = Some(tun_interface.guard);
 
             let (mut tun_read, mut tun_write) = tokio::io::split(dev);
+            let m_sent = metrics.clone();
             let tun_to_stack = tokio::spawn(async move {
                 let mut buf = vec![0u8; 65536];
                 loop {
                     match tun_read.read(&mut buf).await {
                         Ok(0) => break,
                         Ok(n) => {
+                            m_sent.bytes_sent.fetch_add(n as u64, Ordering::Relaxed);
                             if let Err(_) = stack_sink.send(buf[..n].to_vec()).await { break; }
                         }
                         Err(e) => tracing::debug!("tun_read error: {e}"),
                     }
                 }
             });
+            let m_recv = metrics.clone();
             let stack_to_tun = tokio::spawn(async move {
                 while let Some(Ok(frame)) = stack_stream.next().await {
+                    m_recv.bytes_recv.fetch_add(frame.len() as u64, Ordering::Relaxed);
                     if let Err(e) = tun_write.write(&frame).await { tracing::debug!("tun_write error: {e}"); }
                 }
             });

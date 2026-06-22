@@ -11,7 +11,11 @@
 pub mod sys {
     use std::mem;
     use std::net::Ipv4Addr;
+    use std::os::windows::process::CommandExt;
+    use std::process::Command;
     use std::ptr;
+
+    const CREATE_NO_WINDOW: u32 = 0x08000000;
 
     use winapi::shared::ipmib::{MIB_IPFORWARDROW, MIB_IPFORWARDTABLE};
     use winapi::shared::minwindef::{DWORD, ULONG};
@@ -196,13 +200,43 @@ pub mod sys {
         }
     }
 
-    /// Add bypass routes for a list of resolved IP addresses (typically from exclusion config).
-    /// Each IP gets a /32 host route via the physical gateway so it bypasses the TUN.
-    /// Returns list of (ip, gw, if_index) that were successfully added, for later cleanup.
+    /// Returns true if a route for exactly `dest`/`mask` is present in the table.
+    fn route_exists(dest: Ipv4Addr, mask: Ipv4Addr) -> bool {
+        unsafe {
+            let mut size: ULONG = 0;
+            if GetIpForwardTable(ptr::null_mut(), &mut size, 0) != ERROR_INSUFFICIENT_BUFFER {
+                return false;
+            }
+            let mut buf: Vec<u8> = vec![0; size as usize];
+            let table = buf.as_mut_ptr() as *mut MIB_IPFORWARDTABLE;
+            if GetIpForwardTable(table, &mut size, 0) != NO_ERROR {
+                return false;
+            }
+            let want_dest = ipv4_to_dword(dest);
+            let want_mask = ipv4_to_dword(mask);
+            let entries =
+                std::slice::from_raw_parts((*table).table.as_ptr(), (*table).dwNumEntries as usize);
+            entries
+                .iter()
+                .any(|r| r.dwForwardDest == want_dest && r.dwForwardMask == want_mask)
+        }
+    }
+
+    /// Add bypass routes for a list of resolved IP addresses (typically the OSTP
+    /// server plus any exclusions). Each IP gets a /32 host route via the physical
+    /// gateway so it bypasses the TUN. Returns the list of IPs that were verified
+    /// present in the routing table afterwards, for later cleanup.
+    ///
+    /// The route is installed with `route.exe` resolved by **gateway** (no explicit
+    /// interface index). The legacy `CreateIpForwardEntry` API uses a different
+    /// interface-index space than the modern stack and rejects a mismatched index
+    /// with ERROR_BAD_ARGUMENTS (160); letting Windows pick the interface from the
+    /// on-link gateway sidesteps that entirely. `route.exe`'s exit code is not
+    /// reliable, so success is confirmed by re-reading the routing table.
     pub fn add_bypass_routes(
         ips: &[Ipv4Addr],
         gw: Ipv4Addr,
-        if_index: u32,
+        _if_index: u32,
         metric: u32,
     ) -> Vec<(Ipv4Addr, Ipv4Addr, u32)> {
         let mut added = Vec::new();
@@ -210,21 +244,29 @@ pub mod sys {
         let mask = Ipv4Addr::new(255, 255, 255, 255);
         for &ip in ips {
             // The server IP is passed both as server_ip and inside bypass_ips, so
-            // dedupe to avoid a guaranteed "already exists" failure on the second add.
+            // dedupe to avoid redundant work.
             if !seen.insert(ip) {
                 continue;
             }
             // Purge any pre-existing /32 for this dest (e.g. a stale route via an
-            // old gateway from a previous session) so CreateIpForwardEntry below
-            // installs the correct one instead of failing with ERROR_OBJECT_ALREADY_EXISTS.
+            // old gateway from a previous session) so the fresh, correct one lands.
             delete_routes_for_dest(ip, mask);
-            match add_ipv4_route(ip, mask, gw, if_index, metric) {
-                Ok(()) => {
-                    added.push((ip, gw, if_index));
-                }
-                Err(e) => {
-                    tracing::warn!("bypass route add {ip}/32 via {gw} (if {if_index}) failed: {e}");
-                }
+            let _ = Command::new("route")
+                .creation_flags(CREATE_NO_WINDOW)
+                .args([
+                    "add",
+                    &ip.to_string(),
+                    "mask",
+                    "255.255.255.255",
+                    &gw.to_string(),
+                    "metric",
+                    &metric.to_string(),
+                ])
+                .output();
+            if route_exists(ip, mask) {
+                added.push((ip, gw, 0));
+            } else {
+                tracing::warn!("bypass route add {ip}/32 via {gw} failed (not present in table after route.exe add)");
             }
         }
         added
@@ -232,9 +274,9 @@ pub mod sys {
 
     /// Remove all bypass routes previously added by add_bypass_routes.
     pub fn remove_bypass_routes(routes: &[(Ipv4Addr, Ipv4Addr, u32)]) {
-        for &(ip, gw, if_index) in routes {
-            let mask = Ipv4Addr::new(255, 255, 255, 255);
-            let _ = delete_ipv4_route(ip, mask, gw, if_index);
+        let mask = Ipv4Addr::new(255, 255, 255, 255);
+        for &(ip, _gw, _if_index) in routes {
+            delete_routes_for_dest(ip, mask);
         }
     }
 }

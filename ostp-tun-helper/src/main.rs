@@ -229,13 +229,25 @@ async fn run_server(expected_token: String, port: u16) -> Result<()> {
                     match ostp_client::runner::run_client_core(cfg, metrics_for_runner, shutdown_rx_for_core, Some(config_rx)).await {
                         Ok(_) => tracing::info!("tunnel core stopped normally"),
                         Err(e) => {
+                            // A fatal startup failure (e.g. the server bypass route
+                            // could not be installed). Tell the GUI and force the
+                            // connection state to 0 so the button reflects reality,
+                            // then terminate the helper so the next connect starts
+                            // from a clean slate (fresh helper, no stale adapter).
                             tracing::error!("tunnel core error: {}", e);
-                            let json = serde_json::to_string(&HelperMsg::Error { message: e.to_string() })
-                                .unwrap_or_default();
-                            if let Ok(enc) = crypto_for_err.encrypt(json.as_bytes()) {
-                                let mut w = writer_for_err.lock().await;
-                                let _ = w.write_all(format!("{}\n", hex::encode(&enc)).as_bytes()).await;
+                            for msg in [
+                                HelperMsg::Error { message: e.to_string() },
+                                HelperMsg::Status { value: 0 },
+                            ] {
+                                let json = serde_json::to_string(&msg).unwrap_or_default();
+                                if let Ok(enc) = crypto_for_err.encrypt(json.as_bytes()) {
+                                    let mut w = writer_for_err.lock().await;
+                                    let _ = w.write_all(format!("{}\n", hex::encode(&enc)).as_bytes()).await;
+                                }
                             }
+                            // Give the messages a moment to flush to the GUI, then exit.
+                            tokio::time::sleep(Duration::from_millis(300)).await;
+                            std::process::exit(1);
                         }
                     }
                 });

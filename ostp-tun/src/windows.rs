@@ -63,6 +63,39 @@ pub async fn create(opts: OstpTunOptions) -> Result<OstpTunInterface> {
     let bypass_routes = windows_route::sys::add_bypass_routes(&bypass_v4, phys_gw, phys_if, 1);
     tracing::info!("Added {} bypass routes via {} (if_index={})", bypass_routes.len(), phys_gw, phys_if);
 
+    // The bypass route for the OSTP server itself is mandatory: the TUN default
+    // route installed below captures ALL traffic, so without a /32 carve-out the
+    // client's own connection to the server loops back into the tunnel — every
+    // handshake times out and there is no connectivity. Treat a missing server
+    // bypass as fatal so the connect flow aborts cleanly instead of coming up in a
+    // fake "connected" state with no internet.
+    if let std::net::IpAddr::V4(server_v4) = opts.server_ip {
+        if !server_v4.is_loopback()
+            && !server_v4.is_unspecified()
+            && !bypass_routes.iter().any(|(ip, _, _)| *ip == server_v4)
+        {
+            windows_route::sys::remove_bypass_routes(&bypass_routes);
+            return Err(anyhow!(
+                "Failed to install bypass route for OSTP server {server_v4}. Without it the \
+                 tunnel would capture its own server connection (routing loop, no internet). \
+                 Aborting tunnel startup."
+            ));
+        }
+    }
+
+    // Clean up any stale Wintun adapters matching our name prefix. This prevents
+    // Wintun from creating "ostp_tun 2" (which violates the strict naming requirement
+    // and causes the 15-second interface index lookup timeout below).
+    tracing::info!("Cleaning up any stale 'ostp_tun*' adapters...");
+    let _ = std::process::Command::new("powershell")
+        .creation_flags(0x08000000)
+        .args([
+            "-NoProfile",
+            "-Command",
+            "try { Get-NetAdapter -Name 'ostp_tun*' -ErrorAction Stop | Remove-NetAdapter -Confirm:$false -ErrorAction SilentlyContinue } catch {}"
+        ])
+        .output();
+
     let mut tun_cfg = tun::Configuration::default();
     tun_cfg
         .tun_name("ostp_tun")
@@ -105,37 +138,41 @@ pub async fn create(opts: OstpTunOptions) -> Result<OstpTunInterface> {
     };
     let dev = tun::AsyncDevice::new(dev).map_err(|e| anyhow!("TUN device async failed: {}", e))?;
     tracing::info!("TUN device 'ostp_tun' created.");
+    let name_owned = "ostp_tun".to_string();
 
     let current_exe = std::env::current_exe()?.to_string_lossy().into_owned();
 
     // A freshly created WinTun adapter can take several seconds to appear in
     // GetAdaptersAddresses (it only shows up once it has an operational IPv4
     // binding). The default route via the TUN is what actually captures
-    // traffic, so this lookup is critical — give it a generous window
-    // (~15s) before giving up rather than the previous 2s.
-    let mut tun_index = None;
-    for _ in 0..75 {
-        if let Some(idx) = windows_route::sys::get_interface_index("ostp_tun") {
-            tun_index = Some(idx);
-            break;
+    // traffic. The `tun` crate already added an LUID-based route which works
+    // instantly, but we add a secondary index-based route for robustness.
+    // We run this in the background so it doesn't block tunnel startup.
+    tokio::spawn(async move {
+        let mut tun_index = None;
+        for _ in 0..75 {
+            if let Some(idx) = windows_route::sys::get_interface_index(&name_owned) {
+                tun_index = Some(idx);
+                break;
+            }
+            tokio::time::sleep(std::time::Duration::from_millis(200)).await;
         }
-        tokio::time::sleep(std::time::Duration::from_millis(200)).await;
-    }
 
-    if let Some(idx) = tun_index {
-        match windows_route::sys::add_ipv4_route(
-            std::net::Ipv4Addr::new(0, 0, 0, 0),
-            std::net::Ipv4Addr::new(0, 0, 0, 0),
-            std::net::Ipv4Addr::new(10, 1, 0, 1),
-            idx,
-            5,
-        ) {
-            Ok(()) => tracing::info!("Default route via TUN (if_index={idx}, metric=5) added."),
-            Err(e) => tracing::error!("Failed to add default route via TUN (if_index={idx}): {e} — traffic will NOT be captured."),
+        if let Some(idx) = tun_index {
+            match windows_route::sys::add_ipv4_route(
+                std::net::Ipv4Addr::new(0, 0, 0, 0),
+                std::net::Ipv4Addr::new(0, 0, 0, 0),
+                std::net::Ipv4Addr::new(10, 1, 0, 1),
+                idx,
+                5,
+            ) {
+                Ok(()) => tracing::info!("Default route via TUN (if_index={idx}, metric=5) added."),
+                Err(e) => tracing::error!("Failed to add default route via TUN (if_index={idx}): {e} — traffic will NOT be captured."),
+            }
+        } else {
+            tracing::warn!("Could not find '{}' index in routing table after 15s — fallback route not installed.", name_owned);
         }
-    } else {
-        tracing::error!("Could not find ostp_tun index in routing table after 15s — traffic will NOT be captured.");
-    }
+    });
 
     let exe1 = current_exe.clone();
     let exe2 = current_exe.clone();

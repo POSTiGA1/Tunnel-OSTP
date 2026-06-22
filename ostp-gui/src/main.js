@@ -356,10 +356,7 @@ function setState(next) {
     statusLabel.textContent = t('status_connected');
 
     // Show connection info
-    if (serverAddr) {
-      serverBadgeTxt.textContent = serverAddr;
-      connInfo.classList.remove('hidden');
-    }
+    connInfo.classList.remove('hidden');
 
     // Start uptime counter
     if (!uptimeTimer) {
@@ -389,6 +386,11 @@ async function poll() {
     if (metrics && pollTimer) {
       metricDown.textContent = fmtBytes(metrics.bytes_recv);
       metricUp.textContent   = fmtBytes(metrics.bytes_sent);
+      if (metrics.rtt_ms > 0 && pingValueTxt.textContent !== 'Testing...') {
+        const rtt = metrics.rtt_ms;
+        pingValueTxt.textContent = `Target Ping: ${rtt} ms`;
+        pingValueTxt.className = 'ping-test-value ' + (rtt < 80 ? 'good' : rtt < 200 ? 'warn' : 'bad');
+      }
     }
   } catch (err) {
     console.error('[OSTP] poll threw:', err);

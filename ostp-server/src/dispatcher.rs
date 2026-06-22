@@ -412,7 +412,7 @@ impl Dispatcher {
                             });
                             self.addr_to_session.insert(peer, candidate_session_id);
 
-                            tracing::info!("New session authenticated: sid={} peer={} (active_sessions={}, replay_cache={})",
+                            tracing::debug!("New session authenticated: sid={} peer={} (active_sessions={}, replay_cache={})",
                                 candidate_session_id, peer, self.peer_machines.len(), self.replay_cache.len()
                             );
 
