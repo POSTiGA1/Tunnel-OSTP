@@ -6,7 +6,7 @@ use crate::tunnel::router::{Router, Session};
 use crate::tunnel::outbounds::OutboundManager;
 use tokio::sync::watch;
 
-#[cfg(any(target_os = "windows", target_os = "linux"))]
+#[cfg(any(target_os = "windows", target_os = "linux", target_os = "android"))]
 pub async fn run_tun_inbound(
     config: ClientConfig,
     inbound_config: InboundConfig,
@@ -300,7 +300,7 @@ pub async fn run_tun_inbound(
     Ok(())
 }
 
-#[cfg(not(any(target_os = "windows", target_os = "linux")))]
+#[cfg(not(any(target_os = "windows", target_os = "linux", target_os = "android")))]
 pub async fn run_tun_inbound(
     _config: ClientConfig,
     _inbound_config: InboundConfig,
