@@ -6,6 +6,33 @@ if (window.__TAURI__?.core) {
   invoke = window.__TAURI__.core.invoke;
 }
 
+// ── JSONC parsing ─────────────────────────────────────────────────────────────
+// config.json is JSONC: save_config prepends a `// OSTP Configuration` header
+// and the default template carries comments. Strip // line and /* */ block
+// comments before JSON.parse, while preserving them inside string literals
+// (config values contain URLs like https:// and paths like ./wintun.dll).
+function parseJsonc(raw) {
+  let out = '';
+  let inStr = false, inLine = false, inBlock = false, escaped = false;
+  for (let i = 0; i < raw.length; i++) {
+    const c = raw[i], n = raw[i + 1];
+    if (inLine) { if (c === '\n') { inLine = false; out += c; } continue; }
+    if (inBlock) { if (c === '*' && n === '/') { inBlock = false; i++; } continue; }
+    if (inStr) {
+      out += c;
+      if (escaped) escaped = false;
+      else if (c === '\\') escaped = true;
+      else if (c === '"') inStr = false;
+      continue;
+    }
+    if (c === '"') { inStr = true; out += c; continue; }
+    if (c === '/' && n === '/') { inLine = true; i++; continue; }
+    if (c === '/' && n === '*') { inBlock = true; i++; continue; }
+    out += c;
+  }
+  return JSON.parse(out);
+}
+
 // ── State ────────────────────────────────────────────────────────────────────
 let appState    = 'disconnected'; // 'disconnected' | 'connecting' | 'connected'
 let pollTimer   = null;
@@ -384,7 +411,7 @@ async function handleToggle() {
   if (appState === 'disconnected') {
     try {
       const raw = await invoke('get_config');
-      const cfg = JSON.parse(raw);
+      const cfg = parseJsonc(raw);
       serverAddr = cfg.server || '';
     } catch { serverAddr = ''; }
 
@@ -434,7 +461,7 @@ function showScreen(name) {
 async function loadConfigIntoForm() {
   try {
     const raw = await invoke('get_config');
-    rawConfig = JSON.parse(raw);
+    rawConfig = parseJsonc(raw);
     const c = rawConfig.mode === 'client' ? rawConfig : null;
     if (!c) return;
 
@@ -695,7 +722,7 @@ window.addEventListener('DOMContentLoaded', async () => {
   // Auto-connect on startup
   try {
     const raw = await invoke('get_config');
-    rawConfig = JSON.parse(raw);
+    rawConfig = parseJsonc(raw);
     if (rawConfig?.gui?.autoconnect) {
       setTimeout(() => {
         if (appState === 'disconnected') handleToggle();
@@ -716,7 +743,7 @@ window.addEventListener('DOMContentLoaded', async () => {
       
       try {
         const raw = await invoke('get_config');
-        rawConfig = JSON.parse(raw);
+        rawConfig = parseJsonc(raw);
       } catch {
         showToast('Please save your config first', 'error');
         return;

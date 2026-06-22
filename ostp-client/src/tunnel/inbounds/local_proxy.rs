@@ -13,7 +13,9 @@ pub async fn run_socks_inbound(
     router: Arc<Router>,
     outbound_manager: Arc<OutboundManager>,
     mut shutdown: watch::Receiver<bool>,
+    metrics: Arc<crate::bridge::BridgeMetrics>,
 ) -> Result<()> {
+    use portable_atomic::Ordering;
     let InboundConfig::LocalProxy { tag, protocol, listen, port, set_system_proxy } = inbound_config else {
         return Err(anyhow!("Invalid config for LocalProxy inbound"));
     };
@@ -29,6 +31,10 @@ pub async fn run_socks_inbound(
     };
 
     let listener = TcpListener::bind(&bind_addr).await?;
+
+    // Listener bound successfully — the proxy is ready to accept connections.
+    metrics.connection_state.store(2, Ordering::Relaxed);
+    tracing::info!("{} proxy inbound ready on {}, connection state = connected", protocol, bind_addr);
 
     loop {
         tokio::select! {

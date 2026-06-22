@@ -13,9 +13,11 @@ pub async fn run_tun_inbound(
     router: Arc<Router>,
     outbound_manager: Arc<OutboundManager>,
     mut shutdown: watch::Receiver<bool>,
+    metrics: Arc<crate::bridge::BridgeMetrics>,
 ) -> Result<()> {
-    
+
     use netstack_smoltcp::StackBuilder;
+    use portable_atomic::Ordering;
     use tokio::io::{AsyncReadExt, AsyncWriteExt};
     use futures::{StreamExt, SinkExt};
 
@@ -179,6 +181,11 @@ pub async fn run_tun_inbound(
         }
     };
 
+    // TUN device is up and the default route has been installed inside
+    // OstpTunInterface::create — the tunnel is now carrying traffic.
+    metrics.connection_state.store(2, Ordering::Relaxed);
+    tracing::info!("TUN inbound ready, connection state = connected");
+
     // ── TCP Handler ──
     let outbound_manager_tcp = outbound_manager.clone();
     let router_tcp = router.clone();
@@ -296,6 +303,7 @@ pub async fn run_tun_inbound(
     _router: Arc<Router>,
     _outbound_manager: Arc<OutboundManager>,
     _shutdown: watch::Receiver<bool>,
+    _metrics: Arc<crate::bridge::BridgeMetrics>,
 ) -> Result<()> {
     Err(anyhow!("TUN is only supported on Windows and Linux"))
 }

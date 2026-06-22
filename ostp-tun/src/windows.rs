@@ -68,36 +68,73 @@ pub async fn create(opts: OstpTunOptions) -> Result<OstpTunInterface> {
         .tun_name("ostp_tun")
         .address((10, 1, 0, 2))
         .netmask((255, 255, 255, 0))
+        // `.destination()` makes the `tun` crate install the default route via
+        // the adapter's LUID (available immediately after creation). This is
+        // the RELIABLE default route that captures traffic — the manual
+        // add_ipv4_route below depends on a friendly-name interface-index
+        // lookup that races on a freshly created adapter. Keep both: the LUID
+        // route guarantees connectivity even when the index lookup is slow.
+        // The retry loop around tun::create absorbs the transient
+        // ERROR_INVALID_PARAMETER (os error 87) this call can hit during the
+        // post-creation registration window.
         .destination((10, 1, 0, 1))
         .mtu(opts.mtu)
         .up();
 
-    let dev = tun::create(&tun_cfg).map_err(|e| anyhow!("Failed to create TUN device: {}", e))?;
+    // The IpHelper calls the `tun` crate performs right after Adapter::create
+    // (set address / mtu) can transiently fail with ERROR_INVALID_PARAMETER
+    // (os error 87) when the freshly created interface is not yet registered
+    // in the IP stack. Retry a few times; on retry the crate reuses the
+    // existing adapter via Adapter::open.
+    let dev = {
+        let mut attempt = 0;
+        loop {
+            attempt += 1;
+            match tun::create(&tun_cfg) {
+                Ok(d) => break d,
+                Err(e) if attempt < 5 => {
+                    tracing::warn!(
+                        "TUN device creation attempt {}/5 failed: {} — retrying in 300ms",
+                        attempt, e
+                    );
+                    tokio::time::sleep(std::time::Duration::from_millis(300)).await;
+                }
+                Err(e) => return Err(anyhow!("Failed to create TUN device after {} attempts: {}", attempt, e)),
+            }
+        }
+    };
     let dev = tun::AsyncDevice::new(dev).map_err(|e| anyhow!("TUN device async failed: {}", e))?;
     tracing::info!("TUN device 'ostp_tun' created.");
 
     let current_exe = std::env::current_exe()?.to_string_lossy().into_owned();
 
+    // A freshly created WinTun adapter can take several seconds to appear in
+    // GetAdaptersAddresses (it only shows up once it has an operational IPv4
+    // binding). The default route via the TUN is what actually captures
+    // traffic, so this lookup is critical — give it a generous window
+    // (~15s) before giving up rather than the previous 2s.
     let mut tun_index = None;
-    for _ in 0..20 {
+    for _ in 0..75 {
         if let Some(idx) = windows_route::sys::get_interface_index("ostp_tun") {
             tun_index = Some(idx);
             break;
         }
-        tokio::time::sleep(std::time::Duration::from_millis(100)).await;
+        tokio::time::sleep(std::time::Duration::from_millis(200)).await;
     }
 
     if let Some(idx) = tun_index {
-        let _ = windows_route::sys::add_ipv4_route(
+        match windows_route::sys::add_ipv4_route(
             std::net::Ipv4Addr::new(0, 0, 0, 0),
             std::net::Ipv4Addr::new(0, 0, 0, 0),
             std::net::Ipv4Addr::new(10, 1, 0, 1),
             idx,
             5,
-        );
-        tracing::info!("Default route via TUN (if_index={idx}, metric=5) added.");
+        ) {
+            Ok(()) => tracing::info!("Default route via TUN (if_index={idx}, metric=5) added."),
+            Err(e) => tracing::error!("Failed to add default route via TUN (if_index={idx}): {e} — traffic will NOT be captured."),
+        }
     } else {
-        tracing::warn!("Could not find ostp_tun index in routing table — traffic may not be captured.");
+        tracing::error!("Could not find ostp_tun index in routing table after 15s — traffic will NOT be captured.");
     }
 
     let exe1 = current_exe.clone();

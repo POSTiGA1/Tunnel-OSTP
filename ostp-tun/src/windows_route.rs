@@ -168,6 +168,34 @@ pub mod sys {
         }
     }
 
+    /// Delete every routing-table entry whose destination is `dest`/`mask`,
+    /// regardless of its gateway or interface. Used to purge stale bypass routes
+    /// left by a previous session (possibly pointing at an old gateway after a
+    /// network change) so a fresh, correct one can be installed.
+    pub fn delete_routes_for_dest(dest: Ipv4Addr, mask: Ipv4Addr) {
+        unsafe {
+            let mut size: ULONG = 0;
+            if GetIpForwardTable(ptr::null_mut(), &mut size, 0) != ERROR_INSUFFICIENT_BUFFER {
+                return;
+            }
+            let mut buf: Vec<u8> = vec![0; size as usize];
+            let table = buf.as_mut_ptr() as *mut MIB_IPFORWARDTABLE;
+            if GetIpForwardTable(table, &mut size, 0) != NO_ERROR {
+                return;
+            }
+            let want_dest = ipv4_to_dword(dest);
+            let want_mask = ipv4_to_dword(mask);
+            let entries =
+                std::slice::from_raw_parts_mut((*table).table.as_mut_ptr(), (*table).dwNumEntries as usize);
+            for row in entries {
+                if row.dwForwardDest == want_dest && row.dwForwardMask == want_mask {
+                    // Delete the exact existing row (its own nexthop/ifindex).
+                    let _ = DeleteIpForwardEntry(row);
+                }
+            }
+        }
+    }
+
     /// Add bypass routes for a list of resolved IP addresses (typically from exclusion config).
     /// Each IP gets a /32 host route via the physical gateway so it bypasses the TUN.
     /// Returns list of (ip, gw, if_index) that were successfully added, for later cleanup.
@@ -178,15 +206,24 @@ pub mod sys {
         metric: u32,
     ) -> Vec<(Ipv4Addr, Ipv4Addr, u32)> {
         let mut added = Vec::new();
+        let mut seen = std::collections::HashSet::new();
+        let mask = Ipv4Addr::new(255, 255, 255, 255);
         for &ip in ips {
-            let mask = Ipv4Addr::new(255, 255, 255, 255);
+            // The server IP is passed both as server_ip and inside bypass_ips, so
+            // dedupe to avoid a guaranteed "already exists" failure on the second add.
+            if !seen.insert(ip) {
+                continue;
+            }
+            // Purge any pre-existing /32 for this dest (e.g. a stale route via an
+            // old gateway from a previous session) so CreateIpForwardEntry below
+            // installs the correct one instead of failing with ERROR_OBJECT_ALREADY_EXISTS.
+            delete_routes_for_dest(ip, mask);
             match add_ipv4_route(ip, mask, gw, if_index, metric) {
                 Ok(()) => {
                     added.push((ip, gw, if_index));
                 }
                 Err(e) => {
-                    // 87 = ERROR_INVALID_PARAMETER (route may already exist)
-                    tracing::debug!("bypass route add {ip}/32 via {gw}: {e}");
+                    tracing::warn!("bypass route add {ip}/32 via {gw} (if {if_index}) failed: {e}");
                 }
             }
         }

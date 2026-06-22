@@ -9,11 +9,17 @@ use crate::tunnel::router::Router;
 
 pub async fn run_client_core(
     config: ClientConfig,
-    _metrics: Arc<crate::bridge::BridgeMetrics>,
+    metrics: Arc<crate::bridge::BridgeMetrics>,
     mut shutdown_rx_ext: watch::Receiver<bool>,
     _config_rx: Option<watch::Receiver<ClientConfig>>,
 ) -> Result<()> {
+    use portable_atomic::Ordering;
     tracing::info!("starting client core");
+
+    // Report "connecting" until an inbound has successfully bound. Each inbound
+    // flips this to 2 (connected) once it is ready; if they all fail, the
+    // select! below returns and we reset to 0 (disconnected).
+    metrics.connection_state.store(1, Ordering::Relaxed);
 
     let router = Arc::new(Router::new(config.routing.clone()));
     let balancer = Arc::new(Balancer::new(&config));
@@ -29,6 +35,7 @@ pub async fn run_client_core(
         let outbound_manager_clone = outbound_manager.clone();
         let shutdown_rx = shutdown_rx_ext.clone();
         let config_clone = config.clone();
+        let metrics_clone = metrics.clone();
 
         match inbound.clone() {
             InboundConfig::Tun { .. } => {
@@ -39,6 +46,7 @@ pub async fn run_client_core(
                         router_clone,
                         outbound_manager_clone,
                         shutdown_rx,
+                        metrics_clone,
                     ).await {
                         tracing::error!("TUN inbound failed: {}", e);
                     }
@@ -52,6 +60,7 @@ pub async fn run_client_core(
                         router_clone,
                         outbound_manager_clone,
                         shutdown_rx,
+                        metrics_clone,
                     ).await {
                         tracing::error!("SOCKS inbound failed: {}", e);
                     }
@@ -69,5 +78,6 @@ pub async fn run_client_core(
         }
     }
 
+    metrics.connection_state.store(0, Ordering::Relaxed);
     Ok(())
 }

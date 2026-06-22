@@ -1591,12 +1591,13 @@ name = "ostp-tun-helper"
 version = "0.3.12"
 dependencies = [
  "anyhow",
- "chrono",
+ "hex",
  "ostp-client",
  "portable-atomic",
  "serde",
  "serde_json",
  "tokio",
+ "tracing",
  "winres",
 ]
 
@@ -2589,6 +2590,7 @@ dependencies = [
  "sharded-slab",
  "smallvec",
  "thread_local",
+ "time",
  "tracing",
  "tracing-core",
  "tracing-log",
