@@ -252,7 +252,7 @@ Write-Output ""
 Write-Output "--- Phase 3: CI/CD release ---"
 
 Write-Output "Pushing version metadata..."
-& git add Cargo.toml Cargo.lock
+& git add Cargo.toml Cargo.lock ostp-gui/src-tauri/tauri.conf.json ostp-flutter/pubspec.yaml
 & git commit -m "CI/CD: release version v$Version" --allow-empty | Out-Null
 & git push origin master | Out-Null
 

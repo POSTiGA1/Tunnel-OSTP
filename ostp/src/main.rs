@@ -1881,6 +1881,7 @@ async fn run_app() -> Result<()> {
                     outbound = Some(ostp_server::OutboundConfig {
                         enabled: true,
                         protocol: "socks5".to_string(),
+                        l4_protocol: "all".to_string(),
                         address: server,
                         port,
                         rules,
