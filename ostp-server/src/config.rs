@@ -81,6 +81,10 @@ pub struct TransportConfigRaw {
     pub wss: Option<bool>,
 }
 
+fn default_l4_protocol_config() -> String {
+    "all".to_string()
+}
+
 #[derive(Debug, Deserialize, Serialize, Clone)]
 #[serde(tag = "protocol", rename_all = "snake_case")]
 pub enum ServerOutbound {
@@ -89,6 +93,8 @@ pub enum ServerOutbound {
         tag: String,
         server: String,
         port: u16,
+        #[serde(default = "default_l4_protocol_config")]
+        l4_protocol: String,
     },
     Direct {
         tag: String,

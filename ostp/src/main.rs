@@ -56,7 +56,7 @@ struct Args {
     update: bool,
 
     /// Specify a target version for the update command (e.g., -v 0.2.98)
-    #[arg(short = 'v', long = "version", help_heading = "Common Commands")]
+    #[arg(short = 'v', long = "target-version", help_heading = "Common Commands")]
     target_version: Option<String>,
 
     /// Import a share link (ostp://...) into the configuration file and exit
@@ -1199,7 +1199,7 @@ async fn run_app() -> Result<()> {
     }
 
     if args.update {
-        return cmd_update();
+        return cmd_update(args.target_version);
     }
 
     if args.migrate {
@@ -1860,7 +1860,7 @@ async fn run_app() -> Result<()> {
             
             let mut outbound = None;
             for ob in server_cfg.outbounds {
-                if let ostp_server::config::ServerOutbound::Socks { server, port, tag } = ob {
+                if let ostp_server::config::ServerOutbound::Socks { server, port, tag, l4_protocol } = ob {
                     let mut rules = Vec::new();
                     let mut default_action = Some("proxy".to_string());
                     if let Some(routing) = &server_cfg.routing {
@@ -1881,7 +1881,7 @@ async fn run_app() -> Result<()> {
                     outbound = Some(ostp_server::OutboundConfig {
                         enabled: true,
                         protocol: "socks5".to_string(),
-                        l4_protocol: "all".to_string(),
+                        l4_protocol,
                         address: server,
                         port,
                         rules,
@@ -1987,12 +1987,20 @@ fn cmd_uninstall() -> Result<()> {
 // Update command
 // ---------------------------------------------------------------------------
 #[cfg(unix)]
-fn cmd_update() -> Result<()> {
+fn cmd_update(version: Option<String>) -> Result<()> {
     use std::process::Command;
 
     println!("[ostp] Updating OSTP...");
+    
+    let mut script_args = vec!["-c".to_string()];
+    if let Some(v) = version {
+        script_args.push(format!("bash <(curl -Ls https://raw.githubusercontent.com/ospab/ostp/master/scripts/install.sh) -v {}", v));
+    } else {
+        script_args.push("bash <(curl -Ls https://raw.githubusercontent.com/ospab/ostp/master/scripts/install.sh)".to_string());
+    }
+
     let status = Command::new("bash")
-        .args(["-c", "bash <(curl -Ls https://raw.githubusercontent.com/ospab/ostp/master/scripts/install.sh)"])
+        .args(&script_args)
         .status()
         .map_err(|e| anyhow!("Failed to run update: {e}"))?;
 
@@ -2003,7 +2011,7 @@ fn cmd_update() -> Result<()> {
 }
 
 #[cfg(not(unix))]
-fn cmd_update() -> Result<()> {
+fn cmd_update(_version: Option<String>) -> Result<()> {
     anyhow::bail!("The 'update' command is only supported on Linux/Unix systems.");
 }
 

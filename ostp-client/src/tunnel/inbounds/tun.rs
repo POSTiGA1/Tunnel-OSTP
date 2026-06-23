@@ -21,7 +21,7 @@ pub async fn run_tun_inbound(
     use tokio::io::{AsyncReadExt, AsyncWriteExt};
     use futures::{StreamExt, SinkExt};
 
-    let InboundConfig::Tun { tag, auto_route, mtu, fd, .. } = inbound_config else {
+    let InboundConfig::Tun { tag, auto_route, mtu, fd: _fd, .. } = inbound_config else {
         return Err(anyhow!("Invalid config for TUN inbound"));
     };
 
