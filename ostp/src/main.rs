@@ -2030,6 +2030,11 @@ async fn run_client_directly(client_cfg: serde_json::Value) -> Result<()> {
     let mode_str = if is_tun_enabled { "tun" } else { "proxy" };
     println!("{} Starting client (mode={})", "[ostp]".cyan().bold(), mode_str.yellow());
 
+    #[cfg(target_os = "windows")]
+    if is_tun_enabled {
+        ensure_elevated_for_tun()?;
+    }
+
     // Run the client implementation
     let (_shutdown_tx, rx) = tokio::sync::watch::channel(false);
     let metrics = std::sync::Arc::new(ostp_client::bridge::BridgeMetrics::default());
@@ -2037,6 +2042,53 @@ async fn run_client_directly(client_cfg: serde_json::Value) -> Result<()> {
     // Launch the core runner directly.
     ostp_client::runner::run_client_core(client_conf, metrics, rx, None).await?;
     Ok(())
+}
+
+#[cfg(target_os = "windows")]
+fn ensure_elevated_for_tun() -> Result<()> {
+    #[link(name = "shell32")]
+    extern "system" {
+        fn IsUserAnAdmin() -> i32;
+        fn ShellExecuteW(h: *mut std::ffi::c_void, op: *const u16, f: *const u16, p: *const u16, d: *const u16, s: i32) -> isize;
+    }
+
+    let is_admin = unsafe { IsUserAnAdmin() != 0 };
+    if is_admin {
+        return Ok(());
+    }
+
+    use std::ffi::OsStr;
+    use std::os::windows::ffi::OsStrExt;
+
+    let exe = std::env::current_exe()?;
+    let exe_wstr: Vec<u16> = exe.as_os_str().encode_wide().chain(Some(0)).collect();
+    let verb_wstr: Vec<u16> = OsStr::new("runas").encode_wide().chain(Some(0)).collect();
+
+    // Reconstruct arguments
+    let args: Vec<String> = std::env::args().skip(1).collect();
+    let params_str = args.iter().map(|s| format!("\"{}\"", s)).collect::<Vec<_>>().join(" ");
+    let params_wstr: Vec<u16> = OsStr::new(&params_str).encode_wide().chain(Some(0)).collect();
+
+    let cwd = std::env::current_dir()?;
+    let cwd_wstr: Vec<u16> = cwd.as_os_str().encode_wide().chain(Some(0)).collect();
+
+    println!("{}", "[ostp] TUN mode requires administrator privileges. Requesting elevation...".yellow());
+
+    let ret = unsafe {
+        ShellExecuteW(
+            std::ptr::null_mut(),
+            verb_wstr.as_ptr(),
+            exe_wstr.as_ptr(),
+            params_wstr.as_ptr(),
+            cwd_wstr.as_ptr(),
+            1, // SW_SHOWNORMAL
+        )
+    };
+
+    if ret <= 32 {
+        anyhow::bail!("UAC elevation was denied or failed. Please run as Administrator.");
+    }
+    std::process::exit(0);
 }
 
 fn cmd_migrate(config_path: &std::path::Path) -> Result<()> {

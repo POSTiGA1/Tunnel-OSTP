@@ -45,7 +45,7 @@ fn make_initiator_config(
         psk: secrets.psk,
         session_id,
         handshake_payload: payload,
-        max_padding: 256,
+        max_padding: 1024,
         padding_strategy: ostp_core::framing::PaddingStrategy::Adaptive,
         obfuscation_key: secrets.obfuscation_key,
         max_reorder: 16384,
@@ -77,6 +77,7 @@ pub async fn dial_tcp(
     access_key: &str,
     transport_cfg: &TransportConfig,
     _multiplex: &MultiplexConfig,
+    metrics: Option<std::sync::Arc<crate::bridge::BridgeMetrics>>,
 ) -> Result<TcpStream> {
     tracing::info!("Dialing OSTP server {}:{} for target {}:{}", server, port, target_host, target_port);
     let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await?;
@@ -122,7 +123,14 @@ pub async fn dial_tcp(
 
         if !handshake_success {
             tracing::warn!("TCP handshake failed or protocol machine error");
+            if let Some(m) = &metrics {
+                m.connection_state.store(0, std::sync::atomic::Ordering::Relaxed);
+            }
             return;
+        }
+
+        if let Some(m) = &metrics {
+            m.connection_state.store(2, std::sync::atomic::Ordering::Relaxed);
         }
 
         // Send connection request
@@ -240,6 +248,7 @@ pub async fn handle_udp(
     access_key: &str,
     transport_cfg: &TransportConfig,
     _multiplex: &MultiplexConfig,
+    metrics: Option<std::sync::Arc<crate::bridge::BridgeMetrics>>,
 ) -> Result<()> {
     let transport = make_transport(transport_cfg, server, port).await?;
 
@@ -259,6 +268,18 @@ pub async fn handle_udp(
     let config = make_initiator_config(session_id, access_key, transport_cfg);
     let mut machine = ProtocolMachine::new(config)?;
 
+    // Send UDP Junk Packets (Amnezia style) to break DPI heuristics
+    use rand::Rng;
+    let num_junk = rand::thread_rng().gen_range(2..=5);
+    for _ in 0..num_junk {
+        let junk_len = rand::thread_rng().gen_range(100..=1000);
+        let mut junk = vec![0u8; junk_len];
+        rand::thread_rng().fill(&mut junk[..]);
+        let junk_bytes = bytes::Bytes::from(junk);
+        let _ = transport.send(&junk_bytes).await;
+        tokio::time::sleep(std::time::Duration::from_millis(5)).await;
+    }
+
     // Send handshake first
     if let Ok(action) = machine.on_event(OstpEvent::Start) {
         handle_udp_action(action, &transport).await;
@@ -272,9 +293,15 @@ pub async fn handle_udp(
     ).await {
         Ok(Ok(n)) => {
             let _ = machine.on_event(OstpEvent::Inbound(bytes::Bytes::copy_from_slice(&buf[..n])));
+            if let Some(m) = &metrics {
+                m.connection_state.store(2, std::sync::atomic::Ordering::Relaxed);
+            }
         }
         _ => {
             tracing::warn!("OSTP handshake timeout for {}:{}", server, port);
+            if let Some(m) = &metrics {
+                m.connection_state.store(0, std::sync::atomic::Ordering::Relaxed);
+            }
             return Ok(());
         }
     }
@@ -374,6 +401,62 @@ async fn make_transport(
                 tx: tx_send,
                 rx: std::sync::Arc::new(tokio::sync::Mutex::new(rx_recv)),
                 _guard: std::sync::Arc::new(tokio::sync::Mutex::new(process)),
+            })
+        }
+        "uot" | "tcp" => {
+            let stream = tokio::net::TcpStream::connect((server, port)).await?;
+            let _ = stream.set_nodelay(true);
+            let (mut rh, mut wh) = stream.into_split();
+            
+            let (tx_send, mut tx_recv) = tokio::sync::mpsc::channel::<bytes::Bytes>(1024);
+            let (rx_send, rx_recv) = tokio::sync::mpsc::channel::<bytes::Bytes>(1024);
+            
+            let tcp_fragmentation = transport_cfg.tcp_fragmentation;
+
+            // Writer task
+            tokio::spawn(async move {
+                use tokio::io::AsyncWriteExt;
+                let mut first_packet = true;
+                while let Some(data) = tx_recv.recv().await {
+                    let mut len_buf = [0u8; 2];
+                    len_buf.copy_from_slice(&(data.len() as u16).to_be_bytes());
+                    
+                    if first_packet && tcp_fragmentation {
+                        first_packet = false;
+                        // Split the length header and first byte of payload
+                        if wh.write_all(&len_buf[0..1]).await.is_err() { break; }
+                        tokio::time::sleep(tokio::time::Duration::from_millis(5)).await;
+                        if wh.write_all(&len_buf[1..2]).await.is_err() { break; }
+                        tokio::time::sleep(tokio::time::Duration::from_millis(5)).await;
+                        
+                        // Send data in 1-2 byte chunks for the first packet (handshake)
+                        for chunk in data.chunks(2) {
+                            if wh.write_all(chunk).await.is_err() { break; }
+                            tokio::time::sleep(tokio::time::Duration::from_millis(2)).await;
+                        }
+                    } else {
+                        if wh.write_all(&len_buf).await.is_err() { break; }
+                        if wh.write_all(&data).await.is_err() { break; }
+                    }
+                }
+            });
+            
+            // Reader task
+            tokio::spawn(async move {
+                use tokio::io::AsyncReadExt;
+                loop {
+                    let mut len_buf = [0u8; 2];
+                    if rh.read_exact(&mut len_buf).await.is_err() { break; }
+                    let len = u16::from_be_bytes(len_buf) as usize;
+                    let mut buf = vec![0u8; len];
+                    if rh.read_exact(&mut buf).await.is_err() { break; }
+                    if rx_send.send(bytes::Bytes::from(buf)).await.is_err() { break; }
+                }
+            });
+            
+            Ok(crate::transport::Transport::Uot {
+                tx: tx_send,
+                rx: std::sync::Arc::new(tokio::sync::Mutex::new(rx_recv)),
             })
         }
         _ => {

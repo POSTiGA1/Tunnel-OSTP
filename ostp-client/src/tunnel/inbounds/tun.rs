@@ -72,6 +72,7 @@ pub async fn run_tun_inbound(
 
     let (mut stack_sink, mut stack_stream) = stack.split();
 
+    #[cfg(not(target_os = "android"))]
     #[allow(unused_variables)]
     let mut _route_guard = None;
 
@@ -187,8 +188,7 @@ pub async fn run_tun_inbound(
 
     // TUN device is up and the default route has been installed inside
     // OstpTunInterface::create — the tunnel is now carrying traffic.
-    metrics.connection_state.store(2, Ordering::Relaxed);
-    tracing::info!("TUN inbound ready, connection state = connected");
+    tracing::info!("TUN inbound is primary: marking connected (waiting for bridge)");
 
     // ── TCP Handler ──
     let outbound_manager_tcp = outbound_manager.clone();

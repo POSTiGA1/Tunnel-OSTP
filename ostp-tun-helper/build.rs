@@ -1,31 +1,29 @@
-// build.rs for ostp-tun-helper
-// Embeds a Windows manifest that requests Administrator privileges.
-// This makes Windows show a UAC prompt when the binary is double-clicked
-// or launched via ShellExecuteW("runas").
-
 fn main() {
-    #[cfg(windows)]
+    #[cfg(target_os = "windows")]
     {
         let mut res = winres::WindowsResource::new();
+        res.set_icon("..\\ostp-gui\\src-tauri\\icons\\icon.ico");
+        res.set("ProductName", "OSTP Core");
+        res.set("FileDescription", "OSTP Tunnel Helper");
+        res.set("CompanyName", "Ospab Foundation");
+        res.set("LegalCopyright", "Copyright (c) 2026 Ospab Foundation");
+        
+        // This manifest explicitly requests administrator privileges, which triggers
+        // UAC when the helper is run directly. The GUI launches it as admin anyway,
+        // but this ensures it always runs elevated.
         res.set_manifest(r#"
-<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
 <assembly xmlns="urn:schemas-microsoft-com:asm.v1" manifestVersion="1.0">
-    <trustInfo xmlns="urn:schemas-microsoft-com:asm.v3">
-        <security>
-            <requestedPrivileges>
-                <requestedExecutionLevel level="requireAdministrator" uiAccess="false"/>
-            </requestedPrivileges>
-        </security>
-    </trustInfo>
-    <dependency>
-        <dependentAssembly>
-            <assemblyIdentity type="win32" name="Microsoft.Windows.Common-Controls"
-                version="6.0.0.0" processorArchitecture="*"
-                publicKeyToken="6595b64144ccf1df" language="*"/>
-        </dependentAssembly>
-    </dependency>
+  <trustInfo xmlns="urn:schemas-microsoft-com:asm.v3">
+    <security>
+      <requestedPrivileges>
+        <requestedExecutionLevel level="requireAdministrator" uiAccess="false" />
+      </requestedPrivileges>
+    </security>
+  </trustInfo>
 </assembly>
 "#);
-        res.compile().expect("failed to compile Windows resources");
+        if let Err(e) = res.compile() {
+            println!("cargo:warning=Failed to compile Windows resources: {}", e);
+        }
     }
 }

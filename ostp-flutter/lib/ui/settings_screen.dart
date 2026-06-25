@@ -45,15 +45,23 @@ class _SettingsScreenState extends State<SettingsScreen> {
   late TextEditingController _muxSessionsCtrl;
   bool _isCheckingUpdates = false;
 
+  bool _tcpFragmentation = false;
+
   @override
   void initState() {
     super.initState();
     _importCtrl = TextEditingController();
-    _serverCtrl = TextEditingController(text: widget.prefs.getString('server_addr') ?? '127.0.0.1:443');
+    _loadSettings();
+  }
+
+  void _loadSettings() {
+    _serverCtrl = TextEditingController(text: widget.prefs.getString('server_addr') ?? '');
     _localBindCtrl = TextEditingController(text: widget.prefs.getString('local_bind') ?? '127.0.0.1:1088');
     _keyCtrl = TextEditingController(text: widget.prefs.getString('access_key') ?? '');
-    _dnsCtrl = TextEditingController(text: widget.prefs.getString('dns_server') ?? '1.1.1.1');
+    _dnsCtrl = TextEditingController(text: widget.prefs.getString('dns_server') ?? '');
     _mtuCtrl = TextEditingController(text: widget.prefs.getString('mtu') ?? '1140');
+    _transportMode = widget.prefs.getString('transport_mode') ?? 'udp';
+    _tcpFragmentation = widget.prefs.getBool('tcp_fragmentation') ?? false;
     _domainsCtrl = TextEditingController(text: widget.prefs.getString('ex_domains') ?? '');
     _ipsCtrl = TextEditingController(text: widget.prefs.getString('ex_ips') ?? '');
     _processesCtrl = TextEditingController(text: widget.prefs.getString('ex_processes') ?? '');
@@ -61,7 +69,6 @@ class _SettingsScreenState extends State<SettingsScreen> {
     _dnsRegionCtrl = TextEditingController(text: widget.prefs.getString('dns_region') ?? '1.1.1.1');
     _pbkCtrl = TextEditingController(text: widget.prefs.getString('tun_pbk') ?? '');
     _sidCtrl = TextEditingController(text: widget.prefs.getString('sid') ?? '');
-    _transportMode = widget.prefs.getString('transport_mode') ?? 'udp';
     _tunStack = widget.prefs.getString('tun_stack') ?? 'ostp';
     _debugMode = widget.prefs.getBool('debug_mode') ?? false;
     _muxEnabled = widget.prefs.getBool('mux_enabled') ?? false;
@@ -94,11 +101,12 @@ class _SettingsScreenState extends State<SettingsScreen> {
     widget.prefs.setString('access_key', _keyCtrl.text.trim());
     widget.prefs.setString('dns_server', _dnsCtrl.text.trim());
     widget.prefs.setString('mtu', _mtuCtrl.text.trim());
+    widget.prefs.setString('transport_mode', _transportMode);
+    widget.prefs.setBool('tcp_fragmentation', _tcpFragmentation);
     widget.prefs.setString('ex_domains', _domainsCtrl.text.trim());
     widget.prefs.setString('ex_ips', _ipsCtrl.text.trim());
     widget.prefs.setString('ex_processes', _processesCtrl.text.trim());
     widget.prefs.setBool('debug_mode', _debugMode);
-    widget.prefs.setString('transport_mode', _transportMode);
     widget.prefs.setString('tun_stack', _tunStack);
     widget.prefs.setString('dns_domain', _dnsDomainCtrl.text.trim());
     widget.prefs.setString('dns_region', _dnsRegionCtrl.text.trim());
@@ -254,6 +262,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
                 style: ElevatedButton.styleFrom(
                   padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 14),
                   backgroundColor: Colors.white,
+                  foregroundColor: Colors.black,
                   shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(20)),
                 ),
                 child: const Text('Import', style: TextStyle(fontWeight: FontWeight.bold, color: Colors.black)),
@@ -302,10 +311,21 @@ class _SettingsScreenState extends State<SettingsScreen> {
                         value: 'uot',
                         groupValue: _transportMode,
                         title: const Text('UoT (UDP-over-TCP)', style: TextStyle(fontWeight: FontWeight.w600)),
-                        subtitle: const Text('Works reliably on mobile networks and strict firewalls', style: TextStyle(color: Colors.white54, fontSize: 12)),
+                        subtitle: const Text('Reliable on strict networks. Enables TCP DPI bypass.', style: TextStyle(color: Colors.white54, fontSize: 12)),
                         activeColor: Theme.of(context).colorScheme.primary,
                         onChanged: (v) => setState(() { _transportMode = v!; _saveSettings(); }),
                       ),
+                      if (_transportMode == 'uot')
+                        Padding(
+                          padding: const EdgeInsets.only(left: 16.0, right: 8.0, bottom: 8.0),
+                          child: SwitchListTile(
+                            title: const Text('TCP Fragmentation', style: TextStyle(fontSize: 14, fontWeight: FontWeight.w500)),
+                            subtitle: const Text('Bypass DPI by chunking handshake (Zapret style)', style: TextStyle(fontSize: 12, color: Colors.white54)),
+                            value: _tcpFragmentation,
+                            activeColor: Theme.of(context).colorScheme.primary,
+                            onChanged: (v) => setState(() { _tcpFragmentation = v; _saveSettings(); }),
+                          ),
+                        ),
                       Divider(color: Colors.white.withOpacity(0.05), height: 1),
                       RadioListTile<String>(
                         value: 'dns',
@@ -339,7 +359,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
                           children: [
                             const Icon(Icons.dns, size: 16, color: Colors.orangeAccent),
                             const SizedBox(width: 8),
-                            const Text('DNS Proxy Settings', style: TextStyle(fontWeight: FontWeight.bold, color: Colors.orangeAccent, fontSize: 14)),
+                            const Text('DNS Tunnel Settings', style: TextStyle(fontWeight: FontWeight.bold, color: Colors.orangeAccent, fontSize: 14)),
                           ],
                         ),
                         const SizedBox(height: 4),
@@ -585,6 +605,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
                 label: const Text('Copy Link', style: TextStyle(color: Colors.black, fontWeight: FontWeight.bold)),
                 style: ElevatedButton.styleFrom(
                   backgroundColor: Colors.white,
+                  foregroundColor: Colors.black,
                   padding: const EdgeInsets.symmetric(horizontal: 24, vertical: 12),
                   shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
                 ),

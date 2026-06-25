@@ -39,8 +39,7 @@ pub async fn run_socks_inbound(
     // the TUN inbound owns the connected state — it is set after the device and
     // server bypass route are in place — so we must not flip it prematurely.
     if is_primary {
-        metrics.connection_state.store(2, Ordering::Relaxed);
-        tracing::info!("{} proxy inbound ready on {}, connection state = connected", protocol, bind_addr);
+        tracing::info!("SOCKS proxy is primary: marking connected");
     } else {
         tracing::info!("{} proxy inbound ready on {}", protocol, bind_addr);
     }

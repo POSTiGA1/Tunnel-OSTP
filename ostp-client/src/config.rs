@@ -104,7 +104,13 @@ pub struct TransportConfig {
     pub resolver: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub pubkey: Option<String>,
+    
+    // Obfuscation
+    #[serde(default = "default_false")]
+    pub tcp_fragmentation: bool,
 }
+
+fn default_false() -> bool { false }
 
 fn default_transport_mode() -> String { "udp".to_string() }
 
@@ -115,6 +121,7 @@ impl Default for TransportConfig {
             domain: None,
             resolver: None,
             pubkey: None,
+            tcp_fragmentation: false,
         }
     }
 }

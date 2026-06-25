@@ -115,6 +115,7 @@ class _HomeScreenState extends State<HomeScreen> with TickerProviderStateMixin {
         "mode": transportMode,
         "stealth_sni": stealthSni,
         "wss": wss,
+        "tcp_fragmentation": widget.prefs.getBool('tcp_fragmentation') ?? false,
       },
       "multiplex": {
         "enabled": muxEnabled,
@@ -203,6 +204,7 @@ class _HomeScreenState extends State<HomeScreen> with TickerProviderStateMixin {
           "mode": transportMode,
           "stealth_sni": stealthSni,
           "wss": wss,
+          "tcp_fragmentation": widget.prefs.getBool('tcp_fragmentation') ?? false,
         },
         "multiplex": {
           "enabled": muxEnabled,
@@ -521,14 +523,28 @@ class _HomeScreenState extends State<HomeScreen> with TickerProviderStateMixin {
           Center(
             child: Opacity(
               opacity: theme.brightness == Brightness.dark ? 0.05 : 0.06,
-              child: SvgPicture.asset(
-                'assets/logo.svg',
-                width: MediaQuery.of(context).size.width * 0.8,
-                fit: BoxFit.contain,
-                colorFilter: theme.brightness == Brightness.light 
-                    ? const ColorFilter.mode(Colors.black, BlendMode.srcIn) 
-                    : null,
-              ),
+              child: Platform.isIOS
+                  ? ClipRRect(
+                      borderRadius: BorderRadius.circular(32),
+                      child: SvgPicture.asset(
+                        'assets/logo.svg',
+                        width: MediaQuery.of(context).size.width * 0.8,
+                        fit: BoxFit.contain,
+                        colorFilter: theme.brightness == Brightness.light 
+                            ? const ColorFilter.mode(Colors.black, BlendMode.srcIn) 
+                            : null,
+                      ),
+                    )
+                  : ClipOval(
+                      child: SvgPicture.asset(
+                        'assets/logo.svg',
+                        width: MediaQuery.of(context).size.width * 0.8,
+                        fit: BoxFit.contain,
+                        colorFilter: theme.brightness == Brightness.light 
+                            ? const ColorFilter.mode(Colors.black, BlendMode.srcIn) 
+                            : null,
+                      ),
+                    ),
             ),
           ),
           

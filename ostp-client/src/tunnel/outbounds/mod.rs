@@ -12,6 +12,7 @@ pub struct OutboundManager {
     balancer: Arc<Balancer>,
     phys_if_index: Option<u32>,
     _phys_if_name: Option<String>,
+    metrics: Option<Arc<crate::bridge::BridgeMetrics>>,
 }
 
 impl OutboundManager {
@@ -19,11 +20,13 @@ impl OutboundManager {
         balancer: Arc<Balancer>,
         phys_if_index: Option<u32>,
         phys_if_name: Option<String>,
+        metrics: Option<Arc<crate::bridge::BridgeMetrics>>,
     ) -> Self {
         Self {
             balancer,
             phys_if_index,
             _phys_if_name: phys_if_name,
+            metrics,
         }
     }
 
@@ -39,7 +42,7 @@ impl OutboundManager {
                 block::dial_tcp(target_host, target_port).await
             }
             OutboundConfig::Ostp { server, port, access_key, transport, multiplex, .. } => {
-                ostp::dial_tcp(target_host, target_port, server, *port, access_key, transport, multiplex).await
+                ostp::dial_tcp(target_host, target_port, server, *port, access_key, transport, multiplex, self.metrics.clone()).await
             }
             OutboundConfig::Socks { server, port, .. } => {
                 socks::dial_tcp(target_host, target_port, server, *port).await
@@ -66,7 +69,7 @@ impl OutboundManager {
                 block::handle_udp(client_src, target_dst, payload).await
             }
             OutboundConfig::Ostp { server, port, access_key, transport, multiplex, .. } => {
-                ostp::handle_udp(client_src, target_dst, payload, server, *port, access_key, transport, multiplex).await
+                ostp::handle_udp(client_src, target_dst, payload, server, *port, access_key, transport, multiplex, self.metrics.clone()).await
             }
             OutboundConfig::Socks { server, port, .. } => {
                 socks::handle_udp(client_src, target_dst, payload, server, *port).await

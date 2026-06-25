@@ -28,7 +28,7 @@ pub async fn run_client_core(
 
     // TODO: Detect physical interface index for bypassing
     let phys_if_for_bypass = None;
-    let outbound_manager = Arc::new(OutboundManager::new(balancer.clone(), phys_if_for_bypass, None));
+    let outbound_manager = Arc::new(OutboundManager::new(balancer.clone(), phys_if_for_bypass, None, Some(metrics.clone())));
 
     // When a TUN inbound is present it is the primary one and owns the connected
     // state; the SOCKS proxy is then secondary and must not report "connected".

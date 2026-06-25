@@ -1,11 +1,13 @@
 use crate::{OstpTunInterface, OstpTunOptions};
 use anyhow::{anyhow, Result};
-use std::process::Command;
-use std::os::windows::process::CommandExt;
+use tun::AbstractDeviceExt;
 
 pub mod windows_route {
     include!("windows_route.rs");
 }
+
+#[path = "sys_win_api.rs"]
+mod sys_win_api;
 
 struct WindowsRouteGuard {
     bypass_routes: Vec<(std::net::Ipv4Addr, std::net::Ipv4Addr, u32)>,
@@ -14,33 +16,14 @@ struct WindowsRouteGuard {
 
 impl Drop for WindowsRouteGuard {
     fn drop(&mut self) {
-        const CREATE_NO_WINDOW: u32 = 0x08000000;
-        
         windows_route::sys::remove_bypass_routes(&self.bypass_routes);
         tracing::info!("Removed {} bypass routes.", self.bypass_routes.len());
 
-        let is_kill_switch = self.kill_switch;
-        let _ = std::thread::spawn(move || {
-            let _ = Command::new("netsh")
-                .creation_flags(CREATE_NO_WINDOW)
-                .args(["advfirewall", "firewall", "delete", "rule", "name=OSTP Tunnel In"])
-                .output();
-            let _ = Command::new("netsh")
-                .creation_flags(CREATE_NO_WINDOW)
-                .args(["advfirewall", "firewall", "delete", "rule", "name=OSTP Tunnel Out"])
-                .output();
-            let _ = Command::new("netsh")
-                .creation_flags(CREATE_NO_WINDOW)
-                .args(["interface", "ipv4", "set", "dnsservers",
-                       "name=ostp_tun", "source=dhcp"])
-                .output();
-            if is_kill_switch {
-                let _ = Command::new("route")
-                    .creation_flags(CREATE_NO_WINDOW)
-                    .args(["delete", "0.0.0.0", "mask", "0.0.0.0", "127.0.0.1"])
-                    .output();
-            }
-        });
+        let _ = sys_win_api::remove_firewall_rules();
+
+        if self.kill_switch {
+            let _ = sys_win_api::set_kill_switch_route(false);
+        }
     }
 }
 
@@ -83,18 +66,8 @@ pub async fn create(opts: OstpTunOptions) -> Result<OstpTunInterface> {
         }
     }
 
-    // Clean up any stale Wintun adapters matching our name prefix. This prevents
-    // Wintun from creating "ostp_tun 2" (which violates the strict naming requirement
-    // and causes the 15-second interface index lookup timeout below).
-    tracing::info!("Cleaning up any stale 'ostp_tun*' adapters...");
-    let _ = std::process::Command::new("powershell")
-        .creation_flags(0x08000000)
-        .args([
-            "-NoProfile",
-            "-Command",
-            "try { Get-NetAdapter -Name 'ostp_tun*' -ErrorAction Stop | Remove-NetAdapter -Confirm:$false -ErrorAction SilentlyContinue } catch {}"
-        ])
-        .output();
+    // No need to call powershell to clean up adapters, WinTun handles it well
+    // if we don't try to use friendly-name matching.
 
     let mut tun_cfg = tun::Configuration::default();
     tun_cfg
@@ -136,88 +109,34 @@ pub async fn create(opts: OstpTunOptions) -> Result<OstpTunInterface> {
             }
         }
     };
+    let luid = dev.tun_luid();
     let dev = tun::AsyncDevice::new(dev).map_err(|e| anyhow!("TUN device async failed: {}", e))?;
     tracing::info!("TUN device 'ostp_tun' created.");
-    let name_owned = "ostp_tun".to_string();
+    // We rely entirely on the LUID-based route established by the `tun` crate's `.destination()`.
+    // It is instant and reliable. The fallback polling loop has been removed for instant startup.
 
     let current_exe = std::env::current_exe()?.to_string_lossy().into_owned();
-
-    // A freshly created WinTun adapter can take several seconds to appear in
-    // GetAdaptersAddresses (it only shows up once it has an operational IPv4
-    // binding). The default route via the TUN is what actually captures
-    // traffic. The `tun` crate already added an LUID-based route which works
-    // instantly, but we add a secondary index-based route for robustness.
-    // We run this in the background so it doesn't block tunnel startup.
-    tokio::spawn(async move {
-        let mut tun_index = None;
-        for _ in 0..75 {
-            if let Some(idx) = windows_route::sys::get_interface_index(&name_owned) {
-                tun_index = Some(idx);
-                break;
-            }
-            tokio::time::sleep(std::time::Duration::from_millis(200)).await;
-        }
-
-        if let Some(idx) = tun_index {
-            match windows_route::sys::add_ipv4_route(
-                std::net::Ipv4Addr::new(0, 0, 0, 0),
-                std::net::Ipv4Addr::new(0, 0, 0, 0),
-                std::net::Ipv4Addr::new(10, 1, 0, 1),
-                idx,
-                5,
-            ) {
-                Ok(()) => tracing::info!("Default route via TUN (if_index={idx}, metric=5) added."),
-                Err(e) => tracing::error!("Failed to add default route via TUN (if_index={idx}): {e} — traffic will NOT be captured."),
-            }
-        } else {
-            tracing::warn!("Could not find '{}' index in routing table after 15s — fallback route not installed.", name_owned);
-        }
-    });
-
     let exe1 = current_exe.clone();
-    let exe2 = current_exe.clone();
     let _ = tokio::task::spawn_blocking(move || {
-        let _ = Command::new("netsh")
-            .creation_flags(CREATE_NO_WINDOW)
-            .args(["advfirewall", "firewall", "add", "rule",
-                   "name=OSTP Tunnel In", "dir=in", "action=allow",
-                   &format!("program={}", exe1)])
-            .output();
-        let _ = Command::new("netsh")
-            .creation_flags(CREATE_NO_WINDOW)
-            .args(["advfirewall", "firewall", "add", "rule",
-                   "name=OSTP Tunnel Out", "dir=out", "action=allow",
-                   &format!("program={}", exe2)])
-            .output();
-        let _ = Command::new("netsh")
-            .creation_flags(CREATE_NO_WINDOW)
-            .args(["interface", "ipv4", "set", "interface", "name=ostp_tun",
-                   "routerdiscovery=disabled", "dadtransmits=0",
-                   "managedaddress=disabled", "otherstateful=disabled"])
-            .output();
+        if let Err(e) = sys_win_api::add_firewall_rules(&exe1) {
+            tracing::warn!("Failed to add firewall rules via WinAPI: {}", e);
+        }
     });
 
     if let Some(ref dns) = opts.dns_server {
         if !dns.is_empty() {
             let dns_clone = dns.clone();
             let _ = tokio::task::spawn_blocking(move || {
-                let _ = Command::new("netsh")
-                    .creation_flags(CREATE_NO_WINDOW)
-                    .args(["interface", "ipv4", "set", "dnsservers",
-                           "name=ostp_tun", "static", &dns_clone, "primary"])
-                    .output();
+                if let Err(e) = sys_win_api::set_dns_servers(luid, &dns_clone) {
+                    tracing::warn!("Failed to set DNS via WinAPI: {}", e);
+                }
             });
         }
     }
 
     if opts.kill_switch {
         tracing::info!("Kill Switch enabled: Adding metric 10 blackhole route to prevent leakage");
-        let _ = tokio::task::spawn_blocking(move || {
-            let _ = Command::new("route")
-                .creation_flags(CREATE_NO_WINDOW)
-                .args(["add", "0.0.0.0", "mask", "0.0.0.0", "127.0.0.1", "metric", "10", "if", "1"])
-                .output();
-        });
+        let _ = sys_win_api::set_kill_switch_route(true);
     }
 
     Ok(OstpTunInterface {
