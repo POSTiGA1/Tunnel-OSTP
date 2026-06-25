@@ -17,11 +17,12 @@ pub async fn run_tun_inbound(
 ) -> Result<()> {
 
     use netstack_smoltcp::StackBuilder;
-    use portable_atomic::Ordering;
     use tokio::io::{AsyncReadExt, AsyncWriteExt};
     use futures::{StreamExt, SinkExt};
+    use portable_atomic::Ordering;
 
-    let InboundConfig::Tun { tag, auto_route, mtu, fd: _fd, .. } = inbound_config else {
+    #[allow(unused_variables)]
+    let InboundConfig::Tun { tag, auto_route, mtu, fd, .. } = inbound_config else {
         return Err(anyhow!("Invalid config for TUN inbound"));
     };
 

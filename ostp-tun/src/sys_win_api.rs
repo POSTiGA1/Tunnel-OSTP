@@ -110,7 +110,7 @@ pub fn set_dns_servers(adapter_luid: u64, dns: &str) -> Result<()> {
         .chain(Some(0))
         .collect();
 
-    let mut settings = DNS_INTERFACE_SETTINGS {
+    let settings = DNS_INTERFACE_SETTINGS {
         Version: 1, // DNS_INTERFACE_SETTINGS_VERSION1
         Flags: 1, // DNS_SETTING_IPV4
         Domain: windows::core::PWSTR::null(),
@@ -124,7 +124,7 @@ pub fn set_dns_servers(adapter_luid: u64, dns: &str) -> Result<()> {
     };
 
     let luid = windows::Win32::NetworkManagement::Ndis::NET_LUID_LH { Value: adapter_luid };
-    let guid = GUID::zeroed(); // We can pass zeroed GUID and just use LUID? Wait, SetInterfaceDnsSettings requires GUID.
+    let _guid = GUID::zeroed(); // We can pass zeroed GUID and just use LUID? Wait, SetInterfaceDnsSettings requires GUID.
     
     // Actually, setting DNS via SetInterfaceDnsSettings requires the interface GUID, which we can get from ConvertInterfaceLuidToGuid.
     unsafe {

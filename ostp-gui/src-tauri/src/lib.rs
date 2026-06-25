@@ -420,14 +420,26 @@ async fn stop_tunnel(state: tauri::State<'_, AppState>) -> Result<bool, String> 
 async fn start_tunnel(state: tauri::State<'_, AppState>, app: tauri::AppHandle) -> Result<bool, String> {
     let mut guard = state.0.lock().await;
 
-    if let Some(ref t) = guard.tunnel {
-        match t {
-            TunnelHandle::InProcess(s) if !s.handle.is_finished() => return Ok(true),
-            TunnelHandle::Helper(_) => return Ok(true),
-            _ => {}
+    // If a tunnel is already running (a UI/backend desync left a stale handle, or
+    // the user is switching servers), tear it down before starting a fresh one —
+    // otherwise we'd silently keep the old connection/server. start_tunnel is only
+    // ever invoked on an explicit connect (the UI calls it only while it believes
+    // it is disconnected), so restarting here is safe.
+    match guard.tunnel.take() {
+        Some(TunnelHandle::Helper(h)) => {
+            let stop_cmd = serde_json::json!({ "cmd": "stop", "token": h.token }).to_string();
+            let _ = h.cmd_tx.send(format!("{}\n", stop_cmd)).await;
+            // Let the elevated helper stop the tunnel and release the TUN adapter
+            // before a new helper tries to create it (avoids ostp_tun name clashes).
+            tokio::time::sleep(std::time::Duration::from_millis(1200)).await;
         }
+        Some(TunnelHandle::InProcess(mut s)) => {
+            if let Some(tx) = s.shutdown_tx.take() { let _ = tx.send(true); }
+            s.handle.abort();
+            let _ = tokio::time::timeout(std::time::Duration::from_secs(2), s.handle).await;
+        }
+        None => {}
     }
-    guard.tunnel = None;
 
     let path = get_config_path();
     let content = std::fs::read_to_string(&path).map_err(|e| e.to_string())?;

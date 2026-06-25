@@ -70,6 +70,13 @@ pub(crate) struct RemoteState {
 
 // ── Public API ───────────────────────────────────────────────────────────────
 
+pub type ConnectRequest = (
+    u32,
+    u16,
+    String,
+    Result<(tokio::net::tcp::OwnedWriteHalf, mpsc::Sender<()>), String>,
+);
+
 pub async fn run_server(
     bind_addrs: Vec<String>,
     server_public_ip: Option<String>,
@@ -343,6 +350,13 @@ pub async fn run_server(
 
     // Headless event logger
     tokio::spawn(async move {
+        // Rate-limit unauthorized-probe logging: a single client dial sends
+        // several Amnezia-style junk packets, and a real DPI sweep can send
+        // far more. Log the first probe of each ~30s window immediately, then
+        // suppress the rest and emit a count — so the log stays readable and
+        // a genuine probe is never fully hidden.
+        let mut probe_window_start: Option<std::time::Instant> = None;
+        let mut probe_suppressed: u64 = 0;
         while let Some(ev) = ui_event_rx.recv().await {
             match ev {
                 UiEvent::Log(msg) => {
@@ -360,8 +374,23 @@ pub async fn run_server(
                     tracing::info!("Access key created: {key}");
                 }
                 UiEvent::UnauthorizedProbe { peer, bytes, reason } => {
-                    // Make it a warn so it's always visible outside debug mode!
-                    tracing::warn!("Unauthorized probe from {peer} ({bytes} bytes): {reason}");
+                    let now = std::time::Instant::now();
+                    let elapsed = probe_window_start
+                        .map(|s| now.duration_since(s))
+                        .unwrap_or(std::time::Duration::MAX);
+                    if elapsed >= std::time::Duration::from_secs(30) {
+                        if probe_suppressed > 0 {
+                            tracing::warn!(
+                                "(+{} more unauthorized probes suppressed in the previous ~30s)",
+                                probe_suppressed
+                            );
+                        }
+                        probe_window_start = Some(now);
+                        probe_suppressed = 0;
+                        tracing::warn!("Unauthorized probe from {peer} ({bytes} bytes): {reason}");
+                    } else {
+                        probe_suppressed += 1;
+                    }
                 }
                 UiEvent::PeerSeen { .. } => {}
                 _ => {}
@@ -402,7 +431,7 @@ async fn run_server_loop(
     let mut remotes: HashMap<(u32, u16), RemoteState> = HashMap::new();
     let (stream_tx, mut stream_rx) = mpsc::unbounded_channel::<(u32, u16, Vec<u8>)>();
     let (udp_reply_tx, mut udp_reply_rx) = mpsc::unbounded_channel::<(u32, u16, String, Vec<u8>)>();
-    let (connect_tx, mut connect_rx) = mpsc::unbounded_channel::<(u32, u16, String, Result<(tokio::net::tcp::OwnedWriteHalf, mpsc::Sender<()>), String>)>();
+    let (connect_tx, mut connect_rx) = mpsc::unbounded_channel::<ConnectRequest>();
 
     let tcp_map = std::sync::Arc::new(tokio::sync::RwLock::new(HashMap::new()));
 
@@ -414,15 +443,10 @@ async fn run_server_loop(
         let tx = udp_tx.clone();
         tokio::spawn(async move {
             let mut buf = vec![0_u8; 65535];
-            loop {
-                match sock_clone.recv_from(&mut buf).await {
-                    Ok((size, peer)) => {
-                        let packet = Bytes::copy_from_slice(&buf[..size]);
-                        if tx.send((packet, peer)).await.is_err() {
-                            break;
-                        }
-                    }
-                    Err(_) => break,
+            while let Ok((size, peer)) = sock_clone.recv_from(&mut buf).await {
+                let packet = Bytes::copy_from_slice(&buf[..size]);
+                if tx.send((packet, peer)).await.is_err() {
+                    break;
                 }
             }
         });
@@ -580,6 +604,7 @@ async fn run_server_loop(
     Ok(())
 }
 
+#[allow(clippy::too_many_arguments)]
 async fn handle_udp_packet(
     packet: Bytes,
     peer: std::net::SocketAddr,
@@ -590,7 +615,7 @@ async fn handle_udp_packet(
     ui_event_tx: &mpsc::UnboundedSender<UiEvent>,
     stream_tx: mpsc::UnboundedSender<(u32, u16, Vec<u8>)>,
     udp_reply_tx: mpsc::UnboundedSender<(u32, u16, String, Vec<u8>)>,
-    connect_tx: mpsc::UnboundedSender<(u32, u16, String, Result<(tokio::net::tcp::OwnedWriteHalf, mpsc::Sender<()>), String>)>,
+    connect_tx: mpsc::UnboundedSender<ConnectRequest>,
     router: std::sync::Arc<crate::router::Router>,
     peer_last_seen: &mut HashMap<IpAddr, Instant>,
     peer_available: &mut HashMap<IpAddr, bool>,

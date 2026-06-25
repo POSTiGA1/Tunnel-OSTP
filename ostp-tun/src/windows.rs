@@ -28,7 +28,6 @@ impl Drop for WindowsRouteGuard {
 }
 
 pub async fn create(opts: OstpTunOptions) -> Result<OstpTunInterface> {
-    const CREATE_NO_WINDOW: u32 = 0x08000000;
 
     let (phys_gw, phys_if) = windows_route::sys::get_default_ipv4_route()
         .ok_or_else(|| anyhow!("Cannot find physical default IPv4 route"))?;

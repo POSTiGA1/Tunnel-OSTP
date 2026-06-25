@@ -44,34 +44,57 @@ pub async fn run_client_core(
     let mut handles = Vec::new();
 
     let metrics_ping = metrics.clone();
-    let server_ip = config.outbounds.iter().find_map(|o| {
+    let server_addr = config.outbounds.iter().find_map(|o| {
         match o {
-            crate::config::OutboundConfig::Ostp { server, .. } => Some(server.clone()),
-            crate::config::OutboundConfig::Socks { server, .. } => Some(server.clone()),
+            crate::config::OutboundConfig::Ostp { server, port, .. } => Some((server.clone(), *port)),
+            crate::config::OutboundConfig::Socks { server, port, .. } => Some((server.clone(), *port)),
             _ => None,
         }
     });
-    
-    if let Some(mut server) = server_ip {
-        if !server.contains(':') {
-            server.push_str(":443");
-        }
+
+    if let Some((host, port)) = server_addr {
+        // Probe the REAL server port. The OSTP server listens for UoT/TCP on the
+        // same port as UDP, so a plain TCP connect there confirms liveness. The
+        // old code hardcoded ":443" — which the server never listens on — so the
+        // probe failed every time and wrongly latched "reconnecting" forever even
+        // while the tunnel was carrying traffic (the button flickered to
+        // disconnected and counters appeared frozen).
+        let server = if host.contains(':') { host } else { format!("{host}:{port}") };
         let mut shutdown_rx = shutdown_rx_ext.clone();
         handles.push(tokio::spawn(async move {
+            // Health probe: the authoritative source of "connected". Probe the
+            // server immediately, then every 3s. A reachable server latches
+            // state=2 (even before any app traffic flows), and two consecutive
+            // failures drop it back to 1 (reconnecting). Per-connection dials must
+            // NOT drive this global state or the button flickers as connections
+            // open and close.
+            let mut consecutive_fail = 0u32;
             loop {
+                let start = std::time::Instant::now();
+                let ok = matches!(
+                    tokio::time::timeout(
+                        std::time::Duration::from_secs(2),
+                        tokio::net::TcpStream::connect(&server),
+                    )
+                    .await,
+                    Ok(Ok(_))
+                );
+                if ok {
+                    let rtt = start.elapsed().as_millis() as u32;
+                    metrics_ping.rtt_ms.store(rtt, Ordering::Relaxed);
+                    metrics_ping.connection_state.store(2, Ordering::Relaxed);
+                    consecutive_fail = 0;
+                } else {
+                    consecutive_fail += 1;
+                    if consecutive_fail >= 2 {
+                        metrics_ping.connection_state.store(1, Ordering::Relaxed);
+                    }
+                }
                 tokio::select! {
                     _ = tokio::time::sleep(std::time::Duration::from_secs(3)) => {}
                     _ = shutdown_rx.changed() => {
                         if *shutdown_rx.borrow() { break; }
                     }
-                }
-                let start = std::time::Instant::now();
-                if let Ok(Ok(_)) = tokio::time::timeout(
-                    std::time::Duration::from_secs(2),
-                    tokio::net::TcpStream::connect(&server)
-                ).await {
-                    let rtt = start.elapsed().as_millis() as u32;
-                    metrics_ping.rtt_ms.store(rtt, Ordering::Relaxed);
                 }
             }
         }));

@@ -633,23 +633,23 @@ fn wizard_save_config(config_path: &std::path::Path, json_value: &serde_json::Va
     }
     
     match fs::write(&current_path, serde_json::to_string_pretty(json_value)?) {
-        Ok(_) => {
+        Ok(_) if current_path.exists() => {
             wizard_ok(&format!("Configuration saved to {:?}", current_path));
-            return Ok(current_path);
+            Ok(current_path)
         }
-        Err(e) => {
-            wizard_warn(&format!("Could not write to {:?}: {}", current_path, e));
+        _ => {
+            wizard_warn(&format!("Could not write to {:?}", current_path));
             // Attempt 2: fallback to current directory
             let fallback = std::env::current_dir().unwrap_or_else(|_| PathBuf::from(".")).join("config.json");
             wizard_warn(&format!("Falling back to {:?}", fallback));
             
             match fs::write(&fallback, serde_json::to_string_pretty(json_value)?) {
-                Ok(_) => {
+                Ok(_) if fallback.exists() => {
                     wizard_ok(&format!("Configuration saved to {:?}", fallback));
-                    return Ok(fallback);
+                    Ok(fallback)
                 }
-                Err(e2) => {
-                    wizard_warn(&format!("Could not write to fallback {:?}: {}", fallback, e2));
+                _ => {
+                    wizard_warn(&format!("Could not write to fallback {:?}", fallback));
                     anyhow::bail!("Failed to save configuration to any location.");
                 }
             }
@@ -777,11 +777,11 @@ fn run_setup_wizard(config_path: &std::path::Path) -> Result<()> {
             let _ = &sni;
 
             let server_parts: Vec<&str> = server.split(':').collect();
-            let server_host = server_parts.get(0).unwrap_or(&"127.0.0.1");
+            let server_host = server_parts.first().unwrap_or(&"127.0.0.1");
             let server_port = server_parts.get(1).unwrap_or(&"50000").parse::<u16>().unwrap_or(50000);
             
             let socks_parts: Vec<&str> = socks_bind.split(':').collect();
-            let socks_host = socks_parts.get(0).unwrap_or(&"127.0.0.1");
+            let socks_host = socks_parts.first().unwrap_or(&"127.0.0.1");
             let socks_port = socks_parts.get(1).unwrap_or(&"1088").parse::<u16>().unwrap_or(1088);
 
             let client_json = serde_json::json!({
@@ -884,7 +884,7 @@ fn run_setup_wizard(config_path: &std::path::Path) -> Result<()> {
 
             wizard_step(3, TOTAL, "Service registration");
             // intentional: step text then daemon call below
-            let port_str = listen.split(':').last().unwrap_or("50000");
+            let port_str = listen.split(':').next_back().unwrap_or("50000");
             let port: u16 = port_str.parse().unwrap_or(50000);
             let server_json = serde_json::json!({
                 "mode": "server",
@@ -925,7 +925,7 @@ fn run_setup_wizard(config_path: &std::path::Path) -> Result<()> {
 
             // Print share links
             let host = get_or_ask_public_ip(config_path);
-            let port = listen.split(':').last().unwrap_or("50000");
+            let port = listen.split(':').next_back().unwrap_or("50000");
             println!();
             wizard_section("Share links for clients:");
             for (i, key) in access_keys.iter().enumerate() {
@@ -1058,7 +1058,7 @@ fn run_setup_wizard(config_path: &std::path::Path) -> Result<()> {
                 wizard_register_windows_service(&actual_path)?;
             }
 
-            let port = listen.split(':').last().unwrap_or("50000");
+            let port = listen.split(':').next_back().unwrap_or("50000");
             println!();
             wizard_section("Share links for clients:");
             for (i, key) in access_keys.iter().enumerate() {
@@ -1683,8 +1683,7 @@ async fn run_app() -> Result<()> {
                     }
                     if let Some(key) = first_key {
                         let host = get_or_ask_public_ip(&args.config);
-                        let mut query_params = Vec::<String>::new();
-                        query_params.push("type=udp".to_string());
+                        let mut query_params = vec!["type=udp".to_string()];
 
                         let mut link = format!("ostp://{}@{}:50000", key, host);
                         if !query_params.is_empty() {
@@ -1786,8 +1785,7 @@ async fn run_app() -> Result<()> {
                     }
                 }
                 for (idx, user) in users.iter().enumerate() {
-                    let mut query_params = Vec::<String>::new();
-                    query_params.push("type=udp".to_string());
+                    let mut query_params = vec!["type=udp".to_string()];
 
                     let mut link = format!("ostp://{}@{}:{}", user.key(), host, port);
                     if !query_params.is_empty() {
@@ -2433,7 +2431,7 @@ fn extract_server_listen(old: &serde_json::Value) -> (String, u16) {
     // Old format: "listen": "0.0.0.0:50000"
     if let Some(s) = old.get("listen").and_then(|v| v.as_str()) {
         let parts: Vec<&str> = s.split(':').collect();
-        let h = parts.get(0).unwrap_or(&"0.0.0.0").to_string();
+        let h = parts.first().unwrap_or(&"0.0.0.0").to_string();
         let p = parts.get(1).and_then(|x| x.parse().ok()).unwrap_or(50000);
         return (h, p);
     }
@@ -2511,7 +2509,7 @@ fn extract_server_api(old: &serde_json::Value) -> (String, u16, String, String, 
     if let Some(api) = old.get("api") {
         let bind = api.get("bind").and_then(|v| v.as_str()).unwrap_or("127.0.0.1:9090");
         let parts: Vec<&str> = bind.split(':').collect();
-        let listen = parts.get(0).unwrap_or(&"127.0.0.1").to_string();
+        let listen = parts.first().unwrap_or(&"127.0.0.1").to_string();
         let port = parts.get(1).and_then(|p| p.parse().ok()).unwrap_or(9090);
         let token = api.get("token").and_then(|v| v.as_str()).unwrap_or("YOUR_SECRET_TOKEN").to_string();
         let webpath = api.get("webpath").and_then(|v| v.as_str()).unwrap_or("/admin").to_string();
@@ -2581,7 +2579,7 @@ fn extract_client_server(old: &serde_json::Value) -> (String, u16, String, Strin
     // Old flat format
     let server_full = old.get("server").and_then(|v| v.as_str()).unwrap_or("YOUR_SERVER_IP:50000");
     let parts: Vec<&str> = server_full.split(':').collect();
-    let server = parts.get(0).unwrap_or(&"YOUR_SERVER_IP").to_string();
+    let server = parts.first().unwrap_or(&"YOUR_SERVER_IP").to_string();
     let port = parts.get(1).and_then(|p| p.parse().ok()).unwrap_or(50000);
     let key = old.get("access_key").and_then(|v| v.as_str()).unwrap_or("").to_string();
     let transport = old.get("transport").and_then(|t| t.get("mode").or(t.get("type"))).and_then(|v| v.as_str()).unwrap_or("udp").to_string();
@@ -2604,7 +2602,7 @@ fn extract_client_socks(old: &serde_json::Value) -> (String, u16) {
     // Old flat format
     let bind = old.get("socks5_bind").and_then(|v| v.as_str()).unwrap_or("127.0.0.1:1088");
     let parts: Vec<&str> = bind.split(':').collect();
-    let listen = parts.get(0).unwrap_or(&"127.0.0.1").to_string();
+    let listen = parts.first().unwrap_or(&"127.0.0.1").to_string();
     let port = parts.get(1).and_then(|p| p.parse().ok()).unwrap_or(1088);
     (listen, port)
 }

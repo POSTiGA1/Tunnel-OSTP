@@ -4,8 +4,57 @@ use crate::config::{ClientConfig, InboundConfig};
 use crate::tunnel::router::{Router, Session};
 use crate::tunnel::outbounds::OutboundManager;
 use tokio::net::TcpListener;
-use tokio::io::{AsyncReadExt, AsyncWriteExt};
+use tokio::io::{AsyncRead, AsyncWrite, AsyncReadExt, AsyncWriteExt};
 use tokio::sync::watch;
+
+use portable_atomic::Ordering;
+
+struct MetricStream<T> {
+    inner: T,
+    metrics: Arc<crate::bridge::BridgeMetrics>,
+}
+
+impl<T: AsyncRead + Unpin> AsyncRead for MetricStream<T> {
+    fn poll_read(
+        mut self: std::pin::Pin<&mut Self>,
+        cx: &mut std::task::Context<'_>,
+        buf: &mut tokio::io::ReadBuf<'_>,
+    ) -> std::task::Poll<std::io::Result<()>> {
+        let filled_before = buf.filled().len();
+        let res = std::pin::Pin::new(&mut self.inner).poll_read(cx, buf);
+        if let std::task::Poll::Ready(Ok(())) = &res {
+            let filled_after = buf.filled().len();
+            if filled_after > filled_before {
+                // local client read from remote (this means recv from tunnel)
+                self.metrics.bytes_recv.fetch_add((filled_after - filled_before) as u64, Ordering::Relaxed);
+            }
+        }
+        res
+    }
+}
+
+impl<T: AsyncWrite + Unpin> AsyncWrite for MetricStream<T> {
+    fn poll_write(
+        mut self: std::pin::Pin<&mut Self>,
+        cx: &mut std::task::Context<'_>,
+        buf: &[u8],
+    ) -> std::task::Poll<std::io::Result<usize>> {
+        let res = std::pin::Pin::new(&mut self.inner).poll_write(cx, buf);
+        if let std::task::Poll::Ready(Ok(n)) = &res {
+            // local client write to remote (this means sent to tunnel)
+            self.metrics.bytes_sent.fetch_add(*n as u64, Ordering::Relaxed);
+        }
+        res
+    }
+
+    fn poll_flush(mut self: std::pin::Pin<&mut Self>, cx: &mut std::task::Context<'_>) -> std::task::Poll<std::io::Result<()>> {
+        std::pin::Pin::new(&mut self.inner).poll_flush(cx)
+    }
+
+    fn poll_shutdown(mut self: std::pin::Pin<&mut Self>, cx: &mut std::task::Context<'_>) -> std::task::Poll<std::io::Result<()>> {
+        std::pin::Pin::new(&mut self.inner).poll_shutdown(cx)
+    }
+}
 
 pub async fn run_socks_inbound(
     _config: ClientConfig,
@@ -16,7 +65,6 @@ pub async fn run_socks_inbound(
     metrics: Arc<crate::bridge::BridgeMetrics>,
     is_primary: bool,
 ) -> Result<()> {
-    use portable_atomic::Ordering;
     let InboundConfig::LocalProxy { tag, protocol, listen, port, set_system_proxy } = inbound_config else {
         return Err(anyhow!("Invalid config for LocalProxy inbound"));
     };
@@ -57,13 +105,14 @@ pub async fn run_socks_inbound(
                     let proto = protocol.clone();
                     let inbound_tag = tag.clone();
 
+                    let metrics_clone = metrics.clone();
                     tokio::spawn(async move {
                         if proto == "socks" {
-                            if let Err(e) = handle_socks5_connection(&mut stream, &rt, &om, &inbound_tag, client_addr).await {
+                            if let Err(e) = handle_socks5_connection(&mut stream, &rt, &om, &inbound_tag, client_addr, metrics_clone).await {
                                 tracing::debug!("SOCKS5 handling error: {}", e);
                             }
                         } else if proto == "http" {
-                            if let Err(e) = handle_http_connection(&mut stream, &rt, &om, &inbound_tag, client_addr).await {
+                            if let Err(e) = handle_http_connection(&mut stream, &rt, &om, &inbound_tag, client_addr, metrics_clone).await {
                                 tracing::debug!("HTTP proxy handling error: {}", e);
                             }
                         } else {
@@ -84,6 +133,7 @@ async fn handle_socks5_connection(
     outbound_manager: &Arc<OutboundManager>,
     inbound_tag: &str,
     client_addr: std::net::SocketAddr,
+    metrics: Arc<crate::bridge::BridgeMetrics>,
 ) -> Result<()> {
     let mut buf = [0u8; 256];
     
@@ -153,7 +203,8 @@ async fn handle_socks5_connection(
             stream.write_all(&[0x05, 0x00, 0x00, 0x01, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00]).await?;
             
             // Forward data
-            tokio::io::copy_bidirectional(stream, &mut remote_stream).await?;
+            let mut metric_remote = MetricStream { inner: remote_stream, metrics };
+            tokio::io::copy_bidirectional(stream, &mut metric_remote).await?;
         }
         Err(e) => {
             tracing::warn!("SOCKS5 TCP dial failed to {}: {}", outbound_tag, e);
@@ -171,6 +222,7 @@ async fn handle_http_connection(
     outbound_manager: &Arc<OutboundManager>,
     inbound_tag: &str,
     client_addr: std::net::SocketAddr,
+    metrics: Arc<crate::bridge::BridgeMetrics>,
 ) -> Result<()> {
     // Basic HTTP CONNECT implementation
     let mut buf = [0u8; 4096];
@@ -231,7 +283,8 @@ async fn handle_http_connection(
                 remote_stream.write_all(&buf[0..n]).await?;
             }
             
-            tokio::io::copy_bidirectional(stream, &mut remote_stream).await?;
+            let mut metric_remote = MetricStream { inner: remote_stream, metrics };
+            tokio::io::copy_bidirectional(stream, &mut metric_remote).await?;
         }
         Err(e) => {
             tracing::warn!("HTTP TCP dial failed to {}: {}", outbound_tag, e);

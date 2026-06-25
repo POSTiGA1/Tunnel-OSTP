@@ -25,7 +25,9 @@ OSTP (Ospab Stealth Transport Protocol) is an encrypted transport protocol writt
 | **Multiplexed Streams**| Multiple logical TCP streams over a single encrypted UDP session with per-stream flow control. |
 | **Session Roaming** | Connection persistence across IP changes via session ID tracking. |
 | **UoT Mode** | UDP-over-TCP encapsulation with length-prefixing to bypass UDP blocking. |
-| **Fallback Server** | TCP proxying to a legitimate web server to resist active probing. |
+| **TCP Fragmentation** | (Zapret-style) Bypasses Deep Packet Inspection (DPI) by chunking the initial TLS/Noise handshakes. |
+| **Junk Packets** | Sends randomized dummy UDP packets prior to the handshake to confuse DPI flow analyzers. |
+| **Adaptive Padding** | Dynamically pads handshake and data frames up to 1024 bytes to prevent packet size fingerprinting. |
 | **TUN Mode** | Native network stack integration (`smoltcp`) for full-system routing without external dependencies. |
 | **Management API** | Built-in REST API for server administration, metrics, and key generation. |
 | **TURN Relay** | RFC 5766 TURN support for NAT traversal. |
@@ -39,18 +41,16 @@ flowchart LR
     Apps[Local Apps] -->|SOCKS5 / TUN| CoreC
 
     subgraph Client [Client Node]
-        CoreC[OSTP Client] -.->|Encrypt & Mask| NetC[Transport Layer]
+        CoreC[OSTP Client] -.->|Encrypt, Pad & Chunk| NetC[Transport Layer]
     end
 
     NetC <==>|Encrypted UDP / UoT| NetS
 
     subgraph Server [Server Node]
         NetS[Transport Layer] -.->|Decrypt & Auth| CoreS[OSTP Server]
-        NetS -->|Unauthenticated| Fallback[Fallback Server]
     end
 
     CoreS -->|Relay| WWW((Internet))
-    Fallback -->|Forward| Web((Web / NGINX))
 ```
 
 ---

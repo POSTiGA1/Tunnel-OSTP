@@ -122,16 +122,14 @@ pub async fn dial_tcp(
             }
 
         if !handshake_success {
+            // A single proxied connection failing must NOT mark the whole tunnel
+            // as disconnected — global connection_state is owned by the health
+            // probe in run_client_core, not by per-target dials.
             tracing::warn!("TCP handshake failed or protocol machine error");
-            if let Some(m) = &metrics {
-                m.connection_state.store(0, std::sync::atomic::Ordering::Relaxed);
-            }
             return;
         }
 
-        if let Some(m) = &metrics {
-            m.connection_state.store(2, std::sync::atomic::Ordering::Relaxed);
-        }
+        // The global health probe (in runner.rs) is the only authoritative source of connection state.
 
         // Send connection request
         let connect_msg = ostp_core::relay::RelayMessage::Connect(format!("{}:{}", target_host_str, target_port));
@@ -268,16 +266,26 @@ pub async fn handle_udp(
     let config = make_initiator_config(session_id, access_key, transport_cfg);
     let mut machine = ProtocolMachine::new(config)?;
 
-    // Send UDP Junk Packets (Amnezia style) to break DPI heuristics
+    // Amnezia-style junk to break DPI heuristics — but ONLY over stream
+    // transports (UoT/TCP), where it rides inside the connection. Over plain
+    // UDP each junk is a standalone datagram of random bytes that the server
+    // cannot tell from a port scan: it logs every one as an "Unauthorized
+    // probe", wastes CPU trying every key on it, and can trip the server's
+    // anti-probe defenses against this very client. The server is not
+    // coordinated to expect/discard junk (unlike AmneziaWG's Jc/Jmin/Jmax), so
+    // junk-over-UDP is pure self-inflicted noise. Gate it to stream transports.
     use rand::Rng;
-    let num_junk = rand::thread_rng().gen_range(2..=5);
-    for _ in 0..num_junk {
-        let junk_len = rand::thread_rng().gen_range(100..=1000);
-        let mut junk = vec![0u8; junk_len];
-        rand::thread_rng().fill(&mut junk[..]);
-        let junk_bytes = bytes::Bytes::from(junk);
-        let _ = transport.send(&junk_bytes).await;
-        tokio::time::sleep(std::time::Duration::from_millis(5)).await;
+    let junk_enabled = matches!(transport_cfg.r#type.as_str(), "uot" | "tcp");
+    if junk_enabled {
+        let num_junk = rand::thread_rng().gen_range(2..=5);
+        for _ in 0..num_junk {
+            let junk_len = rand::thread_rng().gen_range(100..=1000);
+            let mut junk = vec![0u8; junk_len];
+            rand::thread_rng().fill(&mut junk[..]);
+            let junk_bytes = bytes::Bytes::from(junk);
+            let _ = transport.send(&junk_bytes).await;
+            tokio::time::sleep(std::time::Duration::from_millis(5)).await;
+        }
     }
 
     // Send handshake first
@@ -293,15 +301,11 @@ pub async fn handle_udp(
     ).await {
         Ok(Ok(n)) => {
             let _ = machine.on_event(OstpEvent::Inbound(bytes::Bytes::copy_from_slice(&buf[..n])));
-            if let Some(m) = &metrics {
-                m.connection_state.store(2, std::sync::atomic::Ordering::Relaxed);
-            }
         }
         _ => {
+            // Per-dial timeout: do not touch global connection_state (owned by the
+            // health probe). Just give up on this one target connection.
             tracing::warn!("OSTP handshake timeout for {}:{}", server, port);
-            if let Some(m) = &metrics {
-                m.connection_state.store(0, std::sync::atomic::Ordering::Relaxed);
-            }
             return Ok(());
         }
     }
