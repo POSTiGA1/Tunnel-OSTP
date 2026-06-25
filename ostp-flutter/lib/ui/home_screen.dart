@@ -8,6 +8,7 @@ import 'package:shared_preferences/shared_preferences.dart';
 import 'package:mobile_scanner/mobile_scanner.dart';
 import 'package:flutter_svg/flutter_svg.dart';
 import '../models/connection_state_enum.dart';
+import '../models/ostp_profile.dart';
 import 'settings_screen.dart';
 import 'logs_screen.dart';
 import 'app_routing_screen.dart';
@@ -29,8 +30,7 @@ class _HomeScreenState extends State<HomeScreen> with TickerProviderStateMixin {
   Timer? _uptimeTimer;
   int _uptimeSecs = 0;
   
-  String _serverAddr = '127.0.0.1:443';
-  String _accessKey = 'default_key';
+  List<OstpProfile> _activeProfiles = [];
   
   String _download = '0 B';
   String _upload = '0 B';
@@ -71,64 +71,134 @@ class _HomeScreenState extends State<HomeScreen> with TickerProviderStateMixin {
   
   void _loadSettings() {
     setState(() {
-      _serverAddr = widget.prefs.getString('server_addr') ?? '127.0.0.1:443';
-      _accessKey = widget.prefs.getString('access_key') ?? '';
+      final profilesJson = widget.prefs.getString('profiles_json');
+      if (profilesJson != null && profilesJson.isNotEmpty) {
+        try {
+          final List<dynamic> decoded = jsonDecode(profilesJson);
+          final profiles = decoded.map((e) => OstpProfile.fromJson(e)).toList();
+          _activeProfiles = profiles.where((p) => p.active).toList();
+        } catch (e) {
+          debugPrint('Error loading profiles: $e');
+        }
+      } else {
+        final oldServer = widget.prefs.getString('server_addr');
+        final oldKey = widget.prefs.getString('access_key');
+        if (oldServer != null && oldServer.isNotEmpty) {
+          final p = OstpProfile(
+            id: DateTime.now().millisecondsSinceEpoch.toString(),
+            name: 'Profile 1',
+            serverAddr: oldServer,
+            accessKey: oldKey ?? '',
+            transportMode: widget.prefs.getString('transport_mode') ?? 'udp',
+            stealthSni: widget.prefs.getString('stealth_sni') ?? '',
+            wss: widget.prefs.getBool('wss') ?? false,
+            active: true
+          );
+          _activeProfiles = [p];
+          widget.prefs.setString('profiles_json', jsonEncode([p.toJson()]));
+        } else {
+          _activeProfiles = [];
+        }
+      }
     });
     _updateLatestConfigJson();
   }
 
   void _updateLatestConfigJson() {
-
     final exDomains = widget.prefs.getString('ex_domains') ?? '';
     final exIps = widget.prefs.getString('ex_ips') ?? '';
     final exProcesses = widget.prefs.getString('ex_processes') ?? '';
     final debugMode = widget.prefs.getBool('debug_mode') ?? false;
-    final transportMode = widget.prefs.getString('transport_mode') ?? 'udp';
-    final stealthSni = widget.prefs.getString('stealth_sni') ?? 'vk.com';
-    final wss = widget.prefs.getBool('wss') ?? false;
     final mtu = widget.prefs.getString('mtu') ?? '1140';
     final muxEnabled = widget.prefs.getBool('mux_enabled') ?? false;
     final muxSessions = widget.prefs.getString('mux_sessions') ?? '2';
+    final tcpFrag = widget.prefs.getBool('tcp_fragmentation') ?? false;
     final dnsServer = widget.prefs.getString('dns_server');
     final effectiveDnsServer = (dnsServer == null || dnsServer.isEmpty) ? '1.1.1.1' : dnsServer;
     final tunStack = 'ostp';
     final appRoutingMode = widget.prefs.getString('app_routing_mode') ?? 'bypass';
     final appRoutingPackages = widget.prefs.getStringList('app_routing_packages') ?? [];
-
     final localBind = widget.prefs.getString('local_bind') ?? '127.0.0.1:1088';
+    final localParts = localBind.split(':');
+    final localListen = localParts.isNotEmpty ? localParts[0] : '127.0.0.1';
+    final localPort = localParts.length > 1 ? (int.tryParse(localParts[1]) ?? 1088) : 1088;
+
+    List<Map<String, dynamic>> inbounds = [
+      {
+        "type": "local_proxy",
+        "tag": "socks-in",
+        "protocol": "socks",
+        "listen": localListen,
+        "port": localPort
+      },
+      {
+        "type": "tun",
+        "tag": "tun-in",
+        "auto_route": true,
+        "mtu": int.tryParse(mtu) ?? 1140
+      }
+    ];
+
+    List<Map<String, dynamic>> outbounds = [];
+    List<String> ostpTags = [];
+
+    for (int i = 0; i < _activeProfiles.length; i++) {
+      final p = _activeProfiles[i];
+      final tag = _activeProfiles.length > 1 ? 'proxy-$i' : 'proxy';
+      ostpTags.add(tag);
+      
+      final parts = p.serverAddr.split(':');
+      final host = parts.isNotEmpty ? parts[0] : '127.0.0.1';
+      final port = parts.length > 1 ? (int.tryParse(parts[1]) ?? 50000) : 50000;
+
+      outbounds.add({
+        "type": "ostp",
+        "tag": tag,
+        "server": host,
+        "port": port,
+        "access_key": p.accessKey,
+        "transport": {
+          "type": p.transportMode,
+          "stealth_sni": p.stealthSni,
+          "wss": p.wss,
+          "tcp_fragmentation": tcpFrag
+        },
+        "multiplex": {
+          "enabled": muxEnabled,
+          "sessions": int.tryParse(muxSessions) ?? 2
+        }
+      });
+    }
+
+    if (_activeProfiles.length > 1) {
+      outbounds.add({
+        "type": "urltest",
+        "tag": "proxy",
+        "outbounds": ostpTags,
+        "url": "http://cp.cloudflare.com",
+        "interval": "3m"
+      });
+    }
+
+    outbounds.add({"type": "direct", "tag": "direct"});
+    outbounds.add({"type": "block", "tag": "block"});
+
     final configMap = {
-      "mode": "client",
-      "debug": debugMode,
-      "ostp": {
-        "server_addr": _serverAddr,
-        "local_bind_addr": "0.0.0.0:0",
-        "access_key": _accessKey,
-        "handshake_timeout_ms": 10000,
-        "io_timeout_ms": 5000,
-        "mtu": int.tryParse(mtu) ?? 1140,
+      "version": "0.3.20",
+      "log": {
+        "level": debugMode ? "debug" : "info"
       },
-      "local_proxy": {
-        "bind_addr": localBind,
-        "connect_timeout_ms": 15000,
-      },
-      "transport": {
-        "mode": transportMode,
-        "stealth_sni": stealthSni,
-        "wss": wss,
-        "tcp_fragmentation": widget.prefs.getBool('tcp_fragmentation') ?? false,
-      },
-      "multiplex": {
-        "enabled": muxEnabled,
-        "sessions": int.tryParse(muxSessions) ?? 2,
-      },
-      "tun": {
-        "enable": true,
-        "stack": tunStack
-      },
-      "exclusions": {
-        "domains": exDomains.split('\n').where((s) => s.trim().isNotEmpty).toList(),
-        "ips": exIps.split('\n').where((s) => s.trim().isNotEmpty).toList(),
-        "processes": exProcesses.split('\n').where((s) => s.trim().isNotEmpty).toList(),
+      "inbounds": inbounds,
+      "outbounds": outbounds,
+      "routing": {
+        "rules": [
+          {
+            "domains": exDomains.split('\n').where((s) => s.trim().isNotEmpty).toList(),
+            "ips": exIps.split('\n').where((s) => s.trim().isNotEmpty).toList(),
+            "processes": exProcesses.split('\n').where((s) => s.trim().isNotEmpty).toList(),
+            "outbound": "direct"
+          }
+        ]
       },
       "app_rules": {
         "mode": appRoutingMode,
@@ -137,6 +207,7 @@ class _HomeScreenState extends State<HomeScreen> with TickerProviderStateMixin {
       "dns_server": effectiveDnsServer,
       "tun_stack": tunStack
     };
+    
     widget.prefs.setString('latest_config_json', jsonEncode(configMap));
     platform.invokeMethod('saveConfig', {
       "configJson": jsonEncode(configMap)
@@ -154,9 +225,9 @@ class _HomeScreenState extends State<HomeScreen> with TickerProviderStateMixin {
 
   Future<void> _toggleConnection() async {
     if (_state == ConnectionStateEnum.disconnected) {
-      if (_serverAddr.isEmpty || _accessKey.isEmpty) {
+      if (_activeProfiles.isEmpty) {
         ScaffoldMessenger.of(context).showSnackBar(
-          const SnackBar(content: Text('Please configure Server and Key in Settings')),
+          const SnackBar(content: Text('Please select at least one profile in Settings')),
         );
         return;
       }
@@ -176,66 +247,12 @@ class _HomeScreenState extends State<HomeScreen> with TickerProviderStateMixin {
       final transportMode = widget.prefs.getString('transport_mode') ?? 'udp';
       final stealthSni = widget.prefs.getString('stealth_sni') ?? 'vk.com';
       final wss = widget.prefs.getBool('wss') ?? false;
-      final mtu = widget.prefs.getString('mtu') ?? '1140';
-      final muxEnabled = widget.prefs.getBool('mux_enabled') ?? false;
-      final muxSessions = widget.prefs.getString('mux_sessions') ?? '2';
-      final tunStack = 'ostp';
-
-      final appRoutingMode = widget.prefs.getString('app_routing_mode') ?? 'bypass';
-      final appRoutingPackages = widget.prefs.getStringList('app_routing_packages') ?? [];
-
-      final localBind = widget.prefs.getString('local_bind') ?? '127.0.0.1:1088';
-      final configMap = {
-        "mode": "client",
-        "debug": debugMode,
-        "ostp": {
-          "server_addr": _serverAddr,
-          "local_bind_addr": "0.0.0.0:0",
-          "access_key": _accessKey,
-          "handshake_timeout_ms": 10000,
-          "io_timeout_ms": 5000,
-          "mtu": int.tryParse(mtu) ?? 1140,
-        },
-        "local_proxy": {
-          "bind_addr": localBind,
-          "connect_timeout_ms": 15000,
-        },
-        "transport": {
-          "mode": transportMode,
-          "stealth_sni": stealthSni,
-          "wss": wss,
-          "tcp_fragmentation": widget.prefs.getBool('tcp_fragmentation') ?? false,
-        },
-        "multiplex": {
-          "enabled": muxEnabled,
-          "sessions": int.tryParse(muxSessions) ?? 2,
-        },
-        "tun": {
-          "enable": true,
-          "stack": tunStack
-        },
-        "exclusions": {
-          "domains": exDomains.split('\n').where((s) => s.trim().isNotEmpty).toList(),
-          "ips": exIps.split('\n').where((s) => s.trim().isNotEmpty).toList(),
-          "processes": exProcesses.split('\n').where((s) => s.trim().isNotEmpty).toList(),
-        },
-        "app_rules": {
-          "mode": appRoutingMode,
-          "packages": appRoutingPackages,
-        },
-        "dns_server": dnsServer,
-        "tun_stack": tunStack
-      };
-      
-      widget.prefs.setString('latest_config_json', jsonEncode(configMap));
-
+      _updateLatestConfigJson();
+      final configStr = widget.prefs.getString('latest_config_json') ?? '{}';
 
       try {
-        await platform.invokeMethod('saveConfig', {
-          "configJson": jsonEncode(configMap)
-        });
         await platform.invokeMethod('startTunnel', {
-          "configJson": jsonEncode(configMap)
+          "configJson": configStr
         });
         
         bool started = false;
@@ -305,9 +322,9 @@ class _HomeScreenState extends State<HomeScreen> with TickerProviderStateMixin {
       {'t': 'uot', 'w': false, 'r': true},
     ];
 
-    if (_serverAddr.isEmpty || _accessKey.isEmpty) {
+    if (_activeProfiles.isEmpty) {
       ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(content: Text('Please configure Server and Key first')),
+        const SnackBar(content: Text('Please select at least one profile first')),
       );
       return;
     }
@@ -319,10 +336,14 @@ class _HomeScreenState extends State<HomeScreen> with TickerProviderStateMixin {
           SnackBar(content: Text('Testing: ${mode['t']} | WSS: ${mode['w']} | XTLS: ${mode['r']} | MTU: $mtu'), duration: const Duration(seconds: 2)),
         );
 
-        // Update prefs
+        // Update prefs and active profile
         await widget.prefs.setString('mtu', mtu.toString());
-        await widget.prefs.setString('transport_mode', mode['t'] as String);
-        await widget.prefs.setBool('wss', mode['w'] as bool);
+        setState(() {
+          for (var p in _activeProfiles) {
+            p.transportMode = mode['t'] as String;
+            p.wss = mode['w'] as bool;
+          }
+        });
         _updateLatestConfigJson();
 
         setState(() {
@@ -773,7 +794,7 @@ class _HomeScreenState extends State<HomeScreen> with TickerProviderStateMixin {
                     const Icon(Icons.dns_rounded, size: 18, color: Colors.white70),
                     const SizedBox(width: 10),
                     Text(
-                      _serverAddr,
+                      _activeProfiles.isNotEmpty ? _activeProfiles.map((e)=>e.name).join(', ') : 'No profile selected',
                       style: const TextStyle(
                         fontFamily: 'monospace',
                         fontSize: 15,

@@ -260,30 +260,55 @@ impl ClientConfig {
 
         // 3. Outbounds
         let mut outbounds = Vec::new();
-        let server_full = json.get("server").and_then(|v| v.as_str()).unwrap_or("127.0.0.1:50000");
-        let server_parts: Vec<&str> = server_full.split(':').collect();
-        let server_host = server_parts.get(0).unwrap_or(&"127.0.0.1");
-        let server_port = server_parts.get(1).unwrap_or(&"50000").parse::<u16>().unwrap_or(50000);
-        let access_key = json.get("access_key").and_then(|v| v.as_str()).unwrap_or("");
         
+        let server_full = json.get("server").and_then(|v| v.as_str())
+            .or_else(|| json.get("ostp").and_then(|o| o.get("server_addr")).and_then(|v| v.as_str()))
+            .unwrap_or("127.0.0.1:50000");
+            
+        let access_key = json.get("access_key").and_then(|v| v.as_str())
+            .or_else(|| json.get("ostp").and_then(|o| o.get("access_key")).and_then(|v| v.as_str()))
+            .unwrap_or("");
+            
         let transport_type = json.get("transport").and_then(|t| t.get("mode").or(t.get("type"))).and_then(|v| v.as_str()).unwrap_or("udp");
         let mux_enabled = json.get("mux").and_then(|m| m.get("enabled")).and_then(|v| v.as_bool()).unwrap_or(false);
         let mux_sessions = json.get("mux").and_then(|m| m.get("sessions")).and_then(|v| v.as_u64()).unwrap_or(1);
 
-        outbounds.push(serde_json::json!({
-            "type": "ostp",
-            "tag": "proxy",
-            "server": server_host,
-            "port": server_port,
-            "access_key": access_key,
-            "transport": {
-                "type": transport_type
-            },
-            "multiplex": {
-                "enabled": mux_enabled,
-                "sessions": mux_sessions
-            }
-        }));
+        let servers: Vec<&str> = server_full.split(',').map(|s| s.trim()).filter(|s| !s.is_empty()).collect();
+        let mut ostp_tags = Vec::new();
+
+        for (i, server_str) in servers.iter().enumerate() {
+            let server_parts: Vec<&str> = server_str.split(':').collect();
+            let server_host = server_parts.get(0).unwrap_or(&"127.0.0.1");
+            let server_port = server_parts.get(1).unwrap_or(&"50000").parse::<u16>().unwrap_or(50000);
+            
+            let tag = if servers.len() > 1 { format!("proxy-{}", i) } else { "proxy".to_string() };
+            ostp_tags.push(tag.clone());
+
+            outbounds.push(serde_json::json!({
+                "type": "ostp",
+                "tag": tag,
+                "server": server_host,
+                "port": server_port,
+                "access_key": access_key,
+                "transport": {
+                    "type": transport_type
+                },
+                "multiplex": {
+                    "enabled": mux_enabled,
+                    "sessions": mux_sessions
+                }
+            }));
+        }
+
+        if servers.len() > 1 {
+            outbounds.push(serde_json::json!({
+                "type": "urltest",
+                "tag": "proxy",
+                "outbounds": ostp_tags,
+                "url": "http://cp.cloudflare.com",
+                "interval": "3m"
+            }));
+        }
 
         outbounds.push(serde_json::json!({
             "type": "direct",

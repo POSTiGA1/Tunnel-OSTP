@@ -463,6 +463,7 @@ struct FallbackCfg {
 
 #[tokio::main]
 async fn main() -> Result<()> {
+    let _ = rlimit::increase_nofile_limit(1048576);
     ostp_client::logging::setup_panic_hook();
     let _log_guard = ostp_client::logging::init_tracing("info", "ostp-cli", env!("CARGO_PKG_VERSION"));
 

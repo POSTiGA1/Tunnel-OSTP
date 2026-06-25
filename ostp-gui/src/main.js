@@ -38,7 +38,8 @@ let appState    = 'disconnected'; // 'disconnected' | 'connecting' | 'connected'
 let pollTimer   = null;
 let uptimeTimer = null;
 let uptimeSecs  = 0;
-let rawConfig   = null;           // parsed config.json object
+let rawConfig   = null;
+let profiles = [];           // parsed config.json object
 let serverAddr  = '';             // current server address (for badge)
 
 // ── DOM refs ─────────────────────────────────────────────────────────────────
@@ -61,6 +62,20 @@ const toast          = $('toast');
 
 const btnGoSettings  = $('btn-go-settings');
 const btnAutoConnect = $('btn-auto-connect');
+
+const btnAddProfile = $('btn-add-profile');
+const profilesList  = $('profiles-list');
+const profilesEmpty = $('profiles-empty');
+const profileModal  = $('profile-modal');
+const inProfName    = $('in-prof-name');
+const inProfServer  = $('in-prof-server');
+const inProfKey     = $('in-prof-key');
+const inProfTransport = $('in-prof-transport');
+const btnProfDelete = $('btn-prof-delete');
+const btnProfCancel = $('btn-prof-cancel');
+const btnProfSave   = $('btn-prof-save');
+
+let editingProfileId = null;
 const btnBack        = $('btn-back');
 const btnImport      = $('btn-import-url');
 const btnPeekKey     = $('btn-peek-key');
@@ -86,8 +101,8 @@ const inLaunchStartup  = $('in-launch-startup');
 
 function bindSettingsInputs() {
   const ids = [
-    'in-server', 'in-key', 'in-socks', 'in-dns',
-    'in-transport', 'in-dns-domain', 'in-dns-region',
+    'in-socks', 'in-dns',
+    'in-dns-domain', 'in-dns-region',
     'in-mtu', 'in-mux-sessions',
     'in-tun-mode', 'in-kill-switch', 'in-mux-mode',
     'in-debug', 'in-autoconnect', 'in-launch-startup'
@@ -911,3 +926,90 @@ window.addEventListener('DOMContentLoaded', async () => {
     });
   }
 });
+
+
+function renderProfiles() {
+  if (profiles.length === 0) {
+    profilesList.innerHTML = '';
+    profilesEmpty.style.display = 'block';
+  } else {
+    profilesEmpty.style.display = 'none';
+    profilesList.innerHTML = profiles.map(p => `
+      <div class="profile-item">
+        <input type="checkbox" ${p.active ? 'checked' : ''} onchange="toggleProfile('${p.id}')">
+        <div class="profile-info">
+          <div class="profile-name">${p.name}</div>
+          <div class="profile-addr">${p.serverAddr}</div>
+        </div>
+        <button class="icon-btn" onclick="editProfile('${p.id}')" style="width:24px;height:24px;">✎</button>
+      </div>
+    `).join('');
+  }
+}
+
+window.toggleProfile = function(id) {
+  const p = profiles.find(x => x.id === id);
+  if (p) { p.active = !p.active; saveSettings(); renderProfiles(); }
+};
+
+window.editProfile = function(id) {
+  editingProfileId = id;
+  const p = profiles.find(x => x.id === id);
+  $('profile-modal-title').innerText = 'Edit Profile';
+  inProfName.value = p.name;
+  inProfServer.value = p.serverAddr;
+  inProfKey.value = p.accessKey;
+  inProfTransport.value = p.transportMode || 'udp';
+  btnProfDelete.style.display = 'block';
+  profileModal.classList.remove('hidden');
+};
+
+if (btnAddProfile) {
+  btnAddProfile.addEventListener('click', () => {
+    editingProfileId = null;
+    $('profile-modal-title').innerText = 'New Profile';
+    inProfName.value = '';
+    inProfServer.value = '';
+    inProfKey.value = '';
+    inProfTransport.value = 'udp';
+    btnProfDelete.style.display = 'none';
+    profileModal.classList.remove('hidden');
+  });
+}
+
+if (btnProfCancel) btnProfCancel.addEventListener('click', () => profileModal.classList.add('hidden'));
+
+if (btnProfDelete) {
+  btnProfDelete.addEventListener('click', () => {
+    profiles = profiles.filter(x => x.id !== editingProfileId);
+    profileModal.classList.add('hidden');
+    saveSettings();
+    renderProfiles();
+  });
+}
+
+if (btnProfSave) {
+  btnProfSave.addEventListener('click', () => {
+    if (editingProfileId) {
+      const p = profiles.find(x => x.id === editingProfileId);
+      if (p) {
+        p.name = inProfName.value.trim();
+        p.serverAddr = inProfServer.value.trim();
+        p.accessKey = inProfKey.value;
+        p.transportMode = inProfTransport.value;
+      }
+    } else {
+      profiles.push({
+        id: Date.now().toString(),
+        name: inProfName.value.trim() || 'New Profile',
+        serverAddr: inProfServer.value.trim(),
+        accessKey: inProfKey.value,
+        transportMode: inProfTransport.value,
+        active: true
+      });
+    }
+    profileModal.classList.add('hidden');
+    saveSettings();
+    renderProfiles();
+  });
+}

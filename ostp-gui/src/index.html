@@ -156,23 +156,22 @@
         <!-- Form card -->
         <div class="card scrollable">
 
-          <div class="field-group">
-            <label class="field-label" for="in-server" data-i18n="label_server">Server Address</label>
-            <input id="in-server" class="field-input" type="text" placeholder="host:port" spellcheck="false" />
-          </div>
-
-          <div class="field-group">
-            <label class="field-label" for="in-key" data-i18n="label_key">Access Key</label>
-            <div class="input-wrap">
-              <input id="in-key" class="field-input has-icon" type="password" data-i18n-placeholder="ph_key" placeholder="Secure access key" spellcheck="false" />
-              <button class="peek-btn" id="btn-peek-key" tabindex="-1" aria-label="Show key">
-                <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
-                  <path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z"/>
-                  <circle cx="12" cy="12" r="3"/>
-                </svg>
-              </button>
+          
+          <!-- Profiles Section -->
+          <div class="profiles-section">
+            <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom: 12px;">
+              <span class="field-label">PROFILES</span>
+              <button id="btn-add-profile" class="icon-btn" style="width:24px; height:24px;">+</button>
+            </div>
+            <div id="profiles-list" class="profiles-list">
+              <!-- Profiles will be injected here -->
+            </div>
+            <div id="profiles-empty" class="profiles-empty" style="display:none; text-align:center; padding: 20px; color: var(--c-text-muted);">
+              Create a new profile
             </div>
           </div>
+          <hr style="border:0; border-top: 1px solid var(--c-surface); margin: 24px 0;" />
+          <div class="field-label" style="margin-bottom: 16px;">CLIENT SETTINGS</div>
 
           <div class="field-group">
             <label class="field-label" for="in-socks" data-i18n="label_socks">Local Proxy</label>
@@ -184,14 +183,8 @@
             <input id="in-dns" class="field-input" type="text" placeholder="1.1.1.1" />
           </div>
 
-          <div class="field-group">
-            <label class="field-label" for="in-transport" data-i18n="label_transport">Transport Protocol</label>
-            <select id="in-transport" class="field-input">
-              <option value="udp" data-i18n="opt_udp">UDP (Default)</option>
-              <option value="uot" data-i18n="opt_uot">TCP (UoT)</option>
-              <option value="dns" data-i18n="opt_dns">DNS Proxy (Last Resort)</option>
-            </select>
-          </div>
+          <!-- Transport moved to profile modal -->
+            
 
           <div id="group-dns-proxy" style="display: none; flex-direction: column; gap: 14px;">
             <div class="field-group">
@@ -387,5 +380,39 @@
 
   </div>
   <script type="module" src="main.js"></script>
+
+    <!-- Profile Modal -->
+    <div id="profile-modal" class="modal hidden">
+      <div class="modal-content">
+        <h3 id="profile-modal-title">Edit Profile</h3>
+        <div class="field-group">
+          <label>Name</label>
+          <input id="in-prof-name" class="field-input" type="text" />
+        </div>
+        <div class="field-group">
+          <label>Server (host:port)</label>
+          <input id="in-prof-server" class="field-input" type="text" />
+        </div>
+        <div class="field-group">
+          <label>Access Key</label>
+          <input id="in-prof-key" class="field-input" type="password" />
+        </div>
+        <div class="field-group">
+          <label>Transport</label>
+          <select id="in-prof-transport" class="field-input">
+            <option value="udp">UDP</option>
+            <option value="uot">TCP (UoT)</option>
+          </select>
+        </div>
+        <div style="display:flex; justify-content:space-between; margin-top: 20px;">
+          <button id="btn-prof-delete" class="danger-btn">Delete</button>
+          <div>
+            <button id="btn-prof-cancel" class="cancel-btn">Cancel</button>
+            <button id="btn-prof-save" class="accent-btn">Save</button>
+          </div>
+        </div>
+      </div>
+    </div>
+
 </body>
 </html>

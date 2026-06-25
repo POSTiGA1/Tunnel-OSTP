@@ -194,14 +194,19 @@ class OstpVpnService : VpnService() {
             val builder = Builder()
                 .setSession("OSTP Tunnel")
                 .addAddress("10.1.0.2", 24)
-                .addAddress("fd00:1:fd00:1:fd00:1:fd00:1", 128)
+                .addAddress("fd00::1", 128)
                 .addRoute("0.0.0.0", 0)
                 .addRoute("::", 0)
-                .addDnsServer(dnsServer)
                 .setMtu(Math.max(1280, json.optJSONObject("ostp")?.optInt("mtu", 1140) ?: 1140))
 
+            try { 
+                builder.addDnsServer(dnsServer) 
+            } catch (e: Throwable) {
+                Log.e("OstpVpnService", "Invalid user DNS server: $dnsServer", e)
+                try { builder.addDnsServer("1.1.1.1") } catch (e2: Throwable) {}
+            }
+
             // Always add fallback IPv4 DNS servers
-            try { builder.addDnsServer("1.1.1.1") } catch (e: Throwable) {}
             try { builder.addDnsServer("8.8.8.8") } catch (e: Throwable) {}
             // NOTE: Do NOT add IPv6 DNS servers here — Android would send DNS
             // queries over IPv6, but our smoltcp TUN stack processes them as
