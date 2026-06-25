@@ -380,14 +380,14 @@ pub async fn run_server(
                         .unwrap_or(std::time::Duration::MAX);
                     if elapsed >= std::time::Duration::from_secs(30) {
                         if probe_suppressed > 0 {
-                            tracing::warn!(
+                            tracing::debug!(
                                 "(+{} more unauthorized probes suppressed in the previous ~30s)",
                                 probe_suppressed
                             );
                         }
                         probe_window_start = Some(now);
                         probe_suppressed = 0;
-                        tracing::warn!("Unauthorized probe from {peer} ({bytes} bytes): {reason}");
+                        tracing::debug!("Unauthorized probe from {peer} ({bytes} bytes): {reason}");
                     } else {
                         probe_suppressed += 1;
                     }

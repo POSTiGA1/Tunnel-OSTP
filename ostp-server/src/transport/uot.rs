@@ -16,7 +16,7 @@ pub async fn handle_tcp_connection<S>(
 where
     S: tokio::io::AsyncRead + tokio::io::AsyncWrite + Unpin + Send + 'static,
 {
-    info!("UoT client connected from {}", peer_addr);
+    tracing::debug!("UoT client connected from {}", peer_addr);
 
     // Register this connection in the map
     let (tx, mut rx) = mpsc::channel::<Bytes>(16384);
@@ -54,6 +54,6 @@ where
     });
 
     let _ = tokio::join!(writer_task, reader_task);
-    info!("UoT client disconnected: {}", peer_addr);
+    tracing::debug!("UoT client disconnected: {}", peer_addr);
     Ok(())
 }
