@@ -88,7 +88,19 @@ async fn main() -> Result<()> {
         log_to_file(&format!("Fatal error: {}", e));
     }
     log_to_file("Helper exiting");
-    Ok(())
+
+    // The WinTun blocking `receive` runs on a thread that `task.abort()` cannot
+    // cancel, so it keeps the adapter handle — and the default route bound to it —
+    // alive and prevents the tokio runtime from shutting down. Without this the
+    // process lingers as a zombie: `ostp_tun` stays Up, its metric-0 default route
+    // competes with the physical one, and the NEXT connect fails to install the
+    // server bypass route, so traffic loops back into a dead tunnel (no internet).
+    // The GUI launches a fresh helper for every connect, so this process has no
+    // more work once run_server returns. Give the synchronous route/firewall
+    // teardown a moment to finish, then force the process to exit so the kernel
+    // reclaims the adapter and every route bound to it. (Ported from 0.3.x b6e78c1.)
+    tokio::time::sleep(Duration::from_millis(800)).await;
+    std::process::exit(0);
 }
 
 async fn run_server(expected_token: String, port: u16) -> Result<()> {

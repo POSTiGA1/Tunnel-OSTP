@@ -285,6 +285,10 @@ pub async fn run_server(
 
     // Headless event logger
     tokio::spawn(async move {
+        // Rate-limit unauthorized-probe logging so a junk/probe flood can't spam the log
+        // (and so a client running junk-over-UDP can't trigger a self-ban via log noise).
+        let mut probe_window_start: Option<Instant> = None;
+        let mut probe_suppressed: u64 = 0;
         while let Some(ev) = ui_event_rx.recv().await {
             match ev {
                 UiEvent::Log(msg) => {
@@ -303,7 +307,23 @@ pub async fn run_server(
                 }
                 UiEvent::UnauthorizedProbe { peer, bytes } => {
                     if debug {
-                        tracing::debug!("Unauthorized probe from {peer} ({bytes} bytes)");
+                        let now = Instant::now();
+                        let elapsed = probe_window_start
+                            .map(|s| now.duration_since(s))
+                            .unwrap_or(Duration::MAX);
+                        if elapsed >= Duration::from_secs(30) {
+                            if probe_suppressed > 0 {
+                                tracing::debug!(
+                                    "(+{} more unauthorized probes suppressed in the previous ~30s)",
+                                    probe_suppressed
+                                );
+                            }
+                            probe_window_start = Some(now);
+                            probe_suppressed = 0;
+                            tracing::debug!("Unauthorized probe from {peer} ({bytes} bytes)");
+                        } else {
+                            probe_suppressed += 1;
+                        }
                     }
                 }
                 UiEvent::PeerSeen { .. } => {}

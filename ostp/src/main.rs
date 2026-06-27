@@ -363,6 +363,10 @@ struct MuxConfig {
 
 #[tokio::main]
 async fn main() -> Result<()> {
+    // Raise the open-file-descriptor limit to avoid EMFILE under many concurrent
+    // connections (ported from 0.3.x fix 922cf0b). No-op / best-effort on platforms
+    // where it does not apply.
+    let _ = rlimit::increase_nofile_limit(1048576);
     ostp_client::logging::setup_panic_hook();
     let _log_guard = ostp_client::logging::init_tracing("info", "ostp-cli", env!("CARGO_PKG_VERSION"));
 
