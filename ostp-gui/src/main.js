@@ -36,8 +36,14 @@ const btnGoSettings  = $('btn-go-settings');
 const btnAutoConnect = $('btn-auto-connect');
 const btnBack        = $('btn-back');
 const btnImport      = $('btn-import-url');
+const btnShare       = $('btn-share-url');
 const btnPeekKey     = $('btn-peek-key');
 const importInput    = $('in-import-url');
+const shareModal     = $('share-modal');
+const shareQr        = $('share-qr');
+const shareLink      = $('share-link');
+const btnShareClose  = $('btn-share-close');
+const btnShareCopy   = $('btn-share-copy');
 const inServer       = $('in-server');
 const inKey          = $('in-key');
 const inSocks        = $('in-socks');
@@ -463,6 +469,44 @@ function handleImport() {
   }
 }
 
+// ── Share config (QR + ostp:// link) ──────────────────────────────────────────
+function buildShareLink() {
+  const host = inServer.value.trim();
+  const key  = inKey.value.trim();
+  if (!host || !key) return '';
+  const params = [];
+  const sni = inSni.value.trim();
+  if (sni) params.push(`sni=${encodeURIComponent(sni)}`);
+  if (inTransport.value && inTransport.value !== 'udp') params.push(`type=${inTransport.value}`);
+  const qs = params.length ? `?${params.join('&')}` : '';
+  return `ostp://${encodeURIComponent(key)}@${host}${qs}`;
+}
+
+async function handleShare() {
+  const link = buildShareLink();
+  if (!link) { showToast('Set server and key first', 'error'); return; }
+  shareLink.value = link;
+  shareQr.innerHTML = '';
+  try {
+    const svg = await invoke('generate_qr', { text: link });
+    if (svg) shareQr.innerHTML = svg;
+  } catch (err) {
+    console.error('generate_qr failed', err);
+  }
+  shareModal.classList.remove('hidden');
+}
+
+async function copyShareLink() {
+  try {
+    await navigator.clipboard.writeText(shareLink.value);
+    showToast('Link copied', 'ok');
+  } catch {
+    shareLink.select();
+    document.execCommand('copy');
+    showToast('Link copied', 'ok');
+  }
+}
+
 // ── Peek key ──────────────────────────────────────────────────────────────────
 let peeking = false;
 function togglePeek() {
@@ -578,6 +622,10 @@ window.addEventListener('DOMContentLoaded', async () => {
   btnGoSettings.addEventListener('click',    () => showScreen('settings'));
   btnBack.addEventListener('click',          () => showScreen('home'));
   btnImport.addEventListener('click',        handleImport);
+  if (btnShare)      btnShare.addEventListener('click', handleShare);
+  if (btnShareClose) btnShareClose.addEventListener('click', () => shareModal.classList.add('hidden'));
+  if (btnShareCopy)  btnShareCopy.addEventListener('click', copyShareLink);
+  if (shareModal)    shareModal.addEventListener('click', e => { if (e.target === shareModal) shareModal.classList.add('hidden'); });
   btnPeekKey.addEventListener('click',       togglePeek);
 
   // Theme toggle

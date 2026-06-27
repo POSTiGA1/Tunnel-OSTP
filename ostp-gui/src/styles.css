@@ -263,6 +263,25 @@ html[data-theme="light"] .watermark {
   filter: invert(1);
 }
 
+/* ── Share modal (QR) ─────────────────────────────────────────────────────── */
+.share-qr {
+  display: flex;
+  justify-content: center;
+  margin: 8px 0 14px;
+}
+.share-qr svg {
+  width: 220px;
+  height: 220px;
+  background: #fff;
+  border-radius: var(--r-sm);
+  padding: 10px;
+}
+#share-link {
+  margin-bottom: 12px;
+  font-family: 'JetBrains Mono', monospace;
+  font-size: 12px;
+}
+
 /* ── Screen system ────────────────────────────────────────────────────────── */
 .screen {
   position: absolute;

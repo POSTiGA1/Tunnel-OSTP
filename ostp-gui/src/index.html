@@ -165,6 +165,7 @@
                  data-i18n-placeholder="import_placeholder"
                  placeholder="Paste ostp:// share link..." />
           <button id="btn-import-url" class="accent-btn" data-i18n="import_btn">Import</button>
+          <button id="btn-share-url" class="btn secondary" data-i18n="share_btn" title="Share this config as a QR code / ostp:// link">Share</button>
         </div>
 
         <!-- Form card -->
@@ -362,6 +363,20 @@
         <div class="modal-actions">
           <button id="btn-wintun-cancel" class="btn secondary" data-i18n="cancel_btn">Cancel</button>
           <a id="btn-wintun-open" href="https://www.wintun.net" target="_blank" class="btn primary" data-i18n="wintun_open_btn">Open wintun.net ↗</a>
+        </div>
+      </div>
+    </div>
+
+    <!-- Share Modal -->
+    <div id="share-modal" class="modal-overlay hidden">
+      <div class="modal-content">
+        <h3 class="modal-title" data-i18n="share_title">Share configuration</h3>
+        <p class="modal-text" data-i18n="share_desc">Scan the QR or copy the link. The QR is generated locally — the access key never leaves this device.</p>
+        <div id="share-qr" class="share-qr"></div>
+        <input id="share-link" class="field-input" type="text" readonly />
+        <div class="modal-actions">
+          <button id="btn-share-close" class="btn secondary" data-i18n="close_btn">Close</button>
+          <button id="btn-share-copy" class="btn primary" data-i18n="copy_btn">Copy link</button>
         </div>
       </div>
     </div>

@@ -29,4 +29,5 @@ ostp-client = { path = "../../ostp-client" }
 portable-atomic = "1"
 json_comments = "0.2"
 rand = "0.8"
+qrcode = { version = "0.14", default-features = false, features = ["svg"] }
 
