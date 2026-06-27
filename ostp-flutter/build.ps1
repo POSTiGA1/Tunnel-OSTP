@@ -4,9 +4,9 @@ Write-Host "==============================================" -ForegroundColor Cya
 Write-Host "   OSTP Android App Release Build Pipeline    " -ForegroundColor Cyan
 Write-Host "==============================================" -ForegroundColor Cyan
 
-# Step 1: Run JNI build script to compile Rust core and download tun2socks
+# Step 1: Run JNI build script to compile the Rust core into Android .so libs
 Write-Host ""
-Write-Host "[1/3] Compiling Rust JNI Core & Downloading tun2socks..." -ForegroundColor Yellow
+Write-Host "[1/3] Compiling Rust JNI Core..." -ForegroundColor Yellow
 $jniScript = Join-Path $PSScriptRoot "build_android_jni.ps1"
 if (Test-Path $jniScript) {
     & $jniScript

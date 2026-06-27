@@ -58,7 +58,7 @@ To build and test OSTP locally, you will need:
 The repository is organized as a Cargo workspace containing the following crates:
 
 *   [`ostp-core/`](file:///d:/ospab-projects/ostp/ostp-core): Core protocol logic, including packet formatting, serialization, selective ACK/NACK (ARQ) state machine, and the Noise protocol (`Noise_NNpsk0_25519_ChaChaPoly_BLAKE2s`) handshake.
-*   [`ostp-client/`](file:///d:/ospab-projects/ostp/ostp-client): Client implementations, including SOCKS5/HTTP local proxies, `tun2socks` integration, native TUN interface routing, and split-tunneling bypass mechanisms.
+*   [`ostp-client/`](file:///d:/ospab-projects/ostp/ostp-client): Client implementations, including SOCKS5/HTTP local proxies, the native OSTP TUN interface routing, and split-tunneling bypass mechanisms.
 *   [`ostp-server/`](file:///d:/ospab-projects/ostp/ostp-server): Server logic, session dispatcher, anti-probing fallback server proxying, access key database, and the REST API for control panel communication.
 *   [`ostp-control/`](file:///d:/ospab-projects/ostp/ostp-control): A modern web dashboard for server administration (user management, real-time metrics, bandwidth limits).
 *   [`ostp-gui/`](file:///d:/ospab-projects/ostp/ostp-gui): Tauri-based desktop GUI application for Windows and Linux.

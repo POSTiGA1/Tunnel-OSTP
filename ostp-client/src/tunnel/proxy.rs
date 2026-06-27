@@ -208,10 +208,7 @@ pub async fn run_local_socks5_proxy(
         .await
         .with_context(|| format!("failed to bind local HTTP/SOCKS5 proxy at {}", cfg.bind_addr))?;
 
-    if true {
-        tracing::info!("local HTTP/SOCKS5 proxy listening at {}", cfg.bind_addr);
-        tracing::info!("Windows system proxy: set HTTP proxy to {}. tun2socks: SOCKS5 on same address.", cfg.bind_addr);
-    }
+    tracing::info!("local HTTP/SOCKS5 proxy listening at {}", cfg.bind_addr);
 
     let physical_if_index = tokio::task::spawn_blocking(get_windows_physical_if_index).await.unwrap_or(None);
     let physical_if_name = tokio::task::spawn_blocking(get_linux_physical_if_name).await.unwrap_or(None);

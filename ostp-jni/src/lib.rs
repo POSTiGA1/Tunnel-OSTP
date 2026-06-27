@@ -64,7 +64,6 @@ struct SdkState {
     runtime: Option<Runtime>,
     shutdown_tx: Option<watch::Sender<bool>>,
     metrics: Option<Arc<BridgeMetrics>>,
-    tun_child: Option<std::process::Child>,
     cmd_tx: Option<mpsc::Sender<BridgeCommand>>,
 }
 
@@ -74,7 +73,6 @@ impl SdkState {
             runtime: None,
             shutdown_tx: None,
             metrics: None,
-            tun_child: None,
             cmd_tx: None,
         }
     }
@@ -100,8 +98,10 @@ pub extern "system" fn Java_net_ostp_client_OstpClientSdk_nativeStartClient(
     _class: JClass,
     config_json: JString,
     fd: jni::sys::jint,
-    t2s_bin_path: JString,
-    local_proxy: JString,
+    // tun2socks ("system" TUN stack) removed in 0.4.0 — native OSTP TUN is the only path.
+    // These two args are retained to keep the JNI signature ABI-stable with Kotlin; unused.
+    _t2s_bin_path: JString,
+    _local_proxy: JString,
 ) -> jboolean {
     let mut state = match STATE.write() {
         Ok(s) => s,
@@ -156,16 +156,6 @@ pub extern "system" fn Java_net_ostp_client_OstpClientSdk_nativeStartClient(
     });
 
     let config_str: String = match env.get_string(&config_json) {
-        Ok(s) => s.into(),
-        Err(_) => return jni::sys::JNI_FALSE,
-    };
-
-    let t2s_path: String = match env.get_string(&t2s_bin_path) {
-        Ok(s) => s.into(),
-        Err(_) => return jni::sys::JNI_FALSE,
-    };
-
-    let proxy_addr: String = match env.get_string(&local_proxy) {
         Ok(s) => s.into(),
         Err(_) => return jni::sys::JNI_FALSE,
     };
@@ -256,81 +246,11 @@ pub extern "system" fn Java_net_ostp_client_OstpClientSdk_nativeStartClient(
         let _ = cmd_tx_clone.send(BridgeCommand::ToggleTunnel).await;
     });
 
-    if config.tun_stack == "system" {
-        // Spawn tun2socks
-        let fd_str = format!("fd://{}", fd);
-        let proxy_str = format!("socks5://{}", proxy_addr);
-
-        if debug {
-            add_log(format!("Spawning tun2socks: {} -device {} -proxy {}", t2s_path, fd_str, proxy_str));
-        }
-
-        let mut cmd = std::process::Command::new(&t2s_path);
-    cmd.arg("-device")
-       .arg(&fd_str)
-       .arg("-proxy")
-       .arg(&proxy_str);
-    
-    if config.ostp.mtu > 0 {
-        cmd.arg("-mtu").arg(config.ostp.mtu.to_string());
+    // Native OSTP TUN stack is the only path (tun2socks "system" stack removed in 0.4.0).
+    if debug {
+        add_log("Using OSTP native TUN stack.".to_string());
     }
-    
-    cmd.stdout(std::process::Stdio::piped())
-       .stderr(std::process::Stdio::piped());
-
-    let mut child = match cmd.spawn() {
-        Ok(c) => c,
-        Err(e) => {
-            add_log(format!("Failed to spawn tun2socks from Rust: {e}"));
-            return jni::sys::JNI_FALSE;
-        }
-    };
-
-    let stdout = match child.stdout.take() {
-        Some(s) => s,
-        None => {
-            add_log("Failed to capture tun2socks stdout".to_string());
-            return jni::sys::JNI_FALSE;
-        }
-    };
-    let stderr = match child.stderr.take() {
-        Some(s) => s,
-        None => {
-            add_log("Failed to capture tun2socks stderr".to_string());
-            return jni::sys::JNI_FALSE;
-        }
-    };
-
-    // Read stdout
-    std::thread::spawn(move || {
-        use std::io::{BufRead, BufReader};
-        let reader = BufReader::new(stdout);
-        for line in reader.lines() {
-            if let Ok(l) = line {
-                if debug {
-                    add_log(format!("tun2socks: {}", l));
-                }
-            }
-        }
-    });
-
-        // Read stderr & wait
-        std::thread::spawn(move || {
-            use std::io::{BufRead, BufReader};
-            let reader = BufReader::new(stderr);
-            for line in reader.lines() {
-                if let Ok(l) = line {
-                    if debug {
-                        add_log(format!("tun2socks ERROR: {}", l));
-                    }
-                }
-            }
-        });
-        state.tun_child = Some(child);
-    } else {
-        if debug {
-            add_log("Using OSTP native TUN stack. Bypassing tun2socks.".to_string());
-        }
+    {
         let shutdown_rx_clone = shutdown_tx.subscribe();
         let config_clone = config.clone();
         let (exclusions_tx, exclusions_rx) = tokio::sync::watch::channel(config.exclusions.clone());
@@ -368,23 +288,17 @@ pub extern "system" fn Java_net_ostp_client_OstpClientSdk_nativeStopClient(
     _env: JNIEnv,
     _class: JClass,
 ) -> jboolean {
-    let (tun_child, shutdown_tx, runtime) = {
+    let (shutdown_tx, runtime) = {
         let mut state = match STATE.write() {
             Ok(s) => s,
             Err(_) => return jni::sys::JNI_FALSE,
         };
-        let c = state.tun_child.take();
         let s = state.shutdown_tx.take();
         let r = state.runtime.take();
         state.cmd_tx = None;
         state.metrics = None;
-        (c, s, r)
+        (s, r)
     };
-
-    if let Some(mut child) = tun_child {
-        let _ = child.kill();
-        add_log("Killed tun2socks process".to_string());
-    }
 
     if let Some(s) = shutdown_tx {
         let _ = s.send(true);

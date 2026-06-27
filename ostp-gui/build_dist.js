@@ -22,10 +22,6 @@ const filesToCopy = [
     dest: path.join(distDir, 'ostp-tun-helper.exe')
   },
   {
-    src: path.join(workspaceRoot, 't2s_tmp', 'tun2socks-windows-amd64.exe'),
-    dest: path.join(distDir, 'tun2socks.exe')
-  },
-  {
     src: path.join(workspaceRoot, 'target', 'release', 'wintun.dll'),
     dest: path.join(distDir, 'wintun.dll')
   }

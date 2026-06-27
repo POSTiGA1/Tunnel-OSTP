@@ -444,7 +444,6 @@ jobs:
           - arch: armeabi-v7a
             rust_target: armv7-linux-androideabi
             flutter_target: android-arm
-            tun2socks_arch: linux-armv7
     steps:
       - uses: actions/checkout@v4
 
