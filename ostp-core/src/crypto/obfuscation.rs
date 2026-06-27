@@ -61,7 +61,27 @@ pub struct DerivedSecrets {
     pub handshake_pad_max: usize,
 }
 
+/// OSTP wire protocol version. Mixed into key derivation (NOT sent on the
+/// wire) so peers running incompatible versions derive entirely different
+/// secrets and therefore cannot deobfuscate / decrypt each other's traffic.
+///
+/// This is a hard, deterministic version gate that needs NO plaintext version
+/// byte on the wire — a constant marker would defeat the project's stealth
+/// north-star ("no recognizable header"). A pre-0.4.0 client (which derived
+/// without a version) produces a different obfuscation key, so a 0.4.0 server
+/// cannot recover its handshake header and rejects it as an unauthorized probe.
+///
+/// Bump this on any wire-breaking protocol change. 0.4.0 = version 4.
+pub const PROTOCOL_VERSION: u8 = 4;
+
 pub fn derive_all_secrets(access_key: &[u8]) -> DerivedSecrets {
+    derive_all_secrets_versioned(access_key, PROTOCOL_VERSION)
+}
+
+/// Version-parameterised derivation. `derive_all_secrets` always pins the
+/// current `PROTOCOL_VERSION`; this form exists so tests can prove that a
+/// different version yields incompatible secrets (the version gate).
+pub(crate) fn derive_all_secrets_versioned(access_key: &[u8], version: u8) -> DerivedSecrets {
     // Split the key hash into two halves for salt/info separation.
     // This avoids using any hardcoded strings while still providing
     // domain separation between the derived values.
@@ -70,8 +90,16 @@ pub fn derive_all_secrets(access_key: &[u8]) -> DerivedSecrets {
     let salt = &key_hash[..16];
     let info_base = &key_hash[16..];
 
-    // Extract PRK from access key using its own hash as salt
-    let prk = hkdf_extract(salt, access_key);
+    // Mix the protocol version into the IKM so a different version produces a
+    // completely different PRK → different obf_key / psk / padding. This is the
+    // wire-version gate: it is invisible on the wire (only the derived output,
+    // which is already indistinguishable from random, ever leaves the host).
+    let mut ikm = Vec::with_capacity(access_key.len() + 1);
+    ikm.extend_from_slice(access_key);
+    ikm.push(version);
+
+    // Extract PRK from version-tagged access key using its hash as salt
+    let prk = hkdf_extract(salt, &ikm);
 
     // Derive obfuscation key (8 bytes) — info = key_hash[16..] || 0x01
     let mut obf_info = info_base.to_vec();

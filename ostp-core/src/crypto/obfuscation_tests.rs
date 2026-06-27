@@ -127,6 +127,37 @@ mod tests {
         assert_eq!(correct_sid, session_id, "correct key must recover session_id");
     }
 
+    /// §C version gate: a peer on a different PROTOCOL_VERSION derives
+    /// different secrets, so a handshake obfuscated with the OLD version's key
+    /// does NOT deobfuscate to a valid session_id under the current version.
+    /// This is exactly what makes an old (pre-0.4.0) client fail to connect to
+    /// a new server — with no plaintext version marker on the wire.
+    #[test]
+    fn test_protocol_version_gates_old_clients() {
+        let key = b"shared_access_key_across_versions";
+        let new = derive_all_secrets(key); // == derive_all_secrets_versioned(key, PROTOCOL_VERSION)
+        let old = derive_all_secrets_versioned(key, PROTOCOL_VERSION.wrapping_sub(1));
+
+        // Different protocol version → different derived secrets.
+        assert_ne!(new.obfuscation_key, old.obfuscation_key, "version must change obf_key");
+        assert_ne!(new.psk, old.psk, "version must change psk");
+
+        // Concretely: a handshake the old client obfuscated with its key does
+        // not recover a valid session_id when the new server deobfuscates it.
+        let session_id: u32 = 0x11223344;
+        let noise = [0x33u8; 48];
+        let mut pkt = Vec::new();
+        pkt.extend_from_slice(&session_id.to_be_bytes());
+        pkt.extend_from_slice(&(noise.len() as u16).to_be_bytes());
+        pkt.extend_from_slice(&noise);
+        pkt.extend_from_slice(&[0u8; 32]);
+
+        obfuscate_packet_inplace(&mut pkt, &old.obfuscation_key, true);   // old client
+        deobfuscate_packet_inplace(&mut pkt, &new.obfuscation_key, true); // new server
+        let recovered = u32::from_be_bytes([pkt[0], pkt[1], pkt[2], pkt[3]]);
+        assert_ne!(recovered, session_id, "old-version client must NOT be accepted by new server");
+    }
+
     /// Verifies data packet obfuscation round-trip (non-handshake path).
     #[test]
     fn test_data_packet_obfuscation_roundtrip() {
