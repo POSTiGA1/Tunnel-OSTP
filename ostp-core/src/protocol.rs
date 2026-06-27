@@ -207,13 +207,16 @@ impl ProtocolMachine {
                     .map(ProtocolAction::SendDatagram)
             }
             (OstpState::Closing, OstpEvent::Inbound(raw)) => {
-                // Process final in-flight packets to prevent data loss during teardown.
-                // The remote may still have data or ACKs in transit when we initiated Close.
-                let result = self.handle_inbound(raw);
-                self.state = OstpState::Closed;
-                result
+                // The remote may still have data or ACKs in transit when we initiated
+                // Close. Stay in Closing and process them; handle_inbound transitions to
+                // Closed only when it actually receives the peer's Close frame — the old
+                // code force-closed after a single inbound packet, losing in-flight data.
+                // (Ported from 0.3.x 47d44fa.)
+                self.handle_inbound(raw)
             }
             (OstpState::Established, OstpEvent::Tick) => self.handle_tick(),
+            // Retransmit our Close frame (and drain pending) while waiting for teardown.
+            (OstpState::Closing, OstpEvent::Tick) => self.handle_tick(),
             (OstpState::Closed, _) => Ok(ProtocolAction::Noop),
             (_, OstpEvent::Close) => {
                 self.state = OstpState::Closed;
