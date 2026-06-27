@@ -103,6 +103,7 @@ fn parse_ostp_link(link: &str) -> Result<ClientConfig> {
         transport: Some(TransportConfigRaw {
             mode: Some(transport_mode),
             stealth_sni: Some(sni.clone()),
+            tcp_fragmentation: None,
         }),
         socks5_bind: Some("127.0.0.1:1088".to_string()),
         tun: Some(TunConfig {
@@ -317,6 +318,7 @@ struct ClientConfig {
 struct TransportConfigRaw {
     mode: Option<String>,
     stealth_sni: Option<String>,
+    tcp_fragmentation: Option<bool>,
 }
 
 #[derive(Debug, Deserialize, Serialize, Clone)]
@@ -1627,6 +1629,7 @@ async fn run_client_directly(client_cfg: ClientConfig) -> Result<()> {
         transport: ostp_client::config::TransportConfig {
             mode: client_cfg.transport.as_ref().and_then(|t| t.mode.clone()).unwrap_or_else(|| "udp".to_string()),
             stealth_sni: client_cfg.transport.as_ref().and_then(|t| t.stealth_sni.clone()).unwrap_or_else(|| "microsoft.com".to_string()),
+            tcp_fragmentation: client_cfg.transport.as_ref().and_then(|t| t.tcp_fragmentation).unwrap_or(false),
         },
         dns_server: client_cfg.tun.as_ref().and_then(|t| t.dns.clone()),
         kill_switch: client_cfg.tun.as_ref().and_then(|t| t.kill_switch).unwrap_or(false),

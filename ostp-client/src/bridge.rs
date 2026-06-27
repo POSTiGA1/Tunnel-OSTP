@@ -66,6 +66,7 @@ pub struct Bridge {
 
     pub transport_mode: String,
     pub stealth_sni: String,
+    pub tcp_fragmentation: bool,
     pub mtu: usize,
     pub kill_switch: bool,
     pub reload_tx: Option<watch::Sender<crate::config::ExclusionConfig>>,
@@ -98,6 +99,7 @@ impl Bridge {
 
             transport_mode: config.transport.mode.clone(),
             stealth_sni: config.transport.stealth_sni.clone(),
+            tcp_fragmentation: config.transport.tcp_fragmentation,
             mtu: config.ostp.mtu,
             kill_switch: config.kill_switch,
             reload_tx: None,
@@ -1024,6 +1026,7 @@ impl Bridge {
         self.mux_sessions = cfg.multiplex.sessions.max(1);
         self.transport_mode = cfg.transport.mode.clone();
         self.stealth_sni = cfg.transport.stealth_sni.clone();
+        self.tcp_fragmentation = cfg.transport.tcp_fragmentation;
         self.mtu = cfg.ostp.mtu;
         self.keepalive_interval_sec = cfg.ostp.keepalive_interval_sec;
         self.kill_switch = cfg.kill_switch;
@@ -1039,18 +1042,71 @@ impl Bridge {
             let stream = tokio::net::TcpStream::connect((target_ip, port)).await?;
             let _ = stream.set_nodelay(true);
             let (mut read_half, mut write_half) = stream.into_split();
-            
+
+            let tcp_fragmentation = self.tcp_fragmentation;
+
+            // Amnezia-style junk to perturb DPI heuristics — ONLY over stream
+            // transports, where each junk frame rides inside the connection. The
+            // server reads it as a length-prefixed frame, fails to authenticate
+            // it, drops it, and keeps reading (drop-and-continue), so junk does
+            // not break the connection. Over plain UDP each junk would be a lone
+            // datagram indistinguishable from a port scan (probe-flood / wasted
+            // CPU), so junk is NEVER sent over UDP. Ranges are hardcoded for now;
+            // §E will make Jc/Jmin/Jmax configurable. (Ported from 0.3.x.)
+            {
+                use tokio::io::AsyncWriteExt;
+                // Build all junk frames up front so ThreadRng isn't held across an
+                // await point (keeps this future Send).
+                let junk_frames: Vec<Vec<u8>> = {
+                    use rand::Rng;
+                    let mut rng = rand::thread_rng();
+                    let num_junk = rng.gen_range(2..=5);
+                    (0..num_junk)
+                        .map(|_| {
+                            let junk_len = rng.gen_range(100..=1000usize);
+                            let mut frame = Vec::with_capacity(2 + junk_len);
+                            frame.extend_from_slice(&(junk_len as u16).to_be_bytes());
+                            let start = frame.len();
+                            frame.resize(start + junk_len, 0);
+                            rng.fill(&mut frame[start..]);
+                            frame
+                        })
+                        .collect()
+                };
+                for frame in junk_frames {
+                    if write_half.write_all(&frame).await.is_err() { break; }
+                    tokio::time::sleep(std::time::Duration::from_millis(5)).await;
+                }
+            }
+
             let (tx_out, mut rx_out) = tokio::sync::mpsc::channel::<bytes::Bytes>(1024);
             let (tx_in, rx_in) = tokio::sync::mpsc::channel::<bytes::Bytes>(1024);
-            
-            // Task to write from rx_out to tcp stream
+
+            // Writer: length-prefix each frame. With tcp_fragmentation on, split
+            // the FIRST real frame (the handshake — junk above was written
+            // directly, so it doesn't count) into tiny TCP segments with short
+            // gaps so DPI can't reassemble/classify the handshake from one read.
             tokio::spawn(async move {
                 use tokio::io::AsyncWriteExt;
+                let mut first_packet = true;
                 while let Some(data) = rx_out.recv().await {
-                    let mut len_buf = [0u8; 2];
-                    len_buf.copy_from_slice(&(data.len() as u16).to_be_bytes());
-                    if write_half.write_all(&len_buf).await.is_err() { break; }
-                    if write_half.write_all(&data).await.is_err() { break; }
+                    let len_buf = (data.len() as u16).to_be_bytes();
+                    if first_packet && tcp_fragmentation {
+                        first_packet = false;
+                        if write_half.write_all(&len_buf[0..1]).await.is_err() { break; }
+                        tokio::time::sleep(std::time::Duration::from_millis(5)).await;
+                        if write_half.write_all(&len_buf[1..2]).await.is_err() { break; }
+                        tokio::time::sleep(std::time::Duration::from_millis(5)).await;
+                        let mut broke = false;
+                        for chunk in data.chunks(2) {
+                            if write_half.write_all(chunk).await.is_err() { broke = true; break; }
+                            tokio::time::sleep(std::time::Duration::from_millis(2)).await;
+                        }
+                        if broke { break; }
+                    } else {
+                        if write_half.write_all(&len_buf).await.is_err() { break; }
+                        if write_half.write_all(&data).await.is_err() { break; }
+                    }
                 }
             });
             

@@ -57,6 +57,7 @@ struct TunConfig {
 struct TransportConfigRaw {
     mode: Option<String>,
     stealth_sni: Option<String>,
+    tcp_fragmentation: Option<bool>,
 }
 
 #[derive(Debug, Deserialize, Serialize, Clone)]
@@ -163,6 +164,7 @@ fn map_to_client_config(raw: &ClientConfigRaw, mode: &str) -> ostp_client::confi
         transport: ostp_client::config::TransportConfig {
             mode: raw.transport.as_ref().and_then(|t| t.mode.clone()).unwrap_or_else(|| "udp".to_string()),
             stealth_sni: raw.transport.as_ref().and_then(|t| t.stealth_sni.clone()).unwrap_or_else(|| "microsoft.com".to_string()),
+            tcp_fragmentation: raw.transport.as_ref().and_then(|t| t.tcp_fragmentation).unwrap_or(false),
         },
         exclusions: ostp_client::config::ExclusionConfig {
             domains: raw.exclude.as_ref().and_then(|e| e.domains.clone()).unwrap_or_default(),

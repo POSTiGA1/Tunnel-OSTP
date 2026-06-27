@@ -79,6 +79,10 @@ pub struct TransportConfig {
     /// TLS SNI and HTTP Host for xHTTP routing
     #[serde(default)]
     pub stealth_sni: String,
+    /// Split the first UoT/TCP packet (handshake) into tiny TCP segments to
+    /// break DPI that inspects the first packet. UoT/TCP only; ignored for UDP.
+    #[serde(default)]
+    pub tcp_fragmentation: bool,
 }
 
 fn default_transport_mode() -> String { "udp".to_string() }
@@ -88,6 +92,7 @@ impl Default for TransportConfig {
         Self {
             mode: default_transport_mode(),
             stealth_sni: String::new(),
+            tcp_fragmentation: false,
         }
     }
 }
@@ -169,6 +174,7 @@ struct RawUnifiedConfig {
 struct RawTransportSection {
     mode: Option<String>,
     stealth_sni: Option<String>,
+    tcp_fragmentation: Option<bool>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -242,6 +248,7 @@ impl ClientConfig {
             transport: TransportConfig {
                 mode: raw.transport.as_ref().and_then(|t| t.mode.clone()).unwrap_or_else(default_transport_mode),
                 stealth_sni: raw.transport.as_ref().and_then(|t| t.stealth_sni.clone()).unwrap_or_default(),
+                tcp_fragmentation: raw.transport.as_ref().and_then(|t| t.tcp_fragmentation).unwrap_or(false),
             },
             exclusions: ExclusionConfig {
                 domains: exclusions.domains.unwrap_or_default(),
