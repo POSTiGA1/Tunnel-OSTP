@@ -57,7 +57,6 @@ struct TunConfig {
 struct TransportConfigRaw {
     mode: Option<String>,
     stealth_sni: Option<String>,
-    wss: Option<bool>,
 }
 
 #[derive(Debug, Deserialize, Serialize, Clone)]
@@ -164,7 +163,6 @@ fn map_to_client_config(raw: &ClientConfigRaw, mode: &str) -> ostp_client::confi
         transport: ostp_client::config::TransportConfig {
             mode: raw.transport.as_ref().and_then(|t| t.mode.clone()).unwrap_or_else(|| "udp".to_string()),
             stealth_sni: raw.transport.as_ref().and_then(|t| t.stealth_sni.clone()).unwrap_or_else(|| "microsoft.com".to_string()),
-            wss: raw.transport.as_ref().and_then(|t| t.wss).unwrap_or(false),
         },
         exclusions: ostp_client::config::ExclusionConfig {
             domains: raw.exclude.as_ref().and_then(|e| e.domains.clone()).unwrap_or_default(),
@@ -322,7 +320,7 @@ async fn get_config() -> Result<String, String> {
   "_comment_socks5_bind": "The local port where the system/browser should connect (HTTP/SOCKS5)",
   "socks5_bind": "127.0.0.1:1088",
   
-  "_comment_tun": "Virtual network adapter settings (requires tun2socks.exe to be present)",
+  "_comment_tun": "Virtual network adapter settings (native OSTP TUN via wintun.dll)",
   "tun": {
     "enable": false,
     "wintun_path": "./wintun.dll",

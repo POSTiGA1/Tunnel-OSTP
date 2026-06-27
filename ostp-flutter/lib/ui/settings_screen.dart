@@ -33,12 +33,9 @@ class _SettingsScreenState extends State<SettingsScreen> {
   late TextEditingController _ipsCtrl;
   late TextEditingController _processesCtrl;
   late TextEditingController _stealthSniCtrl;
-  late TextEditingController _pbkCtrl;
-  late TextEditingController _sidCtrl;
 
   bool _obscureKey = true;
   bool _debugMode = false;
-  bool _wss = false;
   String _transportMode = 'udp'; // 'udp' | 'uot'
   String _tunStack = 'ostp'; // 'system' | 'ostp'
   bool _muxEnabled = false;
@@ -58,9 +55,6 @@ class _SettingsScreenState extends State<SettingsScreen> {
     _ipsCtrl = TextEditingController(text: widget.prefs.getString('ex_ips') ?? '');
     _processesCtrl = TextEditingController(text: widget.prefs.getString('ex_processes') ?? '');
     _stealthSniCtrl = TextEditingController(text: widget.prefs.getString('stealth_sni') ?? '');
-    _pbkCtrl = TextEditingController(text: widget.prefs.getString('pbk') ?? '');
-    _sidCtrl = TextEditingController(text: widget.prefs.getString('sid') ?? '');
-    _wss = widget.prefs.getBool('wss') ?? false;
     _transportMode = widget.prefs.getString('transport_mode') ?? 'udp';
     _tunStack = widget.prefs.getString('tun_stack') ?? 'ostp';
     _debugMode = widget.prefs.getBool('debug_mode') ?? false;
@@ -81,8 +75,6 @@ class _SettingsScreenState extends State<SettingsScreen> {
     _ipsCtrl.dispose();
     _processesCtrl.dispose();
     _stealthSniCtrl.dispose();
-    _pbkCtrl.dispose();
-    _sidCtrl.dispose();
     _muxSessionsCtrl.dispose();
     super.dispose();
   }
@@ -97,12 +89,9 @@ class _SettingsScreenState extends State<SettingsScreen> {
     widget.prefs.setString('ex_ips', _ipsCtrl.text.trim());
     widget.prefs.setString('ex_processes', _processesCtrl.text.trim());
     widget.prefs.setBool('debug_mode', _debugMode);
-    widget.prefs.setBool('wss', _wss);
     widget.prefs.setString('transport_mode', _transportMode);
     widget.prefs.setString('tun_stack', _tunStack);
     widget.prefs.setString('stealth_sni', _stealthSniCtrl.text.trim());
-    widget.prefs.setString('pbk', _pbkCtrl.text.trim());
-    widget.prefs.setString('sid', _sidCtrl.text.trim());
     widget.prefs.setBool('mux_enabled', _muxEnabled);
     widget.prefs.setString('mux_sessions', _muxSessionsCtrl.text.trim());
   }
@@ -237,9 +226,6 @@ class _SettingsScreenState extends State<SettingsScreen> {
                       _serverCtrl.text = host;
                       _keyCtrl.text = key;
                       _stealthSniCtrl.text = uri.queryParameters['sni'] ?? '';
-                      _pbkCtrl.text = uri.queryParameters['pbk'] ?? '';
-                      _sidCtrl.text = uri.queryParameters['sid'] ?? '';
-                      _wss = uri.queryParameters['wss'] == 'true';
                       final type = uri.queryParameters['type'] ?? 'udp';
                       _transportMode = type == 'tcp' || type == 'http' ? 'uot' : 'udp';
                       _importCtrl.clear();
@@ -323,12 +309,6 @@ class _SettingsScreenState extends State<SettingsScreen> {
                     ],
                   ),
                 ),
-                const SizedBox(height: 16),
-                _buildToggle('WebSocket (WSS)', 'Инкапсулировать транспорт в RFC 6455 (для строгого DPI)', _wss, (val) {
-                  setState(() {
-                    _wss = val;
-                  });
-                }),
                 const SizedBox(height: 16),
 
                 // Stealth parameters
@@ -554,15 +534,6 @@ class _SettingsScreenState extends State<SettingsScreen> {
     final queryParams = <String>[];
     if (_stealthSniCtrl.text.trim().isNotEmpty) {
       queryParams.add('sni=${Uri.encodeComponent(_stealthSniCtrl.text.trim())}');
-    }
-    if (_pbkCtrl.text.trim().isNotEmpty) {
-      queryParams.add('pbk=${Uri.encodeComponent(_pbkCtrl.text.trim())}');
-    }
-    if (_sidCtrl.text.trim().isNotEmpty) {
-      queryParams.add('sid=${Uri.encodeComponent(_sidCtrl.text.trim())}');
-    }
-    if (_wss) {
-      queryParams.add('wss=true');
     }
     if (_transportMode != 'udp') {
       queryParams.add('type=$_transportMode');

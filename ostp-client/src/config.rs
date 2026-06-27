@@ -70,18 +70,15 @@ pub struct LocalProxyConfig {
 }
 
 /// Transport layer configuration.
-/// `mode` = "udp" (default) or "uot" (UDP over TCP with xHTTP stealth).
+/// `mode` = "udp" (default) or "uot" (UDP over TCP с xHTTP-транспортом).
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct TransportConfig {
     /// "udp" or "uot"
     #[serde(default = "default_transport_mode")]
     pub mode: String,
-    /// TLS SNI and HTTP Host for stealth routing
+    /// TLS SNI and HTTP Host for xHTTP routing
     #[serde(default)]
     pub stealth_sni: String,
-    /// Enable strict RFC 6455 WebSocket framing
-    #[serde(default)]
-    pub wss: bool,
 }
 
 fn default_transport_mode() -> String { "udp".to_string() }
@@ -91,7 +88,6 @@ impl Default for TransportConfig {
         Self {
             mode: default_transport_mode(),
             stealth_sni: String::new(),
-            wss: false,
         }
     }
 }
@@ -173,7 +169,6 @@ struct RawUnifiedConfig {
 struct RawTransportSection {
     mode: Option<String>,
     stealth_sni: Option<String>,
-    wss: Option<bool>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -247,7 +242,6 @@ impl ClientConfig {
             transport: TransportConfig {
                 mode: raw.transport.as_ref().and_then(|t| t.mode.clone()).unwrap_or_else(default_transport_mode),
                 stealth_sni: raw.transport.as_ref().and_then(|t| t.stealth_sni.clone()).unwrap_or_default(),
-                wss: raw.transport.as_ref().and_then(|t| t.wss).unwrap_or(false),
             },
             exclusions: ExclusionConfig {
                 domains: exclusions.domains.unwrap_or_default(),

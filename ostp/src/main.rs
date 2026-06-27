@@ -85,7 +85,6 @@ fn parse_ostp_link(link: &str) -> Result<ClientConfig> {
     let mut transport_mode = String::from("udp");
     let mut tun_enabled = false;
     let mut tun_dns = None;
-    let mut wss_enabled = false;
 
     for (k, v) in parsed.query_pairs() {
         match &*k {
@@ -93,7 +92,6 @@ fn parse_ostp_link(link: &str) -> Result<ClientConfig> {
             "type" => transport_mode = v.into_owned(),
             "tun" => tun_enabled = v == "true",
             "dns" => tun_dns = Some(v.into_owned()),
-            "wss" => wss_enabled = v == "true",
             _ => {}
         }
     }
@@ -105,7 +103,6 @@ fn parse_ostp_link(link: &str) -> Result<ClientConfig> {
         transport: Some(TransportConfigRaw {
             mode: Some(transport_mode),
             stealth_sni: Some(sni.clone()),
-            wss: Some(wss_enabled),
         }),
         socks5_bind: Some("127.0.0.1:1088".to_string()),
         tun: Some(TunConfig {
@@ -320,7 +317,6 @@ struct ClientConfig {
 struct TransportConfigRaw {
     mode: Option<String>,
     stealth_sni: Option<String>,
-    wss: Option<bool>,
 }
 
 #[derive(Debug, Deserialize, Serialize, Clone)]
@@ -699,8 +695,7 @@ fn run_setup_wizard(config_path: &std::path::Path) -> Result<()> {
                 },
                 "transport": {
                     "mode": transport_mode,
-                    "stealth_sni": "www.microsoft.com",
-                    "wss": false
+                    "stealth_sni": "www.microsoft.com"
                 },
                 "mux": {
                     "enabled": mux_enable,
@@ -846,12 +841,8 @@ fn run_setup_wizard(config_path: &std::path::Path) -> Result<()> {
                 let digest: [u8; 32] = {
                     use std::collections::hash_map::DefaultHasher;
                     use std::hash::{Hash, Hasher};
-                    // simple SHA-256 via sha2 would be ideal; we reuse existing pattern from the old script
-                    // fallback: store plaintext-keyed sha256 if sha2 crate not available
-                    // The ostp binary already uses sha256 for reality keys — let's do it properly via python fallback
-                    // Actually: ostp-core likely has sha2 in tree. Let's use hex output.
-                    // We'll use std's hash as placeholder and document; sha2 is not in ostp/Cargo.toml directly.
-                    // Use sha2 via ostp_core if available, else hex of std hasher.
+                    // Panel password hashing. sha2 is not a direct dep of ostp/Cargo.toml,
+                    // so we use std's hasher as a placeholder digest here.
                     let mut h = DefaultHasher::new();
                     password.hash(&mut h);
                     let v = h.finish();
@@ -1348,8 +1339,7 @@ async fn run_app() -> Result<()> {
   // Transport Mode: "udp" (default WebRTC masquerade) or "uot" (TCP UoT)
   "transport": {{
     "mode": "udp",
-    "stealth_sni": "www.microsoft.com",
-    "wss": false
+    "stealth_sni": "www.microsoft.com"
   }},
   
   "mux": {{
@@ -1633,7 +1623,6 @@ async fn run_client_directly(client_cfg: ClientConfig) -> Result<()> {
         transport: ostp_client::config::TransportConfig {
             mode: client_cfg.transport.as_ref().and_then(|t| t.mode.clone()).unwrap_or_else(|| "udp".to_string()),
             stealth_sni: client_cfg.transport.as_ref().and_then(|t| t.stealth_sni.clone()).unwrap_or_else(|| "microsoft.com".to_string()),
-            wss: client_cfg.transport.as_ref().and_then(|t| t.wss).unwrap_or(false),
         },
         dns_server: client_cfg.tun.as_ref().and_then(|t| t.dns.clone()),
         kill_switch: client_cfg.tun.as_ref().and_then(|t| t.kill_switch).unwrap_or(false),

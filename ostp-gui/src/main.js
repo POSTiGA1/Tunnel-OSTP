@@ -46,7 +46,6 @@ const inDns          = $('in-dns');
 const groupCustomDns = $('group-custom-dns');
 const inTransport    = $('in-transport');
 const inSni          = $('in-stealth-sni');
-const inWss          = $('in-wss');
 const inMtu          = $('in-mtu');
 const inTun          = $('in-tun-mode');
 const inKillSwitch   = $('in-kill-switch');
@@ -336,7 +335,6 @@ async function loadConfigIntoForm() {
     inSocks.value   = c.socks5_bind   || '127.0.0.1:1088';
     inTransport.value = c.transport?.mode || 'udp';
     inSni.value     = c.transport?.stealth_sni || '';
-    inWss.checked   = !!c.transport?.wss;
 
     inMtu.value     = c.mtu           || '';
     inTun.checked   = !!c.tun?.enable;
@@ -400,7 +398,6 @@ async function handleSave(silent = false) {
   rawConfig.transport = rawConfig.transport || {};
   rawConfig.transport.mode = inTransport.value;
   rawConfig.transport.stealth_sni = inSni.value.trim() || undefined;
-  rawConfig.transport.wss = inWss.checked;
 
   const mtuStr = inMtu.value.trim();
   if (mtuStr) rawConfig.mtu = parseInt(mtuStr, 10);
@@ -534,22 +531,19 @@ window.addEventListener('DOMContentLoaded', async () => {
       try {
         const mtus = [1500, 1350, 1280];
         const modes = [
-          { t: 'udp', w: false, r: false },
-          { t: 'uot', w: false, r: false },
-          { t: 'uot', w: true, r: false },
-          { t: 'uot', w: false, r: true }
+          { t: 'udp' },
+          { t: 'uot' }
         ];
 
         for (let mode of modes) {
           for (let mtu of mtus) {
-            showToast(`Testing: ${mode.t} | WSS: ${mode.w} | XTLS: ${mode.r} | MTU: ${mtu}`);
-            
+            showToast(`Testing: ${mode.t} | MTU: ${mtu}`);
+
             rawConfig.ostp = rawConfig.ostp || {};
             rawConfig.ostp.mtu = mtu;
             rawConfig.transport = rawConfig.transport || {};
             rawConfig.transport.mode = mode.t;
-            rawConfig.transport.wss = mode.w;
-            
+
 
 
             await invoke('save_config', { jsonContent: JSON.stringify(rawConfig, null, 2) });

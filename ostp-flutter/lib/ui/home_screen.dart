@@ -84,7 +84,6 @@ class _HomeScreenState extends State<HomeScreen> with TickerProviderStateMixin {
     final debugMode = widget.prefs.getBool('debug_mode') ?? false;
     final transportMode = widget.prefs.getString('transport_mode') ?? 'udp';
     final stealthSni = widget.prefs.getString('stealth_sni') ?? 'vk.com';
-    final wss = widget.prefs.getBool('wss') ?? false;
     final mtu = widget.prefs.getString('mtu') ?? '1140';
     final muxEnabled = widget.prefs.getBool('mux_enabled') ?? false;
     final muxSessions = widget.prefs.getString('mux_sessions') ?? '2';
@@ -113,7 +112,6 @@ class _HomeScreenState extends State<HomeScreen> with TickerProviderStateMixin {
       "transport": {
         "mode": transportMode,
         "stealth_sni": stealthSni,
-        "wss": wss,
       },
       "multiplex": {
         "enabled": muxEnabled,
@@ -173,7 +171,6 @@ class _HomeScreenState extends State<HomeScreen> with TickerProviderStateMixin {
       final debugMode = widget.prefs.getBool('debug_mode') ?? false;
       final transportMode = widget.prefs.getString('transport_mode') ?? 'udp';
       final stealthSni = widget.prefs.getString('stealth_sni') ?? 'vk.com';
-      final wss = widget.prefs.getBool('wss') ?? false;
       final mtu = widget.prefs.getString('mtu') ?? '1140';
       final muxEnabled = widget.prefs.getBool('mux_enabled') ?? false;
       final muxSessions = widget.prefs.getString('mux_sessions') ?? '2';
@@ -201,7 +198,6 @@ class _HomeScreenState extends State<HomeScreen> with TickerProviderStateMixin {
         "transport": {
           "mode": transportMode,
           "stealth_sni": stealthSni,
-          "wss": wss,
         },
         "multiplex": {
           "enabled": muxEnabled,
@@ -296,10 +292,8 @@ class _HomeScreenState extends State<HomeScreen> with TickerProviderStateMixin {
   Future<void> _runAutoMode() async {
     final mtus = [1500, 1350, 1280, 1140];
     final modes = [
-      {'t': 'udp', 'w': false, 'r': false},
-      {'t': 'uot', 'w': false, 'r': false},
-      {'t': 'uot', 'w': true,  'r': false},
-      {'t': 'uot', 'w': false, 'r': true},
+      {'t': 'udp'},
+      {'t': 'uot'},
     ];
 
     if (_serverAddr.isEmpty || _accessKey.isEmpty) {
@@ -313,13 +307,12 @@ class _HomeScreenState extends State<HomeScreen> with TickerProviderStateMixin {
       for (var mtu in mtus) {
         if (!mounted) return;
         ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(content: Text('Testing: ${mode['t']} | WSS: ${mode['w']} | XTLS: ${mode['r']} | MTU: $mtu'), duration: const Duration(seconds: 2)),
+          SnackBar(content: Text('Testing: ${mode['t']} | MTU: $mtu'), duration: const Duration(seconds: 2)),
         );
 
         // Update prefs
         await widget.prefs.setString('mtu', mtu.toString());
         await widget.prefs.setString('transport_mode', mode['t'] as String);
-        await widget.prefs.setBool('wss', mode['w'] as bool);
         _updateLatestConfigJson();
 
         setState(() {

@@ -66,7 +66,6 @@ pub struct Bridge {
 
     pub transport_mode: String,
     pub stealth_sni: String,
-    pub wss: bool,
     pub mtu: usize,
     pub kill_switch: bool,
     pub reload_tx: Option<watch::Sender<crate::config::ExclusionConfig>>,
@@ -99,7 +98,6 @@ impl Bridge {
 
             transport_mode: config.transport.mode.clone(),
             stealth_sni: config.transport.stealth_sni.clone(),
-            wss: config.transport.wss,
             mtu: config.ostp.mtu,
             kill_switch: config.kill_switch,
             reload_tx: None,
@@ -1026,7 +1024,6 @@ impl Bridge {
         self.mux_sessions = cfg.multiplex.sessions.max(1);
         self.transport_mode = cfg.transport.mode.clone();
         self.stealth_sni = cfg.transport.stealth_sni.clone();
-        self.wss = cfg.transport.wss; // Fix: wss was not updated on hot-reload
         self.mtu = cfg.ostp.mtu;
         self.keepalive_interval_sec = cfg.ostp.keepalive_interval_sec;
         self.kill_switch = cfg.kill_switch;
