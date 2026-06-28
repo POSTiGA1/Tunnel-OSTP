@@ -395,18 +395,20 @@ impl ProtocolMachine {
             self.last_recv_advance = Instant::now();
         } else {
             // Gap detected
-            if self.reorder_buffer.len() < self.max_reorder_buffer {
-                self.reorder_buffer.insert(nonce, action);
+            if nonce >= self.expected_recv_nonce {
+                if self.reorder_buffer.len() < self.max_reorder_buffer {
+                    self.reorder_buffer.insert(nonce, action);
+                } else {
+                    tracing::warn!("Reorder buffer still full after gap recovery, dropping frame nonce={}", nonce);
+                }
             } else {
-                tracing::warn!("Reorder buffer full ({}/{}), dropping frame nonce={}",
-                    self.reorder_buffer.len(), self.max_reorder_buffer, nonce
-                );
+                tracing::debug!("Frame nonce={} arrived too late after gap recovery, dropping", nonce);
             }
 
-            // Rate-limited NACK: send at most once per 30ms to prevent retransmit storms.
-            // Under high load with natural UDP reordering, sending a NACK per packet
-            // causes exponential retransmit explosion that saturates the channel.
-            let nack_cooldown = Duration::from_millis(30);
+            // Rate-limited NACK: send at most once per (rto/2) to prevent retransmit storms.
+            // Using rto/2 means we send a NACK before the sender's timer fires, prompting
+            // fast retransmit without flooding. Floor at 10ms to handle very low-RTT links.
+            let nack_cooldown = (self.cc.rto() / 2).max(Duration::from_millis(10));
             if self.last_nack_sent.elapsed() >= nack_cooldown {
                 self.last_nack_sent = Instant::now();
                 let nack_payload = self.expected_recv_nonce.to_be_bytes();
@@ -514,44 +516,18 @@ impl ProtocolMachine {
     fn handle_tick(&mut self) -> Result<ProtocolAction, ProtocolError> {
         let mut actions = Vec::new();
 
-        // ── Gap Recovery ──────────────────────────────────────────────
-        // If expected_recv_nonce hasn't advanced for 500ms+ and there
-        // are buffered frames waiting, the sender likely evicted the lost
-        // frame from sent_history. Skip the gap to restore data flow.
-        // This trades a small amount of data loss for connection liveness.
-        if !self.reorder_buffer.is_empty()
-            && self.last_recv_advance.elapsed() > Duration::from_millis(500)
-        {
-            if let Some(&first_buffered) = self.reorder_buffer.keys().next() {
-                let skipped = first_buffered.saturating_sub(self.expected_recv_nonce);
-                self.expected_recv_nonce = first_buffered;
-                self.last_recv_advance = Instant::now();
-
-                let mut delivered = 0u64;
-                while let Some(buffered_action) = self.reorder_buffer.remove(&self.expected_recv_nonce) {
-                    actions.push(buffered_action);
-                    self.expected_recv_nonce = self.expected_recv_nonce.saturating_add(1);
-                    delivered += 1;
-                }
-                self.ack_pending = true;
-                tracing::debug!("Gap recovery: skipped {} lost frames, delivered {} buffered frames (reorder_buf={})",
-                    skipped, delivered, self.reorder_buffer.len()
-                );
-            }
-        }
-
         // ── Pending ACK flush ─────────────────────────────────────────
         if let Some(ack_frame) = self.build_ack_if_due()? {
             actions.push(ProtocolAction::SendDatagram(ack_frame));
         }
 
         let now = Instant::now();
-        let base_rto_ms = self.rto.as_millis().max(1) as u64;
+        // Use the adaptive RTO from the congestion controller (RFC 6298 SRTT + 4*RTTVAR).
+        // Falls back to rto_initial before the first ACK is received.
+        let base_rto_ms = self.cc.rto().max(self.rto).as_millis().max(1) as u64;
 
         // ── Zombie frame eviction ────────────────────────────────────
         // Evict frames that exceeded max_retries + 2 grace retries.
-        // Shorter grace period than before (was +4) to free memory faster
-        // after high-throughput bursts.
         let grace = self.max_retries.saturating_add(2);
         let before = self.sent_history.len();
         self.sent_history.retain(|f| !f.is_retransmittable || f.retries <= grace);
@@ -562,14 +538,15 @@ impl ProtocolMachine {
 
         // ── Retransmit expired frames ────────────────────────────────
         // Limit retransmits per tick to prevent bandwidth saturation
+        // Backoff starts from retry #0 (immediately effective):
+        //   effective_rto = base_rto * 2^retries, capped at 2^6 = 64×
         let mut retransmit_budget: usize = self.cc.retransmit_budget();
         for frame in self.sent_history.iter_mut() {
             if !frame.is_retransmittable {
                 continue;
             }
 
-            let retry_over = frame.retries.saturating_sub(self.max_retries);
-            let backoff_factor = 1u64 << retry_over.min(6);
+            let backoff_factor = 1u64 << (frame.retries as u64).min(6);
             let effective_rto = Duration::from_millis(base_rto_ms.saturating_mul(backoff_factor));
 
             if now.duration_since(frame.last_sent) >= effective_rto {

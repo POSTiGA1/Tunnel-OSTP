@@ -1,273 +1,273 @@
-import { t, toggleLang, applyTranslations } from './i18n.js';
-
-// ── Tauri invoke shim ────────────────────────────────────────────────────────
+// ── Tauri invoke shim ─────────────────────────────────────────────────
 let invoke = () => Promise.resolve(null);
 if (window.__TAURI__?.core) {
   invoke = window.__TAURI__.core.invoke;
 }
 
-// ── State ────────────────────────────────────────────────────────────────────
-let appState    = 'disconnected'; // 'disconnected' | 'connecting' | 'connected'
-let pollTimer   = null;
-let uptimeTimer = null;
-let uptimeSecs  = 0;
-let rawConfig   = null;           // parsed config.json object
-let serverAddr  = '';             // current server address (for badge)
+// ── PROFILE STORE ─────────────────────────────────────────────────────
+// Profiles are stored in localStorage only — the core never knows about them.
+// Only the active profile is compiled into a config and passed to Tauri.
+//
+// Profile shape:
+// { id: string, name: string, server: string, key: string, transport: 'udp'|'uot' }
 
-// ── DOM refs ─────────────────────────────────────────────────────────────────
+const PROFILES_KEY  = 'ostp_profiles_v1';
+const ACTIVE_KEY    = 'ostp_active_profile';
+const SETTINGS_KEY  = 'ostp_client_settings';
+
+function loadProfiles() {
+  try { return JSON.parse(localStorage.getItem(PROFILES_KEY) || '[]'); }
+  catch { return []; }
+}
+
+function saveProfiles(profiles) {
+  localStorage.setItem(PROFILES_KEY, JSON.stringify(profiles));
+}
+
+function loadActiveId() {
+  return localStorage.getItem(ACTIVE_KEY) || null;
+}
+
+function saveActiveId(id) {
+  localStorage.setItem(ACTIVE_KEY, id || '');
+}
+
+function loadClientSettings() {
+  try { return JSON.parse(localStorage.getItem(SETTINGS_KEY) || '{}'); }
+  catch { return {}; }
+}
+
+function saveClientSettings(s) {
+  localStorage.setItem(SETTINGS_KEY, JSON.stringify(s));
+}
+
+function genId() {
+  return Date.now().toString(36) + Math.random().toString(36).slice(2, 6);
+}
+
+// ── APP STATE ─────────────────────────────────────────────────────────
+let appState   = 'disconnected'; // 'disconnected'|'connecting'|'connected'
+let pollTimer  = null;
+let uptimeSecs = 0;
+let uptimeTimer = null;
+
+// for throughput calc
+let prevBytesRecv = 0, prevBytesSent = 0;
+
+// profiles
+let profiles  = loadProfiles();
+let activeId  = loadActiveId();
+
+// editor state
+let editingProfileId = null; // null = new profile
+
+// ── DOM ───────────────────────────────────────────────────────────────
 const $ = id => document.getElementById(id);
 
 const homeScreen     = $('home-screen');
 const settingsScreen = $('settings-screen');
-const btnConnect     = $('btn-connect');
-const orbitWrap      = $('orbit-wrap');
 const brandDot       = $('brand-dot');
-const statusLabel    = $('status-text');
-const statusSub      = $('uptime-text');
+const orbitWrap      = $('orbit-wrap');
+const btnConnect     = $('btn-connect');
+const statusText     = $('status-text');
+const uptimeText     = $('uptime-text');
+const errorBanner    = $('error-banner');
 const connInfo       = $('connection-info');
-const serverBadgeTxt = $('server-badge-text');
+const serverBadge    = $('server-badge-text');
+const liveRtt        = $('live-rtt');
+const liveDown       = $('live-down-speed');
+const liveUp         = $('live-up-speed');
 const metricDown     = $('metric-down');
 const metricUp       = $('metric-up');
-const pingValueTxt   = $('ping-text-value');
-const btnTestPing    = $('btn-test-ping');
 const toast          = $('toast');
 
 const btnGoSettings  = $('btn-go-settings');
 const btnAutoConnect = $('btn-auto-connect');
 const btnBack        = $('btn-back');
-const btnImport      = $('btn-import-url');
-const btnShare       = $('btn-share-url');
-const btnPeekKey     = $('btn-peek-key');
-const importInput    = $('in-import-url');
-const shareModal     = $('share-modal');
-const shareQr        = $('share-qr');
-const shareLink      = $('share-link');
-const btnShareClose  = $('btn-share-close');
-const btnShareCopy   = $('btn-share-copy');
-const inServer       = $('in-server');
-const inKey          = $('in-key');
-const inSocks        = $('in-socks');
-const inDns          = $('in-dns');
 
-const groupCustomDns = $('group-custom-dns');
-const inTransport    = $('in-transport');
-const inSni          = $('in-stealth-sni');
-const inMtu          = $('in-mtu');
-const inTun          = $('in-tun-mode');
-const inKillSwitch   = $('in-kill-switch');
-const inMux          = $('in-mux-mode');
-const inMuxSessions  = $('in-mux-sessions');
-const inDebug          = $('in-debug');
-const inAutoconnect    = $('in-autoconnect');
-const inLaunchStartup  = $('in-launch-startup');
+const btnAddProfile  = $('btn-add-profile');
+const addMenu        = $('add-menu');
+const profileList    = $('profile-list');
+const profileEmpty   = $('profile-empty');
 
-const wintunModal        = $('wintun-modal');
-const btnWintunCancel    = $('btn-wintun-cancel');
-const btnWintunOpen      = $('btn-wintun-open');
-const wintunInstallPath  = $('wintun-install-path');
+// add menu
+const addFromLink      = $('add-from-link');
+const addFromClipboard = $('add-from-clipboard');
+const addManually      = $('add-manually');
 
-// ── Tag-input state ───────────────────────────────────────────────────────────
-// Map of tagId -> Set<string>
-const tagState = {
-  domains:   new Set(),
-  ips:       new Set(),
-  processes: new Set(),
-};
+// link modal
+const linkModal    = $('link-modal');
+const linkInput    = $('link-input');
+const btnLinkCancel = $('btn-link-cancel');
+const btnLinkImport = $('btn-link-import');
 
-function renderTagList(key) {
-  const list = $('tag-list-' + key);
-  if (!list) return;
-  list.innerHTML = '';
-  for (const val of tagState[key]) {
-    const chip = document.createElement('span');
-    chip.className = 'tag-chip';
-    chip.innerHTML = `${val}<button class="tag-chip-remove" title="Remove" tabindex="-1"><svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3" stroke-linecap="round"><path d="M18 6 6 18M6 6l12 12"/></svg></button>`;
-    chip.querySelector('.tag-chip-remove').addEventListener('click', () => {
-      tagState[key].delete(val);
-      renderTagList(key);
-      scheduleAutoSave();
-    });
-    list.appendChild(chip);
-  }
-}
+// profile editor modal
+const profileModal    = $('profile-modal');
+const profileModalTitle = $('profile-modal-title');
+const pmName    = $('pm-name');
+const pmServer  = $('pm-server');
+const pmKey     = $('pm-key');
+const pmTransport = $('pm-transport');
+const btnProfileCancel = $('btn-profile-cancel');
+const btnProfileSave   = $('btn-profile-save');
+const btnProfileDelete = $('btn-profile-delete');
+const btnPeekPm = $('btn-peek-pm');
 
-function addTag(key, raw) {
-  const vals = raw.split(/[\s,;]+/).map(v => v.trim()).filter(Boolean);
-  let added = false;
-  for (const v of vals) {
-    if (!tagState[key].has(v)) { tagState[key].add(v); added = true; }
-  }
-  if (added) { renderTagList(key); scheduleAutoSave(); }
-}
+// share modal
+const shareModal   = $('share-modal');
+const shareQr      = $('share-qr');
+const shareLink    = $('share-link');
+const btnShareClose = $('btn-share-close');
+const btnShareCopy  = $('btn-share-copy');
 
-function wireTagInput(key) {
-  const input = $('tag-input-' + key);
-  const wrap  = $('tag-wrap-' + key);
-  if (!input) return;
-  input.addEventListener('keydown', e => {
-    if (e.key === 'Enter' || e.key === ',') {
-      e.preventDefault();
-      const v = input.value.trim();
-      if (v) { addTag(key, v); input.value = ''; }
-    } else if (e.key === 'Backspace' && !input.value) {
-      const arr = [...tagState[key]];
-      if (arr.length) { tagState[key].delete(arr[arr.length - 1]); renderTagList(key); scheduleAutoSave(); }
-    }
-  });
-  input.addEventListener('paste', e => {
-    e.preventDefault();
-    const text = (e.clipboardData || window.clipboardData).getData('text');
-    addTag(key, text);
-    input.value = '';
-  });
-  // click on wrap focuses input
-  if (wrap) wrap.addEventListener('click', () => input.focus());
-}
+// wintun modal
+const wintunModal   = $('wintun-modal');
+const wintunPath    = $('wintun-install-path');
+const btnWintunCancel = $('btn-wintun-cancel');
+const btnWintunOpen   = $('btn-wintun-open');
 
-// ── Utilities ────────────────────────────────────────────────────────────────
+// client settings
+const inTun         = $('in-tun-mode');
+const inKillSwitch  = $('in-kill-switch');
+const inMux         = $('in-mux-mode');
+const inMuxSessions = $('in-mux-sessions');
+const inMtu         = $('in-mtu');
+const inDns         = $('in-dns');
+const inSocks       = $('in-socks');
+const inExDomains   = $('in-ex-domains');
+const inExIps       = $('in-ex-ips');
+const inExProcs     = $('in-ex-procs');
+const inAutoconnect = $('in-autoconnect');
+const inLaunchStartup = $('in-launch-startup');
+const inDebug       = $('in-debug');
+const groupKillSwitch  = $('group-kill-switch');
+const groupMuxSessions = $('group-mux-sessions');
+
+// ── UTILITIES ─────────────────────────────────────────────────────────
 function fmtBytes(b) {
   if (!b || b === 0) return '0 B';
-  const units = ['B', 'KB', 'MB', 'GB', 'TB'];
-  const i = Math.min(Math.floor(Math.log2(b) / 10), 4);
+  const units = ['B', 'KB', 'MB', 'GB'];
+  const i = Math.min(Math.floor(Math.log2(b) / 10), 3);
   return (b / Math.pow(1024, i)).toFixed(i === 0 ? 0 : 1) + ' ' + units[i];
 }
 
 function fmtTime(s) {
-  const h = Math.floor(s / 3600);
-  const m = Math.floor((s % 3600) / 60);
-  const sec = s % 60;
-  const pad = n => String(n).padStart(2, '0');
-  return h > 0
-    ? `${h}:${pad(m)}:${pad(sec)}`
-    : `${pad(m)}:${pad(sec)}`;
+  const h = Math.floor(s / 3600), m = Math.floor((s % 3600) / 60), sec = s % 60;
+  const p = n => String(n).padStart(2, '0');
+  return h > 0 ? `${h}:${p(m)}:${p(sec)}` : `${p(m)}:${p(sec)}`;
 }
 
-function splitLines(val) {
-  return val.split('\n').map(l => l.trim()).filter(Boolean);
-}
-
-// ── Theme ────────────────────────────────────────────────────────────────────
-function applyTheme(theme) {
-  document.documentElement.setAttribute('data-theme', theme);
-  localStorage.setItem('ostp-theme', theme);
-}
-
-function toggleTheme() {
-  const current = document.documentElement.getAttribute('data-theme');
-  applyTheme(current === 'light' ? 'dark' : 'light');
-}
-
-// Apply saved theme immediately (before any paint)
-(function() {
-  const saved = localStorage.getItem('ostp-theme') || 'dark';
-  document.documentElement.setAttribute('data-theme', saved);
-})();
-// ── Toast ────────────────────────────────────────────────────────────────────
 let toastTimer = null;
 function showToast(msg, variant = '') {
   toast.textContent = msg;
   toast.className = 'toast show' + (variant ? ' is-' + variant : '');
   clearTimeout(toastTimer);
-  toastTimer = setTimeout(() => {
-    toast.classList.remove('show');
-  }, 2400);
+  toastTimer = setTimeout(() => toast.classList.remove('show'), 2600);
 }
 
-// ── DNS & Kill Switch visibility ──────────────────────────────────────────────
-
-
-function updateKillSwitchVisibility() {
-  const group = $('group-kill-switch');
-  if (!group || !inTun) return;
-  group.style.display = inTun.checked ? 'flex' : 'none';
+function showError(msg) {
+  errorBanner.textContent = msg;
+  errorBanner.classList.remove('hidden');
+  btnConnect.classList.add('error');
+  setTimeout(() => {
+    errorBanner.classList.add('hidden');
+    btnConnect.classList.remove('error');
+  }, 5000);
 }
 
-
-// ── State machine ────────────────────────────────────────────────────────────
+// ── STATE MACHINE ─────────────────────────────────────────────────────
 function setState(next) {
   if (appState === next) return;
   appState = next;
 
-  // Reset all dynamic classes
   btnConnect.className = 'power-btn';
   orbitWrap.className  = 'orbit-wrap';
   brandDot.className   = 'brand-dot';
-  statusLabel.className = 'status-label';
+  statusText.className = 'status-label';
 
   if (next === 'disconnected') {
-    statusLabel.textContent = t('status_disconnected');
-    statusSub.textContent   = t('hint_tap');
+    statusText.textContent = 'Disconnected';
+    uptimeText.textContent  = 'Tap to protect your traffic';
     connInfo.classList.add('hidden');
-    metricDown.textContent  = '0 B';
-    metricUp.textContent    = '0 B';
-    pingValueTxt.textContent = 'Target Ping: -- ms';
-    pingValueTxt.className = 'ping-test-value';
-    clearInterval(pollTimer);
-    clearInterval(uptimeTimer);
-    pollTimer = uptimeTimer = null;
+    metricDown.textContent = liveDown.textContent = '0 B';
+    metricUp.textContent   = liveUp.textContent   = '0 B';
+    liveRtt.textContent    = '--';
+    liveRtt.className      = 'live-stat-value';
+    prevBytesRecv = prevBytesSent = 0;
+    clearInterval(pollTimer);  pollTimer  = null;
+    clearInterval(uptimeTimer); uptimeTimer = null;
     uptimeSecs = 0;
 
   } else if (next === 'connecting') {
     btnConnect.classList.add('connecting');
     orbitWrap.classList.add('connecting');
     brandDot.classList.add('connecting');
-    statusLabel.classList.add('is-connecting');
-    statusLabel.textContent = t('status_connecting');
-    statusSub.textContent   = t('hint_connecting');
+    statusText.classList.add('is-connecting');
+    statusText.textContent = 'Connecting…';
+    uptimeText.textContent  = 'Establishing secure tunnel';
     connInfo.classList.add('hidden');
-    clearInterval(uptimeTimer);
-    uptimeTimer = null;
+    clearInterval(uptimeTimer); uptimeTimer = null;
     uptimeSecs = 0;
 
   } else if (next === 'connected') {
     btnConnect.classList.add('connected');
     orbitWrap.classList.add('connected');
     brandDot.classList.add('connected');
-    statusLabel.classList.add('is-connected');
-    statusLabel.textContent = t('status_connected');
+    statusText.classList.add('is-connected');
+    statusText.textContent = 'Connected';
 
-    // Show connection info
-    if (serverAddr) {
-      serverBadgeTxt.textContent = serverAddr;
+    const active = profiles.find(p => p.id === activeId);
+    if (active) {
+      serverBadge.textContent = active.server;
       connInfo.classList.remove('hidden');
     }
 
-    // Start uptime counter
-    if (!uptimeTimer) {
-      uptimeSecs = 0;
-      statusSub.textContent = fmtTime(uptimeSecs);
-      uptimeTimer = setInterval(() => {
-        uptimeSecs++;
-        statusSub.textContent = fmtTime(uptimeSecs);
-      }, 1000);
-    }
+    uptimeSecs = 0;
+    statusText.textContent = 'Connected';
+    uptimeTimer = setInterval(() => {
+      uptimeSecs++;
+      uptimeText.textContent = fmtTime(uptimeSecs);
+    }, 1000);
   }
 }
 
-// ── Polling ──────────────────────────────────────────────────────────────────
+// ── POLLING ───────────────────────────────────────────────────────────
 async function poll() {
   if (!pollTimer) return;
   try {
     const code = await invoke('get_tunnel_status');
-    if (!pollTimer) return; // Prevent race condition if disconnected during await
-    console.log('[OSTP] poll status code:', code);
-    
+    if (!pollTimer) return;
+
     if      (code === 0) { setState('disconnected'); return; }
-    else if (code === 1)   setState('connecting');
-    else if (code === 2)   setState('connected');
+    else if (code === 1) setState('connecting');
+    else if (code === 2) setState('connected');
 
     const metrics = await invoke('get_metrics');
     if (metrics && pollTimer) {
-      metricDown.textContent = fmtBytes(metrics.bytes_recv);
-      metricUp.textContent   = fmtBytes(metrics.bytes_sent);
+      const recv = metrics.bytes_recv || 0;
+      const sent = metrics.bytes_sent || 0;
+      const rtt  = metrics.rtt_ms    || 0;
+
+      // Total bytes
+      metricDown.textContent = fmtBytes(recv);
+      metricUp.textContent   = fmtBytes(sent);
+
+      // Throughput (delta per second)
+      const dRecv = Math.max(0, recv - prevBytesRecv);
+      const dSent = Math.max(0, sent - prevBytesSent);
+      prevBytesRecv = recv; prevBytesSent = sent;
+      liveDown.textContent = fmtBytes(dRecv) + '/s';
+      liveUp.textContent   = fmtBytes(dSent) + '/s';
+
+      // RTT coloring
+      if (rtt > 0) {
+        liveRtt.textContent = rtt + ' ms';
+        liveRtt.className = 'live-stat-value ' + (rtt < 100 ? 'rtt-good' : rtt < 250 ? 'rtt-warn' : 'rtt-bad');
+      }
     }
   } catch (err) {
-    console.error('[OSTP] poll threw:', err);
-    if (pollTimer) {
-      setState('disconnected');
-      showToast(String(err), 'error');
-      alert('[OSTP POLL ERROR] ' + String(err));
-    }
+    console.error('[OSTP] poll error:', err);
+    if (pollTimer) setState('disconnected');
   }
 }
 
@@ -277,49 +277,133 @@ function startPolling() {
   pollTimer = setInterval(poll, 1000);
 }
 
-// ── Connect / Disconnect ─────────────────────────────────────────────────────
+// ── BUILD CONFIG from active profile + client settings ────────────────
+function buildConfig() {
+  const active = profiles.find(p => p.id === activeId);
+  if (!active) return null;
+
+  const s = loadClientSettings();
+  const cfg = {
+    mode: 'client',
+    server: active.server,
+    access_key: active.key,
+    socks5_bind: s.socks || null,
+    debug: !!s.debug,
+    transport: {
+      mode: active.transport || 'udp',
+    },
+    tun: {
+      enable: !!s.tun,
+      wintun_path: './wintun.dll',
+      ipv4_address: '10.1.0.2/24',
+      stack: 'ostp',
+      dns: s.dns || null,
+      kill_switch: !!s.killSwitch,
+    },
+    exclude: {
+      domains: s.exDomains ? s.exDomains.split(/[\n,]+/).map(x => x.trim()).filter(Boolean) : [],
+      ips: s.exIps ? s.exIps.split(/[\n,]+/).map(x => x.trim()).filter(Boolean) : [],
+      processes: s.exProcs ? s.exProcs.split(/[\n,]+/).map(x => x.trim()).filter(Boolean) : [],
+    },
+    mux: s.mux ? { enabled: true, sessions: parseInt(s.muxSessions, 10) || 2 } : undefined,
+    gui: {
+      autoconnect: !!s.autoconnect,
+      launch_startup: !!s.launchStartup,
+    },
+  };
+  if (s.mtu) cfg.mtu = parseInt(s.mtu, 10);
+  return cfg;
+}
+
+// ── CONNECT / DISCONNECT ──────────────────────────────────────────────
 async function handleToggle() {
-  if (appState === 'disconnected') {
-    try {
-      const raw = await invoke('get_config');
-      const cfg = JSON.parse(raw);
-      serverAddr = cfg.server || '';
-    } catch { serverAddr = ''; }
-
-    setState('connecting');
-
-    try {
-      console.log('[OSTP] invoking start_tunnel...');
-      const ok = await invoke('start_tunnel');
-      console.log('[OSTP] start_tunnel returned:', ok);
-      if (ok) {
-        startPolling();
-      } else {
-        setState('disconnected');
-        showToast(t('toast_error') || 'Failed to connect', 'error');
-        alert('[OSTP] start_tunnel returned false');
-      }
-    } catch (err) {
-      console.error('[OSTP] start_tunnel threw:', err);
-      setState('disconnected');
-      if (String(err).includes("WINTUN_MISSING")) {
-        if (wintunModal) wintunModal.classList.remove('hidden');
-      } else {
-        showToast(String(err), 'error');
-        alert('[OSTP ERROR] ' + String(err));
-      }
-    }
-  } else {
+  if (appState !== 'disconnected') {
     setState('disconnected');
     try { await invoke('stop_tunnel'); } catch { /* ignore */ }
-    showToast(t('toast_disconnected') || 'Disconnected');
+    showToast('Disconnected');
+    return;
+  }
+
+  if (!activeId || !profiles.find(p => p.id === activeId)) {
+    showToast('Select a profile first', 'error');
+    return;
+  }
+
+  const cfg = buildConfig();
+  if (!cfg) { showToast('Active profile invalid', 'error'); return; }
+
+  setState('connecting');
+  errorBanner.classList.add('hidden');
+
+  try {
+    await invoke('save_config', { jsonContent: JSON.stringify(cfg, null, 2) });
+    const ok = await invoke('start_tunnel');
+    if (ok) {
+      startPolling();
+    } else {
+      setState('disconnected');
+      showError('Failed to start tunnel. Check the log file.');
+    }
+  } catch (err) {
+    setState('disconnected');
+    const msg = String(err);
+    if (msg.includes('WINTUN_MISSING')) {
+      wintunModal.classList.remove('hidden');
+    } else {
+      showError(msg);
+      showToast(msg, 'error');
+    }
   }
 }
 
-// ── Screen navigation ────────────────────────────────────────────────────────
+// ── AUTO-CONNECT ──────────────────────────────────────────────────────
+async function handleAutoConnect() {
+  if (appState !== 'disconnected') {
+    showToast('Disconnect first', 'error'); return;
+  }
+  if (!activeId || !profiles.find(p => p.id === activeId)) {
+    showToast('Select a profile first', 'error'); return;
+  }
+
+  const modes = ['udp', 'uot'];
+  const mtus  = [1500, 1350, 1280];
+
+  showToast('Auto-connect: scanning…');
+
+  for (const transport of modes) {
+    for (const mtu of mtus) {
+      showToast(`Testing ${transport.toUpperCase()} · MTU ${mtu}`);
+      const active = profiles.find(p => p.id === activeId);
+      const tmpCfg = buildConfig();
+      if (!tmpCfg) return;
+      tmpCfg.transport.mode = transport;
+      tmpCfg.mtu = mtu;
+
+      try {
+        await invoke('save_config', { jsonContent: JSON.stringify(tmpCfg, null, 2) });
+        setState('connecting');
+        const ok = await invoke('start_tunnel');
+        if (ok) {
+          await new Promise(r => setTimeout(r, 3000));
+          const metrics = await invoke('get_metrics');
+          if (metrics?.rtt_ms > 0) {
+            startPolling();
+            showToast(`✓ ${transport.toUpperCase()} · MTU ${mtu}`, 'ok');
+            return;
+          }
+          await invoke('stop_tunnel');
+          setState('disconnected');
+        }
+      } catch { setState('disconnected'); }
+    }
+  }
+  showToast('No working config found', 'error');
+}
+
+// ── SCREEN NAVIGATION ─────────────────────────────────────────────────
 function showScreen(name) {
   if (name === 'settings') {
-    loadConfigIntoForm();
+    loadSettingsIntoForm();
     homeScreen.classList.remove('active');
     settingsScreen.classList.add('active');
   } else {
@@ -328,381 +412,430 @@ function showScreen(name) {
   }
 }
 
-// ── Config — load ─────────────────────────────────────────────────────────────
-async function loadConfigIntoForm() {
-  try {
-    const raw = await invoke('get_config');
-    rawConfig = JSON.parse(raw);
-    const c = rawConfig.mode === 'client' ? rawConfig : null;
-    if (!c) return;
+// ── PROFILE RENDERING ─────────────────────────────────────────────────
+function renderProfiles() {
+  // Remove all cards but keep empty-state node
+  Array.from(profileList.querySelectorAll('.profile-card')).forEach(n => n.remove());
 
-    inServer.value  = c.server        || '';
-    inKey.value     = c.access_key    || '';
-    inSocks.value   = c.socks5_bind   || '127.0.0.1:1088';
-    inTransport.value = c.transport?.mode || 'udp';
-    inSni.value     = c.transport?.stealth_sni || '';
-
-    inMtu.value     = c.mtu           || '';
-    inTun.checked   = !!c.tun?.enable;
-    if (inKillSwitch) inKillSwitch.checked = !!c.tun?.kill_switch;
-    inMux.checked   = !!c.mux?.enabled;
-    inMuxSessions.value = c.mux?.sessions || '';
-    
-    inDns.value = c.tun?.dns || '';
-    updateKillSwitchVisibility();
-
-    inDebug.checked = !!c.debug;
-    if (inAutoconnect) inAutoconnect.checked = !!c.gui?.autoconnect;
-    if (inLaunchStartup) inLaunchStartup.checked = !!c.gui?.launch_startup;
-
-
-    const ex = c.exclude || {};
-    tagState.domains   = new Set(ex.domains   || []);
-    tagState.ips       = new Set(ex.ips       || []);
-    tagState.processes = new Set(ex.processes || []);
-    renderTagList('domains');
-    renderTagList('ips');
-    renderTagList('processes');
-  } catch (err) {
-    showToast(String(err), 'error');
+  if (profiles.length === 0) {
+    profileEmpty.style.display = '';
+    return;
   }
+  profileEmpty.style.display = 'none';
+
+  profiles.forEach(p => {
+    const card = document.createElement('div');
+    card.className = 'profile-card' + (p.id === activeId ? ' active' : '');
+    card.dataset.id = p.id;
+    card.innerHTML = `
+      <div class="profile-radio">
+        <div class="profile-radio-dot"></div>
+      </div>
+      <div class="profile-info">
+        <div class="profile-name">${escHtml(p.name || p.server)}</div>
+        <div class="profile-server">${escHtml(p.server)}</div>
+      </div>
+      <span class="profile-transport-badge">${escHtml(p.transport || 'udp')}</span>
+      <div class="profile-actions">
+        <button class="profile-action-btn btn-share-profile" title="Share" data-id="${p.id}">
+          <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="18" cy="5" r="3"/><circle cx="6" cy="12" r="3"/><circle cx="18" cy="19" r="3"/><line x1="8.59" y1="13.51" x2="15.42" y2="17.49"/><line x1="15.41" y1="6.51" x2="8.59" y2="10.49"/></svg>
+        </button>
+        <button class="profile-action-btn btn-edit-profile" title="Edit" data-id="${p.id}">
+          <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M11 4H4a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2v-7"/><path d="M18.5 2.5a2.121 2.121 0 0 1 3 3L12 15l-4 1 1-4 9.5-9.5z"/></svg>
+        </button>
+      </div>
+    `;
+
+    // Select profile on card click (not on action buttons)
+    card.addEventListener('click', e => {
+      if (e.target.closest('.profile-action-btn')) return;
+      activeId = p.id;
+      saveActiveId(activeId);
+      renderProfiles();
+      // Auto-save into config
+      const cfg = buildConfig();
+      if (cfg) invoke('save_config', { jsonContent: JSON.stringify(cfg, null, 2) }).catch(() => {});
+    });
+
+    card.querySelector('.btn-edit-profile').addEventListener('click', e => {
+      e.stopPropagation();
+      openProfileEditor(p.id);
+    });
+    card.querySelector('.btn-share-profile').addEventListener('click', e => {
+      e.stopPropagation();
+      openShare(p.id);
+    });
+
+    profileList.appendChild(card);
+  });
 }
 
-// ── Config — save ─────────────────────────────────────────────────────────────
-let autoSaveTimer = null;
-function scheduleAutoSave() {
-  clearTimeout(autoSaveTimer);
-  autoSaveTimer = setTimeout(() => handleSave(true), 600);
+function escHtml(str) {
+  return String(str).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;');
 }
 
-async function handleSave(silent = false) {
-  if (!rawConfig) rawConfig = { mode: 'client', log_level: 'info' };
-
-  const server = inServer.value.trim();
-  const key    = inKey.value.trim();
-
-  if (!server) { if (!silent) showToast(t('err_server_req') || 'Server address required', 'error'); return; }
-  if (!key)    { if (!silent) showToast(t('err_key_req')    || 'Access key required',     'error'); return; }
-
-  rawConfig.mode       = 'client';
-  rawConfig.server     = server;
-  rawConfig.access_key = key;
-  rawConfig.socks5_bind = inSocks.value.trim() || null;
-  rawConfig.debug      = inDebug.checked;
-  if (inAutoconnect || inLaunchStartup) {
-    rawConfig.gui = rawConfig.gui || {};
-    if (inAutoconnect) rawConfig.gui.autoconnect = inAutoconnect.checked;
-    if (inLaunchStartup) rawConfig.gui.launch_startup = inLaunchStartup.checked;
-  }
-
-  if (inLaunchStartup) {
-    try { await invoke('set_autostart', { enable: inLaunchStartup.checked }); } catch (err) { console.error('autostart error', err); }
-  }
-
-
-
-  rawConfig.transport = rawConfig.transport || {};
-  rawConfig.transport.mode = inTransport.value;
-  rawConfig.transport.stealth_sni = inSni.value.trim() || undefined;
-
-  const mtuStr = inMtu.value.trim();
-  if (mtuStr) rawConfig.mtu = parseInt(mtuStr, 10);
-  else delete rawConfig.mtu;
-
-  if (inMux.checked) {
-    const s = parseInt(inMuxSessions.value.trim(), 10);
-    rawConfig.mux = { enabled: true, sessions: isNaN(s) ? 1 : s };
+// ── PROFILE EDITOR ────────────────────────────────────────────────────
+function openProfileEditor(id) {
+  editingProfileId = id || null;
+  if (id) {
+    const p = profiles.find(p => p.id === id);
+    if (!p) return;
+    profileModalTitle.textContent = 'Edit Profile';
+    pmName.value = p.name || '';
+    pmServer.value = p.server || '';
+    pmKey.value = p.key || '';
+    pmTransport.value = p.transport || 'udp';
+    btnProfileDelete.style.display = '';
   } else {
-    delete rawConfig.mux;
+    profileModalTitle.textContent = 'New Profile';
+    pmName.value = pmServer.value = pmKey.value = '';
+    pmTransport.value = 'udp';
+    btnProfileDelete.style.display = 'none';
   }
-
-  rawConfig.tun = rawConfig.tun || {};
-  rawConfig.tun.enable = inTun.checked;
-  rawConfig.tun.kill_switch = inKillSwitch ? inKillSwitch.checked : false;
-  rawConfig.tun.wintun_path = rawConfig.tun.wintun_path || './wintun.dll';
-  rawConfig.tun.ipv4_address = rawConfig.tun.ipv4_address || '10.1.0.2/24';
-  rawConfig.tun.stack = 'ostp';
-  rawConfig.tun.dns    = inDns.value.trim() || null;
-
-  rawConfig.exclude = {
-    domains:   [...tagState.domains],
-    ips:       [...tagState.ips],
-    processes: [...tagState.processes],
-  };
-
-  try {
-    const ok = await invoke('save_config', { jsonContent: JSON.stringify(rawConfig, null, 2) });
-    if (!ok && !silent) {
-      showToast(t('toast_error'), 'error');
-    } else if (ok && appState === 'connected') {
-      // Hot-reload exclusions into the running tunnel (no reconnect needed)
-      try { await invoke('reload_tunnel'); } catch { /* ignore */ }
-    }
-  } catch (err) {
-    if (!silent) showToast(String(err), 'error');
-  }
+  pmKey.type = 'password';
+  profileModal.classList.remove('hidden');
+  setTimeout(() => pmName.focus(), 80);
 }
 
-// ── Import share link ─────────────────────────────────────────────────────────
-function handleImport() {
-  const raw = importInput.value.trim();
-  if (!raw) return;
+function saveProfileFromEditor() {
+  const server = pmServer.value.trim();
+  const key    = pmKey.value.trim();
+  if (!server) { showToast('Server address required', 'error'); return; }
+  if (!key)    { showToast('Access key required', 'error'); return; }
+
+  if (editingProfileId) {
+    const idx = profiles.findIndex(p => p.id === editingProfileId);
+    if (idx >= 0) {
+      profiles[idx] = { ...profiles[idx],
+        name: pmName.value.trim() || server,
+        server,
+        key,
+        transport: pmTransport.value,
+      };
+    }
+  } else {
+    const p = {
+      id: genId(),
+      name: pmName.value.trim() || server,
+      server,
+      key,
+      transport: pmTransport.value,
+    };
+    profiles.push(p);
+    if (!activeId) { activeId = p.id; saveActiveId(activeId); }
+  }
+
+  saveProfiles(profiles);
+  profileModal.classList.add('hidden');
+  renderProfiles();
+  showToast('Profile saved', 'ok');
+
+  // Persist config if this is the active profile
+  const cfg = buildConfig();
+  if (cfg) invoke('save_config', { jsonContent: JSON.stringify(cfg, null, 2) }).catch(() => {});
+}
+
+function deleteEditingProfile() {
+  if (!editingProfileId) return;
+  profiles = profiles.filter(p => p.id !== editingProfileId);
+  if (activeId === editingProfileId) {
+    activeId = profiles[0]?.id || null;
+    saveActiveId(activeId);
+  }
+  saveProfiles(profiles);
+  profileModal.classList.add('hidden');
+  renderProfiles();
+  showToast('Profile deleted');
+}
+
+// ── PARSE ostp:// link ─────────────────────────────────────────────────
+function parseOstpLink(raw) {
+  raw = raw.trim();
+  if (!raw.startsWith('ostp://')) throw new Error('Must start with ostp://');
+  const url = new URL(raw);
+  const key  = decodeURIComponent(url.username);
+  // host includes port
+  const server = url.host;
+  if (!key || !server) throw new Error('Incomplete link');
+  const type = url.searchParams.get('type') || 'udp';
+  const transport = (type === 'tcp' || type === 'http' || type === 'uot') ? 'uot' : 'udp';
+  const name = url.searchParams.get('name') || server;
+  return { name, server, key, transport };
+}
+
+function importFromLink(raw) {
   try {
-    if (!raw.startsWith('ostp://')) throw new Error('Link must start with ostp://');
-    const url = new URL(raw);
-    const key  = decodeURIComponent(url.username);
-    const host = url.host;
-    if (!key || !host) throw new Error('Incomplete link parameters');
-    inServer.value = host;
-    inKey.value    = key;
-    inSni.value    = url.searchParams.get('sni') || '';
-    
-    const type = url.searchParams.get('type');
-    if (type === 'tcp' || type === 'http') inTransport.value = 'uot';
-    else inTransport.value = 'udp';
-    
-    importInput.value = '';
-    showToast(t('toast_imported'), 'ok');
-    handleSave(false);
+    const parsed = parseOstpLink(raw);
+    // Pre-fill editor
+    editingProfileId = null;
+    profileModalTitle.textContent = 'New Profile';
+    pmName.value = parsed.name;
+    pmServer.value = parsed.server;
+    pmKey.value = parsed.key;
+    pmTransport.value = parsed.transport;
+    btnProfileDelete.style.display = 'none';
+    profileModal.classList.remove('hidden');
+    showToast('Link imported — tap Save', 'ok');
   } catch (err) {
     showToast(err.message, 'error');
   }
 }
 
-// ── Share config (QR + ostp:// link) ──────────────────────────────────────────
-function buildShareLink() {
-  const host = inServer.value.trim();
-  const key  = inKey.value.trim();
-  if (!host || !key) return '';
+// ── SHARE ─────────────────────────────────────────────────────────────
+function buildShareLink(p) {
   const params = [];
-  const sni = inSni.value.trim();
-  if (sni) params.push(`sni=${encodeURIComponent(sni)}`);
-  if (inTransport.value && inTransport.value !== 'udp') params.push(`type=${inTransport.value}`);
-  const qs = params.length ? `?${params.join('&')}` : '';
-  return `ostp://${encodeURIComponent(key)}@${host}${qs}`;
+  if (p.transport && p.transport !== 'udp') params.push(`type=${p.transport}`);
+  if (p.name) params.push(`name=${encodeURIComponent(p.name)}`);
+  const qs = params.length ? '?' + params.join('&') : '';
+  return `ostp://${encodeURIComponent(p.key)}@${p.server}${qs}`;
 }
 
-async function handleShare() {
-  const link = buildShareLink();
-  if (!link) { showToast('Set server and key first', 'error'); return; }
+async function openShare(id) {
+  const p = profiles.find(p => p.id === id);
+  if (!p) return;
+  const link = buildShareLink(p);
   shareLink.value = link;
   shareQr.innerHTML = '';
   try {
     const svg = await invoke('generate_qr', { text: link });
     if (svg) shareQr.innerHTML = svg;
-  } catch (err) {
-    console.error('generate_qr failed', err);
-  }
+  } catch { /* QR optional */ }
   shareModal.classList.remove('hidden');
 }
 
-async function copyShareLink() {
-  try {
-    await navigator.clipboard.writeText(shareLink.value);
-    showToast('Link copied', 'ok');
-  } catch {
-    shareLink.select();
-    document.execCommand('copy');
-    showToast('Link copied', 'ok');
+// ── CLIENT SETTINGS ───────────────────────────────────────────────────
+function loadSettingsIntoForm() {
+  const s = loadClientSettings();
+  inTun.checked         = !!s.tun;
+  inKillSwitch.checked  = !!s.killSwitch;
+  inMux.checked         = !!s.mux;
+  inMuxSessions.value   = s.muxSessions || '2';
+  inMtu.value           = s.mtu || '';
+  inDns.value           = s.dns || '';
+  inSocks.value         = s.socks || '';
+  inExDomains.value     = s.exDomains || '';
+  inExIps.value         = s.exIps || '';
+  inExProcs.value       = s.exProcs || '';
+  inAutoconnect.checked = !!s.autoconnect;
+  inLaunchStartup.checked = !!s.launchStartup;
+  inDebug.checked       = !!s.debug;
+  updateClientVisibility();
+}
+
+function collectAndSaveSettings() {
+  const s = {
+    tun:          inTun.checked,
+    killSwitch:   inKillSwitch.checked,
+    mux:          inMux.checked,
+    muxSessions:  inMuxSessions.value.trim(),
+    mtu:          inMtu.value.trim(),
+    dns:          inDns.value.trim(),
+    socks:        inSocks.value.trim(),
+    exDomains:    inExDomains.value.trim(),
+    exIps:        inExIps.value.trim(),
+    exProcs:      inExProcs.value.trim(),
+    autoconnect:  inAutoconnect.checked,
+    launchStartup: inLaunchStartup.checked,
+    debug:        inDebug.checked,
+  };
+  saveClientSettings(s);
+  updateClientVisibility();
+
+  // Set autostart
+  invoke('set_autostart', { enable: s.launchStartup }).catch(() => {});
+
+  // Hot-reload exclusions if connected
+  if (appState === 'connected') {
+    const cfg = buildConfig();
+    if (cfg) {
+      invoke('save_config', { jsonContent: JSON.stringify(cfg, null, 2) })
+        .then(() => invoke('reload_tunnel'))
+        .catch(() => {});
+    }
   }
 }
 
-// ── Peek key ──────────────────────────────────────────────────────────────────
-let peeking = false;
-function togglePeek() {
-  peeking = !peeking;
-  inKey.type = peeking ? 'text' : 'password';
-  btnPeekKey.style.color = peeking
-    ? 'var(--c-accent)'
-    : 'var(--c-txt-3)';
+function updateClientVisibility() {
+  groupKillSwitch.style.display  = inTun.checked  ? 'flex' : 'none';
+  groupMuxSessions.style.display = inMux.checked  ? 'flex' : 'none';
 }
 
-// ── Init ──────────────────────────────────────────────────────────────────────
+// ── INIT ──────────────────────────────────────────────────────────────
 window.addEventListener('DOMContentLoaded', async () => {
-  applyTranslations();
-  setState('disconnected');
-  updateKillSwitchVisibility();
 
-  // Event wiring
-  if (window.__TAURI__ && window.__TAURI__.event) {
-    window.__TAURI__.event.listen('tunnel-error', (evt) => {
+  // Render profiles
+  renderProfiles();
+
+  // Restore tunnel state if already running
+  try {
+    const code = await invoke('get_tunnel_status');
+    if (code > 0) {
+      setState(code === 1 ? 'connecting' : 'connected');
+      startPolling();
+    }
+  } catch { /* not in Tauri */ }
+
+  // Wintun path
+  try {
+    const p = await invoke('get_wintun_install_path');
+    if (p && wintunPath) wintunPath.textContent = p;
+  } catch { /* ignore */ }
+
+  // Tauri events
+  if (window.__TAURI__?.event) {
+    const { listen } = window.__TAURI__.event;
+    listen('tunnel-error', evt => {
       setState('disconnected');
-      const errStr = String(evt.payload);
-      showToast(errStr, 'error');
-      alert(errStr);
+      showError(String(evt.payload));
     });
-  }
-
-  // Load wintun install path for modal instruction
-  if (wintunInstallPath) {
-    try {
-      const p = await invoke('get_wintun_install_path');
-      if (p) wintunInstallPath.textContent = p;
-    } catch { /* ignore */ }
+    listen('tray_connect', () => { if (appState === 'disconnected') handleToggle(); });
+    listen('tray_disconnect', () => { if (appState !== 'disconnected') handleToggle(); });
   }
 
   // Auto-connect on startup
   try {
-    const raw = await invoke('get_config');
-    rawConfig = JSON.parse(raw);
-    if (rawConfig?.gui?.autoconnect) {
-      setTimeout(() => {
-        if (appState === 'disconnected') handleToggle();
-      }, 800);
+    const s = loadClientSettings();
+    if (s.autoconnect && appState === 'disconnected') {
+      setTimeout(() => { if (appState === 'disconnected') handleToggle(); }, 800);
     }
-  } catch (err) {
-    console.error('Failed to load config on startup', err);
-  }
+  } catch { /* ignore */ }
 
-  btnConnect.addEventListener('click',       handleToggle);
-  
-  if (btnAutoConnect) {
-    btnAutoConnect.addEventListener('click', async () => {
-      if (appState !== 'disconnected') {
-        showToast('Disconnect first to run Auto mode', 'error');
-        return;
-      }
-      
-      try {
-        const raw = await invoke('get_config');
-        rawConfig = JSON.parse(raw);
-      } catch {
-        showToast('Please save your config first', 'error');
-        return;
-      }
+  // ── Event wiring ──────────────────────────────────────────────────
 
-      showToast('Starting Auto search...', 'ok');
-      try {
-        const mtus = [1500, 1350, 1280];
-        const modes = [
-          { t: 'udp' },
-          { t: 'uot' }
-        ];
+  btnConnect.addEventListener('click', handleToggle);
+  btnAutoConnect.addEventListener('click', handleAutoConnect);
+  btnGoSettings.addEventListener('click', () => showScreen('settings'));
+  btnBack.addEventListener('click', () => showScreen('home'));
 
-        for (let mode of modes) {
-          for (let mtu of mtus) {
-            showToast(`Testing: ${mode.t} | MTU: ${mtu}`);
-
-            rawConfig.ostp = rawConfig.ostp || {};
-            rawConfig.ostp.mtu = mtu;
-            rawConfig.transport = rawConfig.transport || {};
-            rawConfig.transport.mode = mode.t;
-
-
-
-            await invoke('save_config', { jsonContent: JSON.stringify(rawConfig, null, 2) });
-            
-            setState('connecting');
-            const ok = await invoke('start_tunnel');
-            if (ok) {
-              startPolling();
-              // Wait a bit to see if it stays connected and ping works
-              await new Promise(r => setTimeout(r, 3000));
-              try {
-                const metrics = await invoke('get_metrics');
-                if (metrics && metrics.rtt_ms > 0) {
-                  showToast(`Success! Found working config: ${mode.t} (MTU ${mtu})`, 'ok');
-                  return; // Stop on first working
-                }
-              } catch {}
-              
-              // If we are here, ping failed, so stop and try next
-              await invoke('stop_tunnel');
-              setState('disconnected');
-            }
-          }
-        }
-        showToast('Auto search finished. No working config found.', 'error');
-      } catch (err) {
-        showToast('Error during auto-connect: ' + String(err), 'error');
-      }
-    });
-  }
-
-  btnGoSettings.addEventListener('click',    () => showScreen('settings'));
-  btnBack.addEventListener('click',          () => showScreen('home'));
-  btnImport.addEventListener('click',        handleImport);
-  if (btnShare)      btnShare.addEventListener('click', handleShare);
-  if (btnShareClose) btnShareClose.addEventListener('click', () => shareModal.classList.add('hidden'));
-  if (btnShareCopy)  btnShareCopy.addEventListener('click', copyShareLink);
-  if (shareModal)    shareModal.addEventListener('click', e => { if (e.target === shareModal) shareModal.classList.add('hidden'); });
-  btnPeekKey.addEventListener('click',       togglePeek);
-
-  // Theme toggle
-  const btnThemeToggle = $('btn-theme-toggle');
-  if (btnThemeToggle) {
-    btnThemeToggle.addEventListener('click', toggleTheme);
-  }
-  scheduleAutoSave();
-  inTun.addEventListener('change', () => {
-    updateKillSwitchVisibility();
-    scheduleAutoSave();
+  // Add-profile button → dropdown
+  btnAddProfile.addEventListener('click', e => {
+    e.stopPropagation();
+    addMenu.classList.toggle('hidden');
   });
-  importInput.addEventListener('keydown', e => { if (e.key === 'Enter') handleImport(); });
-
-  // Auto-save wiring for standard form elements (excluding tag-inputs which wire themselves)
-  const formInputs = document.querySelectorAll('#settings-screen input:not(#in-import-url):not(.tag-input-field), #settings-screen select');
-  formInputs.forEach(el => {
-    el.addEventListener('input', scheduleAutoSave);
-    el.addEventListener('change', scheduleAutoSave);
+  document.addEventListener('click', e => {
+    if (!addMenu.classList.contains('hidden') && !addMenu.contains(e.target) && e.target !== btnAddProfile) {
+      addMenu.classList.add('hidden');
+    }
   });
 
-  // Wire tag inputs
-  wireTagInput('domains');
-  wireTagInput('ips');
-  wireTagInput('processes');
-
-  btnTestPing.addEventListener('click', runPingTest);
-
-  btnWintunCancel.addEventListener('click', () => {
-    wintunModal.classList.add('hidden');
+  addFromLink.addEventListener('click', () => {
+    addMenu.classList.add('hidden');
+    linkModal.classList.remove('hidden');
+    setTimeout(() => linkInput.focus(), 80);
+    linkInput.value = '';
   });
 
-  // Open wintun.net link — handled natively by <a target="_blank">, but also wire as fallback
-  if (btnWintunOpen && window.__TAURI__) {
-    btnWintunOpen.addEventListener('click', (e) => {
-      e.preventDefault();
-      const opener = window.__TAURI__?.opener || window.__TAURI__?.shell;
-      if (opener && opener.open) {
-        opener.open('https://www.wintun.net');
-      } else {
-        window.open('https://www.wintun.net', '_blank');
-      }
-    });
-  }
-
-  async function runPingTest() {
-    pingValueTxt.textContent = 'Testing...';
-    pingValueTxt.className = 'ping-test-value';
+  addFromClipboard.addEventListener('click', async () => {
+    addMenu.classList.add('hidden');
     try {
-      const metrics = await invoke('get_metrics');
-      if (metrics && metrics.rtt_ms > 0) {
-        const rtt = metrics.rtt_ms;
-        pingValueTxt.textContent = `Target Ping: ${rtt} ms`;
-        if (rtt < 80) pingValueTxt.classList.add('good');
-        else if (rtt < 200) pingValueTxt.classList.add('warn');
-        else pingValueTxt.classList.add('bad');
+      const text = await navigator.clipboard.readText();
+      if (text.startsWith('ostp://')) {
+        importFromLink(text);
       } else {
-        pingValueTxt.textContent = 'Target Ping: -- ms';
+        showToast('No ostp:// link in clipboard', 'error');
       }
     } catch {
-      pingValueTxt.textContent = 'Target Ping: Error';
+      showToast('Cannot read clipboard', 'error');
     }
-  }
+  });
 
-  // Restore status on app open
-  try {
-    const code = await invoke('get_tunnel_status');
-    if (code > 0) startPolling();
-  } catch { /* not in Tauri context */ }
+  addManually.addEventListener('click', () => {
+    addMenu.classList.add('hidden');
+    openProfileEditor(null);
+  });
 
-  if (window.__TAURI__?.event) {
-    const { listen } = window.__TAURI__.event;
-    listen('tray_connect', () => {
-      if (appState === 'disconnected') handleToggle();
-    });
-    listen('tray_disconnect', () => {
-      if (appState !== 'disconnected') handleToggle();
+  // Link modal
+  btnLinkCancel.addEventListener('click', () => linkModal.classList.add('hidden'));
+  btnLinkImport.addEventListener('click', () => {
+    importFromLink(linkInput.value);
+    linkModal.classList.add('hidden');
+  });
+  linkInput.addEventListener('keydown', e => { if (e.key === 'Enter') btnLinkImport.click(); });
+  linkModal.addEventListener('click', e => { if (e.target === linkModal) linkModal.classList.add('hidden'); });
+
+  // Profile editor modal
+  btnProfileCancel.addEventListener('click', () => profileModal.classList.add('hidden'));
+  btnProfileSave.addEventListener('click', saveProfileFromEditor);
+  btnProfileDelete.addEventListener('click', deleteEditingProfile);
+  btnPeekPm.addEventListener('click', () => {
+    pmKey.type = pmKey.type === 'password' ? 'text' : 'password';
+  });
+  profileModal.addEventListener('click', e => { if (e.target === profileModal) profileModal.classList.add('hidden'); });
+
+  // Share modal
+  btnShareClose.addEventListener('click', () => shareModal.classList.add('hidden'));
+  btnShareCopy.addEventListener('click', async () => {
+    try {
+      await navigator.clipboard.writeText(shareLink.value);
+      showToast('Link copied', 'ok');
+    } catch {
+      shareLink.select();
+      document.execCommand('copy');
+      showToast('Link copied', 'ok');
+    }
+  });
+  shareModal.addEventListener('click', e => { if (e.target === shareModal) shareModal.classList.add('hidden'); });
+
+  // Wintun modal
+  btnWintunCancel.addEventListener('click', () => wintunModal.classList.add('hidden'));
+  if (btnWintunOpen && window.__TAURI__) {
+    btnWintunOpen.addEventListener('click', e => {
+      e.preventDefault();
+      const opener = window.__TAURI__?.opener || window.__TAURI__?.shell;
+      if (opener?.open) opener.open('https://www.wintun.net');
+      else window.open('https://www.wintun.net', '_blank');
     });
   }
+  wintunModal.addEventListener('click', e => { if (e.target === wintunModal) wintunModal.classList.add('hidden'); });
+
+  // Client settings — wire all inputs
+  [inTun, inKillSwitch, inMux, inAutoconnect, inLaunchStartup, inDebug]
+    .forEach(el => el.addEventListener('change', collectAndSaveSettings));
+  [inMuxSessions, inMtu, inDns, inSocks, inExDomains, inExIps, inExProcs]
+    .forEach(el => {
+      el.addEventListener('input', () => {
+        clearTimeout(el._saveTimer);
+        el._saveTimer = setTimeout(collectAndSaveSettings, 400);
+      });
+    });
+
+  // ── Global Keyboard Shortcuts (TUI emulation) ─────────────────────
+  window.addEventListener('keydown', async e => {
+    // Ignore if typing in an input or textarea
+    if (e.target.tagName === 'INPUT' || e.target.tagName === 'TEXTAREA' || e.target.tagName === 'SELECT') return;
+
+    if (e.code === 'Space') {
+      e.preventDefault();
+      handleToggle();
+    } else if (e.code === 'Tab') {
+      e.preventDefault();
+      if (profiles.length > 0) {
+        let idx = profiles.findIndex(p => p.id === activeId);
+        idx = (idx + 1) % profiles.length;
+        activeId = profiles[idx].id;
+        saveActiveId(activeId);
+        renderProfiles();
+        const cfg = buildConfig();
+        if (cfg) invoke('save_config', { jsonContent: JSON.stringify(cfg, null, 2) }).catch(() => {});
+        showToast('Profile: ' + profiles[idx].name);
+      }
+    } else if (e.key === 'b' || e.key === 'B') {
+      // Hide to tray (background)
+      try { invoke('hide_window'); } catch { window.close(); }
+    } else if (e.key === 'q' || e.key === 'Q' || e.key === 'Escape') {
+      // Quit
+      if (e.key === 'Escape') {
+        // if modals are open, don't quit
+        if (!linkModal.classList.contains('hidden') || 
+            !profileModal.classList.contains('hidden') || 
+            !shareModal.classList.contains('hidden') || 
+            !wintunModal.classList.contains('hidden') ||
+            !addMenu.classList.contains('hidden')) {
+          return;
+        }
+      }
+      try { invoke('close_window'); } catch { window.close(); }
+    }
+  });
 });
+

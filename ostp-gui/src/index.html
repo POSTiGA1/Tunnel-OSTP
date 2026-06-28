@@ -6,52 +6,33 @@
   <title>OSTP</title>
   <link rel="preconnect" href="https://fonts.googleapis.com" />
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
-  <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&family=JetBrains+Mono:wght@400;500&display=swap" />
+  <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700;800&family=JetBrains+Mono:wght@400;500;600&display=swap" />
   <link rel="stylesheet" href="styles.css" />
 </head>
 <body>
   <div class="app-root">
 
-    <!-- Ambient light blobs -->
-    <div class="ambient" aria-hidden="true">
-      <div class="blob blob-1"></div>
-      <div class="blob blob-2"></div>
-    </div>
-
-    <!-- Eagle watermark (brand) -->
+    <!-- Eagle watermark — behind everything, every screen -->
     <div class="watermark" aria-hidden="true">
       <img src="assets/logo.svg" alt="" />
     </div>
 
-    <!-- ── HOME SCREEN ──────────────────────────────────────────── -->
+    <!-- ── HOME SCREEN ──────────────────────────────────────── -->
     <div id="home-screen" class="screen active">
 
-      <!-- Top bar -->
       <header class="topbar">
         <div class="brand">
           <div class="brand-dot" id="brand-dot"></div>
           <span class="brand-name">OSTP</span>
         </div>
         <div class="topbar-right">
-          <button id="btn-auto-connect" class="icon-btn" aria-label="Auto">
-            <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
-              <path d="M12 2v4M12 18v4M4.93 4.93l2.83 2.83M16.24 16.24l2.83 2.83M2 12h4M18 12h4M4.93 19.07l2.83-2.83M16.24 7.76l2.83-2.83"/>
-            </svg>
-          </button>
-          <button id="btn-theme-toggle" class="theme-toggle-btn" aria-label="Toggle theme">
-            <!-- Sun icon (shown in dark mode) -->
-            <svg class="icon-sun" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
-              <circle cx="12" cy="12" r="5"/>
-              <path d="M12 1v2M12 21v2M4.22 4.22l1.42 1.42M18.36 18.36l1.42 1.42M1 12h2M21 12h2M4.22 19.78l1.42-1.42M18.36 5.64l1.42-1.42"/>
-            </svg>
-            <!-- Moon icon (shown in light mode) -->
-            <svg class="icon-moon" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
-              <path d="M21 12.79A9 9 0 1 1 11.21 3 7 7 0 0 0 21 12.79z"/>
+          <button id="btn-auto-connect" class="icon-btn" aria-label="Auto" title="Auto-connect">
+            <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round">
+              <polygon points="13 2 3 14 12 14 11 22 21 10 12 10 13 2"/>
             </svg>
           </button>
           <button id="btn-go-settings" class="icon-btn" aria-label="Settings">
-            <!-- Gear icon -->
-            <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+            <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round">
               <circle cx="12" cy="12" r="3"/>
               <path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 1 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 1 1-2.83-2.83l.06-.06A1.65 1.65 0 0 0 4.68 15a1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 1 1 2.83-2.83l.06.06A1.65 1.65 0 0 0 9 4.68a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 1 1 2.83 2.83l-.06.06A1.65 1.65 0 0 0 19.4 9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z"/>
             </svg>
@@ -62,15 +43,16 @@
       <!-- Center stage -->
       <main class="stage">
 
-        <!-- Orbit rings -->
+        <!-- Orbit rings (animated when connecting/connected) -->
         <div class="orbit-wrap" id="orbit-wrap">
           <div class="orbit orbit-1"></div>
           <div class="orbit orbit-2"></div>
+          <div class="orbit orbit-3"></div>
 
           <!-- Power button -->
-          <button id="btn-connect" class="power-btn" aria-label="Connect">
+          <button id="btn-connect" class="power-btn" aria-label="Connect / Disconnect">
             <div class="power-icon">
-              <svg width="44" height="44" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round">
+              <svg width="46" height="46" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round">
                 <path d="M18.36 6.64a9 9 0 1 1-12.73 0"/>
                 <line x1="12" y1="2" x2="12" y2="12"/>
               </svg>
@@ -78,16 +60,19 @@
           </button>
         </div>
 
-        <!-- Status block -->
+        <!-- Status text -->
         <div class="status-block">
-          <div id="status-text" class="status-label" data-i18n="status_disconnected">Disconnected</div>
-          <div id="uptime-text" class="status-sub" data-i18n="hint_tap">Tap to protect your traffic</div>
+          <div id="status-text" class="status-label">Disconnected</div>
+          <div id="uptime-text" class="status-sub">Tap to protect your traffic</div>
         </div>
 
-        <!-- Connection info (shown when connected) -->
+        <!-- Error banner -->
+        <div id="error-banner" class="error-banner hidden"></div>
+
+        <!-- Connection info (visible when connected) -->
         <div id="connection-info" class="connection-info hidden">
           <div class="server-badge">
-            <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+            <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
               <rect x="2" y="2" width="20" height="8" rx="2"/>
               <rect x="2" y="14" width="20" height="8" rx="2"/>
               <line x1="6" y1="6" x2="6.01" y2="6"/>
@@ -96,53 +81,56 @@
             <span id="server-badge-text">—</span>
           </div>
 
-          <div class="ping-test-box">
-            <div class="ping-test-left">
-              <span class="ping-test-title">CONNECTION TEST</span>
-              <span id="ping-text-value" class="ping-test-value">Target Ping: -- ms</span>
+          <!-- Live RTT + speeds -->
+          <div class="live-stats">
+            <div class="live-stat">
+              <span class="live-stat-label">RTT</span>
+              <span id="live-rtt" class="live-stat-value">--</span>
             </div>
-            <button id="btn-test-ping" class="ping-btn">
-              <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round">
-                <path d="M22 12h-4l-3 9L9 3l-3 9H2"/>
-              </svg>
-              <span>Test Ping</span>
-            </button>
+            <div class="live-stat-sep"></div>
+            <div class="live-stat">
+              <span class="live-stat-label">↓</span>
+              <span id="live-down-speed" class="live-stat-value">0 B/s</span>
+            </div>
+            <div class="live-stat-sep"></div>
+            <div class="live-stat">
+              <span class="live-stat-label">↑</span>
+              <span id="live-up-speed" class="live-stat-value">0 B/s</span>
+            </div>
           </div>
         </div>
 
       </main>
 
-      <!-- Traffic metrics bar -->
+      <!-- Total traffic bar -->
       <footer class="metrics-bar">
         <div class="metric">
           <div class="metric-icon down-icon">
-            <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round">
+            <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round">
               <path d="M12 5v14M19 12l-7 7-7-7"/>
             </svg>
           </div>
           <div class="metric-body">
-            <span class="metric-label" data-i18n="download">Download</span>
+            <span class="metric-label">Download</span>
             <span id="metric-down" class="metric-value">0 B</span>
           </div>
         </div>
-
         <div class="metric-sep"></div>
-
         <div class="metric">
           <div class="metric-icon up-icon">
-            <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round">
+            <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round">
               <path d="M12 19V5M5 12l7-7 7 7"/>
             </svg>
           </div>
           <div class="metric-body">
-            <span class="metric-label" data-i18n="upload">Upload</span>
+            <span class="metric-label">Upload</span>
             <span id="metric-up" class="metric-value">0 B</span>
           </div>
         </div>
       </footer>
     </div>
 
-    <!-- ── SETTINGS SCREEN ──────────────────────────────────────── -->
+    <!-- ── SETTINGS SCREEN ──────────────────────────────────── -->
     <div id="settings-screen" class="screen">
 
       <header class="topbar">
@@ -151,235 +139,245 @@
             <path d="M19 12H5M12 19l-7-7 7-7"/>
           </svg>
         </button>
-        <span class="topbar-title" data-i18n="settings_title">Configuration</span>
-        <div style="width:36px"></div>
+        <span class="topbar-title">Profiles</span>
+        <button id="btn-add-profile" class="icon-btn add-btn" aria-label="Add profile">
+          <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round">
+            <line x1="12" y1="5" x2="12" y2="19"/>
+            <line x1="5" y1="12" x2="19" y2="12"/>
+          </svg>
+        </button>
       </header>
 
       <div class="settings-body">
 
-        <!-- Quick import -->
-        <div class="import-row">
-          <input id="in-import-url"
-                 class="import-input"
-                 type="text"
-                 data-i18n-placeholder="import_placeholder"
-                 placeholder="Paste ostp:// share link..." />
-          <button id="btn-import-url" class="accent-btn" data-i18n="import_btn">Import</button>
-          <button id="btn-share-url" class="btn secondary" data-i18n="share_btn" title="Share this config as a QR code / ostp:// link">Share</button>
+        <!-- Profile list -->
+        <div id="profile-list" class="profile-list">
+          <div id="profile-empty" class="profile-empty">
+            <svg width="36" height="36" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.3" stroke-linecap="round" stroke-linejoin="round">
+              <circle cx="12" cy="12" r="10"/>
+              <line x1="12" y1="8" x2="12" y2="16"/>
+              <line x1="8" y1="12" x2="16" y2="12"/>
+            </svg>
+            <p>No profiles yet.<br/>Tap <strong>+</strong> to add one.</p>
+          </div>
         </div>
 
-        <!-- Form card -->
-        <div class="card scrollable">
+        <!-- Client settings -->
+        <div class="section-divider"><span>Client Settings</span></div>
 
-          <div class="field-group">
-            <label class="field-label" for="in-server" data-i18n="label_server">Server Address</label>
-            <input id="in-server" class="field-input" type="text" placeholder="host:port" spellcheck="false" />
-          </div>
+        <div class="client-settings-card">
 
-          <div class="field-group">
-            <label class="field-label" for="in-key" data-i18n="label_key">Access Key</label>
-            <div class="input-wrap">
-              <input id="in-key" class="field-input has-icon" type="password" data-i18n-placeholder="ph_key" placeholder="Secure access key" spellcheck="false" />
-              <button class="peek-btn" id="btn-peek-key" tabindex="-1" aria-label="Show key">
-                <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
-                  <path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z"/>
-                  <circle cx="12" cy="12" r="3"/>
-                </svg>
-              </button>
-            </div>
-          </div>
-
-          <div class="field-group">
-            <label class="field-label" for="in-socks" data-i18n="label_socks">Local Proxy</label>
-            <input id="in-socks" class="field-input" type="text" placeholder="127.0.0.1:1088" />
-          </div>
-
-          <div class="field-group">
-            <label class="field-label" for="in-dns" data-i18n="label_dns">Custom DNS Server</label>
-            <input id="in-dns" class="field-input" type="text" placeholder="1.1.1.1" />
-          </div>
-
-          <div class="field-group">
-            <label class="field-label" for="in-transport" data-i18n="label_transport">Transport Protocol</label>
-            <select id="in-transport" class="field-input">
-              <option value="udp">UDP (Default)</option>
-              <option value="uot">TCP (UoT)</option>
-            </select>
-          </div>
-
-          <div class="field-group">
-            <label class="field-label" for="in-stealth-sni" data-i18n="label_sni">Stealth SNI</label>
-            <input id="in-stealth-sni" class="field-input" type="text" placeholder="www.microsoft.com" spellcheck="false" />
-          </div>
-
-          <div class="field-group">
-            <label class="field-label" for="in-mtu" data-i18n="label_mtu">MTU Size</label>
-            <input id="in-mtu" class="field-input" type="number" placeholder="1350" />
-          </div>
-
-          <div class="field-group">
-            <label class="field-label" for="in-mux-sessions" data-i18n="label_mux_sessions">Mux Sessions</label>
-            <input id="in-mux-sessions" class="field-input" type="number" placeholder="1" />
-          </div>
-
-          <!-- Toggles -->
           <div class="toggle-row">
             <div class="toggle-text">
-              <span class="toggle-name" data-i18n="label_tun">TUN Mode</span>
-              <span class="toggle-hint" data-i18n="tun_hint">Route all system traffic</span>
+              <span class="toggle-name">TUN Mode</span>
+              <span class="toggle-hint">Route all system traffic</span>
             </div>
             <label class="toggle">
               <input type="checkbox" id="in-tun-mode" />
-              <span class="toggle-track">
-                <span class="toggle-thumb"></span>
-              </span>
+              <span class="toggle-track"><span class="toggle-thumb"></span></span>
             </label>
           </div>
 
-          <div class="toggle-row" id="group-kill-switch" style="display: none;">
+          <div class="toggle-row sub-row" id="group-kill-switch" style="display:none;">
             <div class="toggle-text">
-              <span class="toggle-name" data-i18n="label_kill_switch">Kill Switch</span>
-              <span class="toggle-hint" data-i18n="kill_switch_hint">Block traffic if connection drops</span>
+              <span class="toggle-name">Kill Switch</span>
+              <span class="toggle-hint">Block traffic if VPN drops</span>
             </div>
             <label class="toggle">
               <input type="checkbox" id="in-kill-switch" />
-              <span class="toggle-track">
-                <span class="toggle-thumb"></span>
-              </span>
+              <span class="toggle-track"><span class="toggle-thumb"></span></span>
             </label>
           </div>
 
-
           <div class="toggle-row">
             <div class="toggle-text">
-              <span class="toggle-name" data-i18n="label_mux">Multiplexing (Mux)</span>
-              <span class="toggle-hint" data-i18n="mux_hint">Run multiple streams over one connection</span>
+              <span class="toggle-name">Multiplexing</span>
+              <span class="toggle-hint">Multiple streams over one connection</span>
             </div>
             <label class="toggle">
               <input type="checkbox" id="in-mux-mode" />
-              <span class="toggle-track">
-                <span class="toggle-thumb"></span>
-              </span>
+              <span class="toggle-track"><span class="toggle-thumb"></span></span>
             </label>
           </div>
 
-          <div class="toggle-row">
-            <div class="toggle-text">
-              <span class="toggle-name" data-i18n="label_launch_startup">Launch at Startup</span>
-              <span class="toggle-hint" data-i18n="launch_startup_hint">Start with Windows</span>
-            </div>
-            <label class="toggle">
-              <input type="checkbox" id="in-launch-startup" />
-              <span class="toggle-track">
-                <span class="toggle-thumb"></span>
-              </span>
-            </label>
+          <div class="inline-field sub-row" id="group-mux-sessions" style="display:none;">
+            <span class="field-label">Sessions</span>
+            <input id="in-mux-sessions" class="field-input compact" type="number" placeholder="2" min="1" max="8" />
           </div>
 
-          <div class="toggle-row">
+          <div class="inline-field">
+            <span class="field-label">MTU</span>
+            <input id="in-mtu" class="field-input compact" type="number" placeholder="1350" />
+          </div>
+
+          <div class="inline-field">
+            <span class="field-label">DNS</span>
+            <input id="in-dns" class="field-input compact" type="text" placeholder="1.1.1.1" />
+          </div>
+
+          <div class="inline-field">
+            <span class="field-label">Local Proxy</span>
+            <input id="in-socks" class="field-input compact" type="text" placeholder="127.0.0.1:1088" />
+          </div>
+
+          <div class="section-divider-mini"><span>Exceptions / Routing</span></div>
+
+          <div class="field-group" style="padding: 10px 14px; margin-bottom: 0;">
+            <label class="field-label" for="in-ex-domains">Excluded Domains</label>
+            <textarea id="in-ex-domains" class="field-input mono" placeholder="google.com, mycompany.internal" rows="2" spellcheck="false"></textarea>
+          </div>
+
+          <div class="field-group" style="padding: 0 14px 10px; margin-bottom: 0;">
+            <label class="field-label" for="in-ex-ips">Excluded IPs / Subnets</label>
+            <textarea id="in-ex-ips" class="field-input mono" placeholder="192.168.1.0/24, 10.0.0.1" rows="2" spellcheck="false"></textarea>
+          </div>
+
+          <div class="field-group" style="padding: 0 14px 10px; margin-bottom: 0; border-bottom: 1px solid rgba(255,255,255,0.04);">
+            <label class="field-label" for="in-ex-procs">Excluded Processes</label>
+            <textarea id="in-ex-procs" class="field-input mono" placeholder="chrome.exe, spotify.exe" rows="2" spellcheck="false"></textarea>
+          </div>
+
+          <div class="section-divider-mini"><span>Application</span></div>
+
+          <div class="toggle-row" style="border-top:none;">
             <div class="toggle-text">
-              <span class="toggle-name" data-i18n="label_autoconnect">Auto-connect</span>
-              <span class="toggle-hint" data-i18n="autoconnect_hint">Connect automatically on startup</span>
+              <span class="toggle-name">Auto-connect</span>
+              <span class="toggle-hint">Connect on startup</span>
             </div>
             <label class="toggle">
               <input type="checkbox" id="in-autoconnect" />
-              <span class="toggle-track">
-                <span class="toggle-thumb"></span>
-              </span>
+              <span class="toggle-track"><span class="toggle-thumb"></span></span>
             </label>
           </div>
 
-
-          <div class="toggle-row">
+          <div class="toggle-row" style="border-top:none;">
             <div class="toggle-text">
-              <span class="toggle-name" data-i18n="label_debug">Debug Logs</span>
-              <span class="toggle-hint" data-i18n="debug_hint">Verbose output</span>
+              <span class="toggle-name">Launch at Startup</span>
+              <span class="toggle-hint">Start with Windows</span>
+            </div>
+            <label class="toggle">
+              <input type="checkbox" id="in-launch-startup" />
+              <span class="toggle-track"><span class="toggle-thumb"></span></span>
+            </label>
+          </div>
+
+          <div class="toggle-row" style="border-top:none;">
+            <div class="toggle-text">
+              <span class="toggle-name">Debug Logs</span>
+              <span class="toggle-hint">Verbose output to .log file</span>
             </div>
             <label class="toggle">
               <input type="checkbox" id="in-debug" />
-              <span class="toggle-track">
-                <span class="toggle-thumb"></span>
-              </span>
+              <span class="toggle-track"><span class="toggle-thumb"></span></span>
             </label>
           </div>
 
-
-          <!-- Split Tunneling / Exclusions -->
-          <div class="section-head">
-            <span data-i18n="excl_title">Exclusions</span>
-            <span class="section-hint" data-i18n="excl_hint">traffic that bypasses the tunnel</span>
-          </div>
-
-          <div class="field-group">
-            <label class="field-label" for="tag-input-domains" data-i18n="excl_domains">Bypass Domains</label>
-            <div class="tag-input-wrap" id="tag-wrap-domains">
-              <div class="tag-list" id="tag-list-domains"></div>
-              <input id="tag-input-domains" class="tag-input-field" type="text"
-                     placeholder="example.com" spellcheck="false" autocomplete="off" />
-            </div>
-            <span class="field-hint">Enter domain suffix and press Enter. Example: google.com, *.local</span>
-          </div>
-
-          <div class="field-group">
-            <label class="field-label" for="tag-input-ips" data-i18n="excl_ips">Bypass IPs / CIDR</label>
-            <div class="tag-input-wrap" id="tag-wrap-ips">
-              <div class="tag-list" id="tag-list-ips"></div>
-              <input id="tag-input-ips" class="tag-input-field" type="text"
-                     placeholder="192.168.1.0/24" spellcheck="false" autocomplete="off" />
-            </div>
-            <span class="field-hint">Local network ranges bypass the tunnel automatically</span>
-          </div>
-
-          <div class="field-group">
-            <label class="field-label" for="tag-input-processes" data-i18n="excl_processes">Bypass Processes</label>
-            <div class="tag-input-wrap" id="tag-wrap-processes">
-              <div class="tag-list" id="tag-list-processes"></div>
-              <input id="tag-input-processes" class="tag-input-field" type="text"
-                     placeholder="chrome.exe" spellcheck="false" autocomplete="off" />
-            </div>
-            <span class="field-hint" id="proc-hint">Type process name and press Enter.</span>
-          </div>
         </div>
-
-
-
       </div>
     </div>
 
-    <!-- Toast -->
-    <div id="toast" class="toast" role="status" aria-live="polite"></div>
+    <!-- ── ADD PROFILE DROPDOWN ─────────────────────────────── -->
+    <div id="add-menu" class="add-menu hidden">
+      <button id="add-from-link" class="add-menu-item">
+        <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M10 13a5 5 0 0 0 7.54.54l3-3a5 5 0 0 0-7.07-7.07l-1.72 1.71"/><path d="M14 11a5 5 0 0 0-7.54-.54l-3 3a5 5 0 0 0 7.07 7.07l1.71-1.71"/></svg>
+        From link
+      </button>
+      <button id="add-from-clipboard" class="add-menu-item">
+        <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="9" y="9" width="13" height="13" rx="2"/><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"/></svg>
+        From clipboard
+      </button>
+      <button id="add-manually" class="add-menu-item">
+        <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M11 4H4a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2v-7"/><path d="M18.5 2.5a2.121 2.121 0 0 1 3 3L12 15l-4 1 1-4 9.5-9.5z"/></svg>
+        Manually
+      </button>
+    </div>
 
-    <!-- Wintun Modal -->
-    <div id="wintun-modal" class="modal-overlay hidden">
-      <div class="modal-content">
-        <h3 class="modal-title" data-i18n="wintun_missing_title">Wintun Driver Missing</h3>
-        <p class="modal-text" data-i18n="wintun_missing_desc">TUN mode requires the Wintun network driver.</p>
-        <ol class="modal-steps">
-          <li data-i18n="wintun_step1">Download <strong>wintun.zip</strong> from the official site</li>
-          <li data-i18n="wintun_step2">Extract <code>amd64\wintun.dll</code> from the archive</li>
-          <li><span data-i18n="wintun_step3">Place it here:</span> <code id="wintun-install-path">...</code></li>
-          <li data-i18n="wintun_step4">Restart the connection</li>
-        </ol>
+    <!-- ── LINK INPUT MODAL ─────────────────────────────────── -->
+    <div id="link-modal" class="modal-overlay hidden">
+      <div class="modal-content compact">
+        <h3 class="modal-title">Paste link</h3>
+        <div class="field-group">
+          <input id="link-input" class="field-input mono" type="text" placeholder="ostp://key@host:port" spellcheck="false" />
+        </div>
         <div class="modal-actions">
-          <button id="btn-wintun-cancel" class="btn secondary" data-i18n="cancel_btn">Cancel</button>
-          <a id="btn-wintun-open" href="https://www.wintun.net" target="_blank" class="btn primary" data-i18n="wintun_open_btn">Open wintun.net ↗</a>
+          <button id="btn-link-cancel" class="btn secondary">Cancel</button>
+          <button id="btn-link-import" class="btn primary">Import</button>
         </div>
       </div>
     </div>
 
-    <!-- Share Modal -->
+    <!-- ── PROFILE EDITOR MODAL ─────────────────────────────── -->
+    <div id="profile-modal" class="modal-overlay hidden">
+      <div class="modal-content">
+        <h3 class="modal-title" id="profile-modal-title">New Profile</h3>
+
+        <div class="field-group">
+          <label class="field-label" for="pm-name">Name</label>
+          <input id="pm-name" class="field-input" type="text" placeholder="My Server" />
+        </div>
+        <div class="field-group">
+          <label class="field-label" for="pm-server">Server</label>
+          <input id="pm-server" class="field-input mono" type="text" placeholder="host:port" spellcheck="false" />
+        </div>
+        <div class="field-group">
+          <label class="field-label" for="pm-key">Access Key</label>
+          <div class="input-wrap">
+            <input id="pm-key" class="field-input mono has-icon" type="password" placeholder="Secure access key" spellcheck="false" />
+            <button class="peek-btn" id="btn-peek-pm" tabindex="-1" aria-label="Show key">
+              <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z"/><circle cx="12" cy="12" r="3"/></svg>
+            </button>
+          </div>
+        </div>
+        <div class="field-group">
+          <label class="field-label" for="pm-transport">Transport</label>
+          <select id="pm-transport" class="field-input">
+            <option value="udp">UDP (Default)</option>
+            <option value="uot">TCP (UoT)</option>
+          </select>
+        </div>
+
+        <div class="modal-actions">
+          <button id="btn-profile-cancel" class="btn secondary">Cancel</button>
+          <button id="btn-profile-delete" class="btn danger" style="display:none;">Delete</button>
+          <button id="btn-profile-save" class="btn primary">Save</button>
+        </div>
+      </div>
+    </div>
+
+    <!-- ── SHARE MODAL ──────────────────────────────────────── -->
     <div id="share-modal" class="modal-overlay hidden">
       <div class="modal-content">
-        <h3 class="modal-title" data-i18n="share_title">Share configuration</h3>
-        <p class="modal-text" data-i18n="share_desc">Scan the QR or copy the link. The QR is generated locally — the access key never leaves this device.</p>
+        <h3 class="modal-title">Share Profile</h3>
+        <p class="modal-text">QR generated locally — the key never leaves this device.</p>
         <div id="share-qr" class="share-qr"></div>
-        <input id="share-link" class="field-input" type="text" readonly />
+        <input id="share-link" class="field-input mono" type="text" readonly />
         <div class="modal-actions">
-          <button id="btn-share-close" class="btn secondary" data-i18n="close_btn">Close</button>
-          <button id="btn-share-copy" class="btn primary" data-i18n="copy_btn">Copy link</button>
+          <button id="btn-share-close" class="btn secondary">Close</button>
+          <button id="btn-share-copy" class="btn primary">Copy link</button>
         </div>
       </div>
     </div>
+
+    <!-- ── WINTUN MODAL ─────────────────────────────────────── -->
+    <div id="wintun-modal" class="modal-overlay hidden">
+      <div class="modal-content">
+        <h3 class="modal-title">Wintun Driver Missing</h3>
+        <p class="modal-text">TUN mode requires the Wintun network driver.</p>
+        <ol class="modal-steps">
+          <li>Download <strong>wintun.zip</strong> from wintun.net</li>
+          <li>Extract <code>amd64\wintun.dll</code></li>
+          <li>Place it here: <code id="wintun-install-path">...</code></li>
+          <li>Restart the connection</li>
+        </ol>
+        <div class="modal-actions">
+          <button id="btn-wintun-cancel" class="btn secondary">Cancel</button>
+          <a id="btn-wintun-open" href="https://www.wintun.net" target="_blank" class="btn primary">Open wintun.net ↗</a>
+        </div>
+      </div>
+    </div>
+
+    <!-- Toast notification -->
+    <div id="toast" class="toast" role="status" aria-live="polite"></div>
 
   </div>
   <script type="module" src="main.js"></script>

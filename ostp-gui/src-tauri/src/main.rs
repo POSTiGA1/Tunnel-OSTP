@@ -2,6 +2,7 @@
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
 fn main() {
+    let _ = rlimit::increase_nofile_limit(1048576);
     ostp_client::logging::setup_panic_hook();
 
     // Read config BEFORE init_tracing so we can use the correct log level from config.

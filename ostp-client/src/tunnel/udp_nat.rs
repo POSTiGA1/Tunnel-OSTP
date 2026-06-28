@@ -113,7 +113,7 @@ pub async fn run_udp_nat(
 async fn start_udp_bypass_session(
     client_src: SocketAddr,
     phys_if_index: Option<u32>,
-    phys_if_name: Option<String>,
+    _phys_if_name: Option<String>,
     session_rx: &mut mpsc::Receiver<(Vec<u8>, SocketAddr)>,
     smoltcp_tx: Arc<Mutex<netstack_smoltcp::udp::WriteHalf>>,
 ) -> anyhow::Result<()> {

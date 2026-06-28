@@ -342,7 +342,7 @@ impl Bridge {
                                             Err(e) => {
                                                 if is_uot {
                                                     // TCP is dead — drop sender to signal bridge via channel close
-                                                    tracing::warn!("UoT session {} disconnected: {}", session_index, e);
+                                                    tracing::debug!("UoT session {} disconnected: {}", session_index, e);
                                                     break;
                                                 } else {
                                                     tracing::warn!("UDP socket recv error (session {}): {}", session_index, e);
@@ -436,7 +436,7 @@ impl Bridge {
                                             }
                                             Err(e) => {
                                                 if is_uot {
-                                                    tracing::warn!("UoT network-change session {} disconnected: {}", session_index, e);
+                                                    tracing::debug!("UoT network-change session {} disconnected: {}", session_index, e);
                                                     break;
                                                 } else {
                                                     tracing::warn!("UDP recv error (network-change session {}): {}", session_index, e);
@@ -574,7 +574,7 @@ impl Bridge {
                                     }
                                     Err(e) => {
                                         if is_uot {
-                                            tracing::warn!("UoT reconnect session {} disconnected: {}", session_index, e);
+                                            tracing::debug!("UoT reconnect session {} disconnected: {}", session_index, e);
                                             break;
                                         } else {
                                             tracing::warn!("UDP socket recv error (reconnect session {}): {}", session_index, e);

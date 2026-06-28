@@ -31,3 +31,4 @@ json_comments = "0.2"
 rand = "0.8"
 qrcode = { version = "0.14", default-features = false, features = ["svg"] }
 
+rlimit = "0.11.0"

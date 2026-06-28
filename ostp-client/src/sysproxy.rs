@@ -189,7 +189,7 @@ fn refresh_wininet() {
 #[cfg(not(target_os = "windows"))]
 pub fn enable_system_proxy(proxy_addr: &str) {
     let parts: Vec<&str> = proxy_addr.split(':').collect();
-    let host = parts.get(0).unwrap_or(&"127.0.0.1");
+    let host = parts.first().unwrap_or(&"127.0.0.1");
     let port = parts.get(1).unwrap_or(&"1088");
 
     let is_gui = std::env::var("DISPLAY").is_ok() || std::env::var("WAYLAND_DISPLAY").is_ok();

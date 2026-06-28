@@ -789,8 +789,13 @@ pub fn run() {
     if let Ok(listener) = std::net::TcpListener::bind("127.0.0.1:49153") {
         let _ = SINGLE_INSTANCE_LOCK.set(listener);
     } else {
-        show_error_dialog("Приложение OSTP GUI уже запущено!");
-        return;
+        #[cfg(not(debug_assertions))]
+        {
+            show_error_dialog("Приложение OSTP GUI уже запущено!");
+            return;
+        }
+        #[cfg(debug_assertions)]
+        println!("WARNING: OSTP GUI is already running, ignoring in debug mode.");
     }
 
     let state = AppState(Mutex::new(AppStateInner { tunnel: None }));
