@@ -30,6 +30,7 @@ enum Commands {
         mode: String,
     },
     /// Generate a new secure access key
+    #[command(name = "gk", alias = "generate-key")]
     GenerateKey {
         /// Format for generated key (hex, base64)
         #[arg(long, default_value = "hex")]

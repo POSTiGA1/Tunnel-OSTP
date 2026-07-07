@@ -762,14 +762,35 @@ fn launch_as_admin(exe: &std::path::PathBuf, token: &str, port: u16) -> anyhow::
     let params_str = format!("--port {} --token-file \"{}\"", port, token_file.display());
     let params_wstr: Vec<u16> = OsStr::new(&params_str).encode_wide().chain(Some(0)).collect();
     #[link(name = "shell32")] extern "system" { fn ShellExecuteW(h: *mut std::ffi::c_void, op: *const u16, f: *const u16, p: *const u16, d: *const u16, s: i32) -> isize; }
-    
+    #[link(name = "kernel32")] extern "system" { fn GetLastError() -> u32; }
+
     // Use the GUI executable's directory as the working directory so dependencies are found
     let cwd_path = std::env::current_exe().unwrap_or_else(|_| std::path::PathBuf::from("."));
     let dir_wstr: Vec<u16> = cwd_path.parent().unwrap_or(std::path::Path::new(".")).as_os_str().encode_wide().chain(Some(0)).collect();
-    
+
     let ret = unsafe { ShellExecuteW(null_mut(), verb_wstr.as_ptr(), exe_wstr.as_ptr(), params_wstr.as_ptr(), dir_wstr.as_ptr(), 0) };
-    
-    if ret <= 32 { anyhow::bail!("UAC denied or helper missing."); }
+
+    // ShellExecuteW's return is a pseudo-HINSTANCE: > 32 means the call itself
+    // "succeeded" — but that range INCLUDES ERROR_CANCELLED (1223), which is
+    // exactly what Windows returns when the user clicks "No" on the UAC prompt.
+    // The old `ret <= 32` check alone treated a user-denied prompt as success,
+    // silently starting nothing and reporting a single opaque "denied or
+    // missing" message that could not distinguish "no prompt ever shown"
+    // (missing exe, ret<=32) from "prompt shown and declined" (ret==1223) from
+    // any other Win32 failure — exactly the ambiguity blocking diagnosis here.
+    if ret == 1223 {
+        anyhow::bail!("UAC elevation was denied. TUN mode requires administrator privileges.");
+    }
+    if ret <= 32 {
+        let win_err = unsafe { GetLastError() };
+        anyhow::bail!(
+            "Failed to request UAC elevation for the TUN helper (ShellExecuteW ret={}, \
+             GetLastError={}, path={}). If this keeps happening with no prompt ever appearing, \
+             an unsigned binary can be silently blocked by SmartScreen/antivirus during \
+             elevation — try running ostp-gui.exe as Administrator manually.",
+            ret, win_err, exe.display()
+        );
+    }
     Ok(())
 }
 

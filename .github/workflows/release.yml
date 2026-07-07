@@ -10,6 +10,19 @@ on:
       - nightly
       - pre-release
   workflow_dispatch:
+    inputs:
+      channel:
+        description: >-
+          Manually build+release just this rolling channel. Stable releases
+          are NEVER picked here on purpose — cut those only via a real
+          "vX.Y.Z" tag push, so a manual dispatch can't accidentally publish
+          a "stable" release.
+        type: choice
+        required: true
+        default: nightly
+        options:
+          - nightly
+          - beta
 
 permissions:
   contents: write
@@ -21,6 +34,55 @@ env:
   RUST_BACKTRACE: short
 
 jobs:
+  # Computes ONE channel + release tag for this whole run, so every build
+  # job (native matrix + all 3 GUI platforms + Android) uploads to the exact
+  # same release under the exact same tag, instead of repeating this logic
+  # (and risking it drifting out of sync) in five separate places.
+  #
+  # Tag shape:
+  #   - real "vX.Y.Z" / "vX.Y.Z-beta.N" tag push -> tag used as-is (stable promotion)
+  #   - push to `nightly`                        -> "{version}-nightly" (rolling, same tag every push)
+  #   - push to `pre-release`                     -> "{version}-beta"    (rolling, same tag every push)
+  #   - workflow_dispatch                         -> forced by the `channel` input (nightly|beta only)
+  resolve-channel:
+    name: Resolve release channel
+    runs-on: ubuntu-latest
+    outputs:
+      channel: ${{ steps.resolve.outputs.channel }}
+      tag_name: ${{ steps.resolve.outputs.tag_name }}
+      prerelease: ${{ steps.resolve.outputs.prerelease }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Resolve channel, version, and release tag
+        id: resolve
+        shell: bash
+        run: |
+          set -euo pipefail
+          BASE_VERSION=$(grep -m1 '^version' Cargo.toml | sed -E 's/version *= *"([^"]+)"/\1/')
+
+          if [[ "${{ github.ref }}" == refs/tags/v* ]]; then
+            CHANNEL="stable"
+            TAG="${{ github.ref_name }}"
+          elif [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
+            CHANNEL="${{ github.event.inputs.channel }}"
+          elif [ "${{ github.ref_name }}" = "nightly" ]; then
+            CHANNEL="nightly"
+          elif [ "${{ github.ref_name }}" = "pre-release" ]; then
+            CHANNEL="beta"
+          else
+            CHANNEL="nightly"
+          fi
+
+          if [ "$CHANNEL" != "stable" ]; then
+            TAG="${BASE_VERSION}-${CHANNEL}"
+          fi
+
+          echo "Resolved channel=$CHANNEL tag=$TAG (base version $BASE_VERSION)"
+          echo "channel=$CHANNEL" >> "$GITHUB_OUTPUT"
+          echo "tag_name=$TAG" >> "$GITHUB_OUTPUT"
+          echo "prerelease=$([ "$CHANNEL" = "stable" ] && echo false || echo true)" >> "$GITHUB_OUTPUT"
+
   check-and-test:
     name: Check & Test
     runs-on: ubuntu-latest
@@ -58,7 +120,7 @@ jobs:
 
   publish-release-matrix:
     name: Release for ${{ matrix.target }}
-    needs: check-and-test
+    needs: [check-and-test, resolve-channel]
     runs-on: ${{ matrix.os }}
     strategy:
       fail-fast: false
@@ -244,22 +306,19 @@ jobs:
       - name: Upload to GitHub Release
         uses: softprops/action-gh-release@v2
         with:
-          # Version tags (v0.4.1, v0.4.1-beta.N) use their own name as the
-          # release; branch pushes (nightly/pre-release) roll a release named
-          # after the branch itself — no name remapping needed since
-          # github.ref_name is already the tag OR the branch name as-is.
-          tag_name: ${{ github.ref_name }}
-          # Any branch push is a rolling prerelease; for real version tags,
-          # a hyphenated suffix (-beta.N) marks it prerelease, a bare
-          # semver tag (v0.4.1) is a stable release.
-          prerelease: ${{ !startsWith(github.ref, 'refs/tags/') || contains(github.ref_name, '-') }}
+          # Computed once in resolve-channel so every platform/job in this run
+          # lands on the exact same tag: "{version}-nightly" / "{version}-beta"
+          # for rolling channel pushes, or the pushed "vX.Y.Z" tag as-is for a
+          # real stable release.
+          tag_name: ${{ needs.resolve-channel.outputs.tag_name }}
+          prerelease: ${{ needs.resolve-channel.outputs.prerelease }}
           files: ${{ matrix.release_name }}
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
   build-windows-gui:
     name: Build Windows GUI (Tauri) - ${{ matrix.arch }}
-    needs: check-and-test
+    needs: [check-and-test, resolve-channel]
     runs-on: windows-latest
     strategy:
       matrix:
@@ -326,22 +385,19 @@ jobs:
       - name: Upload to GitHub Release
         uses: softprops/action-gh-release@v2
         with:
-          # Version tags (v0.4.1, v0.4.1-beta.N) use their own name as the
-          # release; branch pushes (nightly/pre-release) roll a release named
-          # after the branch itself — no name remapping needed since
-          # github.ref_name is already the tag OR the branch name as-is.
-          tag_name: ${{ github.ref_name }}
-          # Any branch push is a rolling prerelease; for real version tags,
-          # a hyphenated suffix (-beta.N) marks it prerelease, a bare
-          # semver tag (v0.4.1) is a stable release.
-          prerelease: ${{ !startsWith(github.ref, 'refs/tags/') || contains(github.ref_name, '-') }}
+          # Computed once in resolve-channel so every platform/job in this run
+          # lands on the exact same tag: "{version}-nightly" / "{version}-beta"
+          # for rolling channel pushes, or the pushed "vX.Y.Z" tag as-is for a
+          # real stable release.
+          tag_name: ${{ needs.resolve-channel.outputs.tag_name }}
+          prerelease: ${{ needs.resolve-channel.outputs.prerelease }}
           files: ostp-windows-gui-${{ matrix.arch }}.zip
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
   build-linux-gui:
     name: Build Linux GUI (Tauri) - ${{ matrix.arch }}
-    needs: check-and-test
+    needs: [check-and-test, resolve-channel]
     runs-on: ubuntu-latest
     strategy:
       matrix:
@@ -394,22 +450,19 @@ jobs:
       - name: Upload to GitHub Release
         uses: softprops/action-gh-release@v2
         with:
-          # Version tags (v0.4.1, v0.4.1-beta.N) use their own name as the
-          # release; branch pushes (nightly/pre-release) roll a release named
-          # after the branch itself — no name remapping needed since
-          # github.ref_name is already the tag OR the branch name as-is.
-          tag_name: ${{ github.ref_name }}
-          # Any branch push is a rolling prerelease; for real version tags,
-          # a hyphenated suffix (-beta.N) marks it prerelease, a bare
-          # semver tag (v0.4.1) is a stable release.
-          prerelease: ${{ !startsWith(github.ref, 'refs/tags/') || contains(github.ref_name, '-') }}
+          # Computed once in resolve-channel so every platform/job in this run
+          # lands on the exact same tag: "{version}-nightly" / "{version}-beta"
+          # for rolling channel pushes, or the pushed "vX.Y.Z" tag as-is for a
+          # real stable release.
+          tag_name: ${{ needs.resolve-channel.outputs.tag_name }}
+          prerelease: ${{ needs.resolve-channel.outputs.prerelease }}
           files: ostp-linux-gui-${{ matrix.arch }}.tar.gz
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
   build-macos-gui:
     name: Build macOS GUI (Tauri) - ${{ matrix.arch }}
-    needs: check-and-test
+    needs: [check-and-test, resolve-channel]
     runs-on: macos-latest
     strategy:
       matrix:
@@ -459,22 +512,19 @@ jobs:
       - name: Upload to GitHub Release
         uses: softprops/action-gh-release@v2
         with:
-          # Version tags (v0.4.1, v0.4.1-beta.N) use their own name as the
-          # release; branch pushes (nightly/pre-release) roll a release named
-          # after the branch itself — no name remapping needed since
-          # github.ref_name is already the tag OR the branch name as-is.
-          tag_name: ${{ github.ref_name }}
-          # Any branch push is a rolling prerelease; for real version tags,
-          # a hyphenated suffix (-beta.N) marks it prerelease, a bare
-          # semver tag (v0.4.1) is a stable release.
-          prerelease: ${{ !startsWith(github.ref, 'refs/tags/') || contains(github.ref_name, '-') }}
+          # Computed once in resolve-channel so every platform/job in this run
+          # lands on the exact same tag: "{version}-nightly" / "{version}-beta"
+          # for rolling channel pushes, or the pushed "vX.Y.Z" tag as-is for a
+          # real stable release.
+          tag_name: ${{ needs.resolve-channel.outputs.tag_name }}
+          prerelease: ${{ needs.resolve-channel.outputs.prerelease }}
           files: ostp-macos-gui-${{ matrix.arch }}.tar.gz
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
   build-android:
     name: Build Android Client (Flutter) - ${{ matrix.arch }}
-    needs: check-and-test
+    needs: [check-and-test, resolve-channel]
     runs-on: ubuntu-latest
     strategy:
       matrix:
@@ -535,15 +585,12 @@ jobs:
       - name: Upload to GitHub Release
         uses: softprops/action-gh-release@v2
         with:
-          # Version tags (v0.4.1, v0.4.1-beta.N) use their own name as the
-          # release; branch pushes (nightly/pre-release) roll a release named
-          # after the branch itself — no name remapping needed since
-          # github.ref_name is already the tag OR the branch name as-is.
-          tag_name: ${{ github.ref_name }}
-          # Any branch push is a rolling prerelease; for real version tags,
-          # a hyphenated suffix (-beta.N) marks it prerelease, a bare
-          # semver tag (v0.4.1) is a stable release.
-          prerelease: ${{ !startsWith(github.ref, 'refs/tags/') || contains(github.ref_name, '-') }}
+          # Computed once in resolve-channel so every platform/job in this run
+          # lands on the exact same tag: "{version}-nightly" / "{version}-beta"
+          # for rolling channel pushes, or the pushed "vX.Y.Z" tag as-is for a
+          # real stable release.
+          tag_name: ${{ needs.resolve-channel.outputs.tag_name }}
+          prerelease: ${{ needs.resolve-channel.outputs.prerelease }}
           files: ostp-flutter/ostp-android-${{ matrix.arch }}.apk
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
