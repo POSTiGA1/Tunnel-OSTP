@@ -250,10 +250,6 @@ pub async fn run_client_core(
         None
     };
 
-    if config.mode == "tun" && !config.exclusions.processes.is_empty() {
-        println!("[ostp] Process exclusions are not supported in TUN mode");
-    }
-
     let (proxy_events_tx, proxy_events_rx) = mpsc::channel(256);
     let (client_msgs_tx, client_msgs_rx) = mpsc::unbounded_channel();
     

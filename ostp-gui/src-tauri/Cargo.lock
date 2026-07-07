@@ -2665,7 +2665,7 @@ dependencies = [
 
 [[package]]
 name = "ostp-client"
-version = "0.4.0"
+version = "0.4.1"
 dependencies = [
  "anyhow",
  "base64 0.22.1",
@@ -2696,7 +2696,7 @@ dependencies = [
 
 [[package]]
 name = "ostp-core"
-version = "0.4.0"
+version = "0.4.1"
 dependencies = [
  "anyhow",
  "bytes",
@@ -2713,7 +2713,7 @@ dependencies = [
 
 [[package]]
 name = "ostp-gui"
-version = "0.1.0"
+version = "0.4.1"
 dependencies = [
  "anyhow",
  "json_comments",
@@ -2721,6 +2721,7 @@ dependencies = [
  "portable-atomic",
  "qrcode",
  "rand",
+ "rlimit",
  "serde",
  "serde_json",
  "tauri",
@@ -2732,7 +2733,7 @@ dependencies = [
 
 [[package]]
 name = "ostp-tun"
-version = "0.4.0"
+version = "0.4.1"
 dependencies = [
  "anyhow",
  "libc",
@@ -3263,6 +3264,15 @@ dependencies = [
  "wasm-bindgen-futures",
  "wasm-streams",
  "web-sys",
+]
+
+[[package]]
+name = "rlimit"
+version = "0.11.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "f35ee2729c56bb610f6dba436bf78135f728b7373bdffae2ec815b2d3eb98cc3"
+dependencies = [
+ "libc",
 ]
 
 [[package]]

@@ -59,6 +59,10 @@ pub struct DerivedSecrets {
     pub psk: [u8; 32],
     pub handshake_pad_min: usize,
     pub handshake_pad_max: usize,
+    /// Per-key 4-byte prefix stamped on junk frames so the server can drop them
+    /// without a GLOBAL constant marker (which would be a universal DPI signature
+    /// for all OSTP users — exactly what the version gate avoids for the handshake).
+    pub junk_marker: [u8; 4],
 }
 
 /// OSTP wire protocol version. Mixed into key derivation (NOT sent on the
@@ -125,11 +129,22 @@ pub(crate) fn derive_all_secrets_versioned(access_key: &[u8], version: u8) -> De
     let pad_min = 16 + (pad_bytes[0] as usize % 64);       // 16-79
     let pad_max = pad_min + 48 + (pad_bytes[1] as usize % 128); // +48..+175
 
+    // Derive junk marker (4 bytes) — info = key_hash[16..] || 0x04.
+    // Per-key: to an outsider it is indistinguishable from the random junk
+    // payload, so there is no cross-user signature; the server, knowing the key,
+    // derives the same marker and drops the junk silently.
+    let mut junk_info = info_base.to_vec();
+    junk_info.push(0x04);
+    let junk_bytes = hkdf_expand(&prk, &junk_info, 4);
+    let mut junk_marker = [0u8; 4];
+    junk_marker.copy_from_slice(&junk_bytes);
+
     DerivedSecrets {
         obfuscation_key,
         psk,
         handshake_pad_min: pad_min,
         handshake_pad_max: pad_max,
+        junk_marker,
     }
 }
 

@@ -58,6 +58,10 @@ struct TransportConfigRaw {
     mode: Option<String>,
     stealth_sni: Option<String>,
     tcp_fragmentation: Option<bool>,
+    frag_chunk: Option<usize>,
+    frag_sleep: Option<u64>,
+    junk_pc: Option<[usize; 2]>,
+    junk_ps: Option<[usize; 2]>,
 }
 
 #[derive(Debug, Deserialize, Serialize, Clone)]
@@ -165,6 +169,10 @@ fn map_to_client_config(raw: &ClientConfigRaw, mode: &str) -> ostp_client::confi
             mode: raw.transport.as_ref().and_then(|t| t.mode.clone()).unwrap_or_else(|| "udp".to_string()),
             stealth_sni: raw.transport.as_ref().and_then(|t| t.stealth_sni.clone()).unwrap_or_else(|| "microsoft.com".to_string()),
             tcp_fragmentation: raw.transport.as_ref().and_then(|t| t.tcp_fragmentation).unwrap_or(false),
+            frag_chunk: raw.transport.as_ref().and_then(|t| t.frag_chunk).unwrap_or(2),
+            frag_sleep: raw.transport.as_ref().and_then(|t| t.frag_sleep).unwrap_or(2),
+            junk_pc: raw.transport.as_ref().and_then(|t| t.junk_pc).unwrap_or([2, 5]),
+            junk_ps: raw.transport.as_ref().and_then(|t| t.junk_ps).unwrap_or([100, 1000]),
         },
         exclusions: ostp_client::config::ExclusionConfig {
             domains: raw.exclude.as_ref().and_then(|e| e.domains.clone()).unwrap_or_default(),

@@ -81,11 +81,26 @@ pub struct TransportConfig {
     pub stealth_sni: String,
     /// Split the first UoT/TCP packet (handshake) into tiny TCP segments to
     /// break DPI that inspects the first packet. UoT/TCP only; ignored for UDP.
-    #[serde(default)]
     pub tcp_fragmentation: bool,
+    /// TCP chunk size (bytes)
+    #[serde(default = "default_frag_chunk")]
+    pub frag_chunk: usize,
+    /// TCP sleep duration between chunks (ms)
+    #[serde(default = "default_frag_sleep")]
+    pub frag_sleep: u64,
+    /// [min, max] junk packet count
+    #[serde(default = "default_junk_count")]
+    pub junk_pc: [usize; 2],
+    /// [min, max] junk packet size in bytes
+    #[serde(default = "default_junk_size")]
+    pub junk_ps: [usize; 2],
 }
 
 fn default_transport_mode() -> String { "udp".to_string() }
+fn default_frag_chunk() -> usize { 2 }
+fn default_frag_sleep() -> u64 { 2 }
+fn default_junk_count() -> [usize; 2] { [2, 5] }
+fn default_junk_size() -> [usize; 2] { [100, 1000] }
 
 impl Default for TransportConfig {
     fn default() -> Self {
@@ -93,6 +108,10 @@ impl Default for TransportConfig {
             mode: default_transport_mode(),
             stealth_sni: String::new(),
             tcp_fragmentation: false,
+            frag_chunk: default_frag_chunk(),
+            frag_sleep: default_frag_sleep(),
+            junk_pc: default_junk_count(),
+            junk_ps: default_junk_size(),
         }
     }
 }
@@ -175,6 +194,10 @@ struct RawTransportSection {
     mode: Option<String>,
     stealth_sni: Option<String>,
     tcp_fragmentation: Option<bool>,
+    frag_chunk: Option<usize>,
+    frag_sleep: Option<u64>,
+    junk_pc: Option<[usize; 2]>,
+    junk_ps: Option<[usize; 2]>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -249,6 +272,10 @@ impl ClientConfig {
                 mode: raw.transport.as_ref().and_then(|t| t.mode.clone()).unwrap_or_else(default_transport_mode),
                 stealth_sni: raw.transport.as_ref().and_then(|t| t.stealth_sni.clone()).unwrap_or_default(),
                 tcp_fragmentation: raw.transport.as_ref().and_then(|t| t.tcp_fragmentation).unwrap_or(false),
+                frag_chunk: raw.transport.as_ref().and_then(|t| t.frag_chunk).unwrap_or_else(default_frag_chunk),
+                frag_sleep: raw.transport.as_ref().and_then(|t| t.frag_sleep).unwrap_or_else(default_frag_sleep),
+                junk_pc: raw.transport.as_ref().and_then(|t| t.junk_pc).unwrap_or_else(default_junk_count),
+                junk_ps: raw.transport.as_ref().and_then(|t| t.junk_ps).unwrap_or_else(default_junk_size),
             },
             exclusions: ExclusionConfig {
                 domains: exclusions.domains.unwrap_or_default(),

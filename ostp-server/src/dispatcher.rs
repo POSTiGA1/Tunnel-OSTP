@@ -13,6 +13,8 @@ const MAX_SESSIONS: usize = 1024;
 
 pub enum DispatchOutcome {
     Unauthorized,
+    /// Packet matched a registered key's per-key junk marker — drop silently.
+    Junk,
     Accepted {
         responses: Vec<Bytes>,
         app_payloads: Vec<(u32, u16, Bytes)>, // session_id, stream_id, payload
@@ -305,6 +307,13 @@ impl Dispatcher {
 
         for candidate_key in keys_snapshot {
             let secrets = ostp_core::crypto::derive_all_secrets(candidate_key.as_bytes());
+
+            // Junk frames carry this key's per-key derived marker (no global
+            // constant → no universal DPI signature). Drop silently — the secrets
+            // for this key are already derived here, so the check is free.
+            if packet.len() >= 4 && packet[0..4] == secrets.junk_marker {
+                return Ok(DispatchOutcome::Junk);
+            }
 
             // Decode the session_id using this key's obfuscation
             // The handshake mask is derived from the Noise payload at bytes [6..],

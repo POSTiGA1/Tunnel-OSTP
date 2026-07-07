@@ -4,6 +4,11 @@ if (window.__TAURI__?.core) {
   invoke = window.__TAURI__.core.invoke;
 }
 
+// ── Theme: apply saved theme ASAP (before first paint) to avoid a flash ─
+if (localStorage.getItem('ostp_theme') === 'light') {
+  document.documentElement.classList.add('light');
+}
+
 // ── PROFILE STORE ─────────────────────────────────────────────────────
 // Profiles are stored in localStorage only — the core never knows about them.
 // Only the active profile is compiled into a config and passed to Tauri.
@@ -108,6 +113,15 @@ const pmName    = $('pm-name');
 const pmServer  = $('pm-server');
 const pmKey     = $('pm-key');
 const pmTransport = $('pm-transport');
+const pmTcpFrag = $('pm-tcp-frag');
+const pmFragChunk = $('pm-frag-chunk');
+const pmFragSleep = $('pm-frag-sleep');
+const pmJunkPcMin = $('pm-junk-pc-min');
+const pmJunkPcMax = $('pm-junk-pc-max');
+const pmJunkPsMin = $('pm-junk-ps-min');
+const pmJunkPsMax = $('pm-junk-ps-max');
+const pmTcpSettings = $('pm-tcp-settings');
+const pmFragDetails = $('pm-frag-details');
 const btnProfileCancel = $('btn-profile-cancel');
 const btnProfileSave   = $('btn-profile-save');
 const btnProfileDelete = $('btn-profile-delete');
@@ -291,6 +305,11 @@ function buildConfig() {
     debug: !!s.debug,
     transport: {
       mode: active.transport || 'udp',
+      tcp_fragmentation: !!active.tcp_fragmentation,
+      frag_chunk: active.frag_chunk || 2,
+      frag_sleep: active.frag_sleep || 2,
+      junk_pc: active.junk_pc || [2, 5],
+      junk_ps: active.junk_ps || [100, 1000]
     },
     tun: {
       enable: !!s.tun,
@@ -485,15 +504,31 @@ function openProfileEditor(id) {
     pmServer.value = p.server || '';
     pmKey.value = p.key || '';
     pmTransport.value = p.transport || 'udp';
+    pmTcpFrag.checked = !!p.tcp_fragmentation;
+    pmFragChunk.value = p.frag_chunk || 2;
+    pmFragSleep.value = p.frag_sleep || 2;
+    pmJunkPcMin.value = p.junk_pc ? p.junk_pc[0] : 2;
+    pmJunkPcMax.value = p.junk_pc ? p.junk_pc[1] : 5;
+    pmJunkPsMin.value = p.junk_ps ? p.junk_ps[0] : 100;
+    pmJunkPsMax.value = p.junk_ps ? p.junk_ps[1] : 1000;
     btnProfileDelete.style.display = '';
   } else {
     profileModalTitle.textContent = 'New Profile';
     pmName.value = pmServer.value = pmKey.value = '';
     pmTransport.value = 'udp';
+    pmTcpFrag.checked = false;
+    pmFragChunk.value = 2;
+    pmFragSleep.value = 2;
+    pmJunkPcMin.value = 2;
+    pmJunkPcMax.value = 5;
+    pmJunkPsMin.value = 100;
+    pmJunkPsMax.value = 1000;
     btnProfileDelete.style.display = 'none';
   }
   pmKey.type = 'password';
   profileModal.classList.remove('hidden');
+  pmTransport.dispatchEvent(new Event('change'));
+  pmTcpFrag.dispatchEvent(new Event('change'));
   setTimeout(() => pmName.focus(), 80);
 }
 
@@ -511,6 +546,11 @@ function saveProfileFromEditor() {
         server,
         key,
         transport: pmTransport.value,
+        tcp_fragmentation: pmTcpFrag.checked,
+        frag_chunk: parseInt(pmFragChunk.value) || 2,
+        frag_sleep: parseInt(pmFragSleep.value) || 2,
+        junk_pc: [parseInt(pmJunkPcMin.value)||2, parseInt(pmJunkPcMax.value)||5],
+        junk_ps: [parseInt(pmJunkPsMin.value)||100, parseInt(pmJunkPsMax.value)||1000],
       };
     }
   } else {
@@ -520,6 +560,11 @@ function saveProfileFromEditor() {
       server,
       key,
       transport: pmTransport.value,
+      tcp_fragmentation: pmTcpFrag.checked,
+      frag_chunk: parseInt(pmFragChunk.value) || 2,
+      frag_sleep: parseInt(pmFragSleep.value) || 2,
+      junk_pc: [parseInt(pmJunkPcMin.value)||2, parseInt(pmJunkPcMax.value)||5],
+      junk_ps: [parseInt(pmJunkPsMin.value)||100, parseInt(pmJunkPsMax.value)||1000],
     };
     profiles.push(p);
     if (!activeId) { activeId = p.id; saveActiveId(activeId); }
@@ -707,6 +752,24 @@ window.addEventListener('DOMContentLoaded', async () => {
   btnGoSettings.addEventListener('click', () => showScreen('settings'));
   btnBack.addEventListener('click', () => showScreen('home'));
 
+  // Theme toggle (dark ⇄ light), persisted in localStorage
+  const btnTheme = $('btn-theme');
+  if (btnTheme) btnTheme.addEventListener('click', () => {
+    const isLight = document.documentElement.classList.toggle('light');
+    localStorage.setItem('ostp_theme', isLight ? 'light' : 'dark');
+  });
+
+  // GUI version shown at the bottom of Settings
+  const appVersionEl = $('app-version');
+  if (appVersionEl) {
+    const setV = v => { appVersionEl.textContent = 'OSTP GUI v' + v; };
+    if (window.__TAURI__?.app?.getVersion) {
+      window.__TAURI__.app.getVersion().then(setV).catch(() => setV('0.4.1'));
+    } else {
+      setV('0.4.1');
+    }
+  }
+
   // Add-profile button → dropdown
   btnAddProfile.addEventListener('click', e => {
     e.stopPropagation();
@@ -757,6 +820,12 @@ window.addEventListener('DOMContentLoaded', async () => {
   btnProfileCancel.addEventListener('click', () => profileModal.classList.add('hidden'));
   btnProfileSave.addEventListener('click', saveProfileFromEditor);
   btnProfileDelete.addEventListener('click', deleteEditingProfile);
+  pmTransport.addEventListener('change', () => {
+    pmTcpSettings.style.display = pmTransport.value === 'uot' ? 'block' : 'none';
+  });
+  pmTcpFrag.addEventListener('change', () => {
+    pmFragDetails.style.display = pmTcpFrag.checked ? 'block' : 'none';
+  });
   btnPeekPm.addEventListener('click', () => {
     pmKey.type = pmKey.type === 'password' ? 'text' : 'password';
   });

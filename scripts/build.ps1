@@ -1,13 +1,15 @@
 # OSTP Build & Release Pipeline
 # Usage:
-#   .\scripts\build.ps1                Build locally + trigger CI/CD
-#   .\scripts\build.ps1 -TriggerOnly   Skip local builds, trigger CI/CD only
-#   .\scripts\build.ps1 -Check         Run cargo check only (no build, no release)
+#   .\scripts\build.ps1                          Build locally + trigger CI/CD (stable release)
+#   .\scripts\build.ps1 -TriggerOnly             Skip local builds, trigger CI/CD only
+#   .\scripts\build.ps1 -TriggerOnly -PreRelease Beta: tag CURRENT version as pre-release (no bump, no master commit)
+#   .\scripts\build.ps1 -Check                   Run cargo check only (no build, no release)
 
 param(
     [switch]$Flatten,
     [switch]$TriggerOnly,
-    [switch]$Check
+    [switch]$Check,
+    [switch]$PreRelease
 )
 
 $ProjectRoot = Split-Path -Parent $PSScriptRoot
@@ -17,22 +19,27 @@ Push-Location $ProjectRoot
 Write-Output "Synchronizing with origin master..."
 & git pull origin master --rebase --autostash | Out-Null
 
-# --- Version bump ---
+# --- Version resolution / bump ---
 $CargoToml = Join-Path $ProjectRoot "Cargo.toml"
 $Version = "0.2.0"
-if (Test-Path $CargoToml) {
-    $Content = [System.IO.File]::ReadAllText($CargoToml)
-    # Match version only in [workspace.package] section (first occurrence)
-    if ($Content -match '\[workspace\.package\][\s\S]*?version\s*=\s*"(\d+)\.(\d+)\.(\d+)"') {
-        $Major = [int]$Matches[1]
-        $Minor = [int]$Matches[2]
-        $Patch = [int]$Matches[3]
+$Content = if (Test-Path $CargoToml) { [System.IO.File]::ReadAllText($CargoToml) } else { "" }
+
+if ($Content -match '\[workspace\.package\][\s\S]*?version\s*=\s*"(\d+)\.(\d+)\.(\d+)"') {
+    $Major = [int]$Matches[1]
+    $Minor = [int]$Matches[2]
+    $Patch = [int]$Matches[3]
+
+    if ($PreRelease) {
+        # Beta: build the CURRENT version as a pre-release. No bump, no manifest rewrites.
+        $Version = "{0}.{1}.{2}" -f $Major, $Minor, $Patch
+        Write-Output "[ok] Pre-release build of current v$Version (no version bump)"
+    } else {
         $NewPatch = $Patch + 1
         $Version = "{0}.{1}.{2}" -f $Major, $Minor, $NewPatch
-        # Replace only the workspace version line, not dependency versions
+
+        # Replace only the workspace version line (first occurrence), not dependency versions
         $OldVersionStr = 'version = "{0}.{1}.{2}"' -f $Major, $Minor, $Patch
         $NewVersionStr = 'version = "' + $Version + '"'
-        # Use .NET Replace to swap only the first occurrence
         $idx = $Content.IndexOf($OldVersionStr)
         if ($idx -ge 0) {
             $NewContent = $Content.Remove($idx, $OldVersionStr.Length).Insert($idx, $NewVersionStr)
@@ -40,24 +47,22 @@ if (Test-Path $CargoToml) {
         }
         Write-Output "[ok] Version: v$Version"
 
-        # Bump Tauri GUI
+        # Bump Tauri GUI config
         $TauriConf = Join-Path $ProjectRoot "ostp-gui\src-tauri\tauri.conf.json"
         if (Test-Path $TauriConf) {
             $TauriContent = [System.IO.File]::ReadAllText($TauriConf)
-            $TauriRegex = [regex] '"version":\s*"[^"]+"'
-            $TauriContent = $TauriRegex.Replace($TauriContent, ('"version": "' + $Version + '"'), 1)
+            $TauriContent = ([regex]'"version":\s*"[^"]+"').Replace($TauriContent, ('"version": "' + $Version + '"'), 1)
             [System.IO.File]::WriteAllText($TauriConf, $TauriContent)
             Write-Output "  [ok] Updated tauri.conf.json"
         }
 
-        # Bump React Control Panel
-        $PackageJson = Join-Path $ProjectRoot "ostp-control\package.json"
-        if (Test-Path $PackageJson) {
-            $PkgContent = [System.IO.File]::ReadAllText($PackageJson)
-            $PkgRegex = [regex] '"version":\s*"[^"]+"'
-            $PkgContent = $PkgRegex.Replace($PkgContent, ('"version": "' + $Version + '"'), 1)
-            [System.IO.File]::WriteAllText($PackageJson, $PkgContent)
-            Write-Output "  [ok] Updated package.json"
+        # Bump GUI package.json
+        $GuiPkg = Join-Path $ProjectRoot "ostp-gui\package.json"
+        if (Test-Path $GuiPkg) {
+            $GuiContent = [System.IO.File]::ReadAllText($GuiPkg)
+            $GuiContent = ([regex]'"version":\s*"[^"]+"').Replace($GuiContent, ('"version": "' + $Version + '"'), 1)
+            [System.IO.File]::WriteAllText($GuiPkg, $GuiContent)
+            Write-Output "  [ok] Updated ostp-gui/package.json"
         }
 
         # Bump Flutter App
@@ -66,8 +71,7 @@ if (Test-Path $CargoToml) {
             $PubContent = [System.IO.File]::ReadAllText($Pubspec)
             if ($PubContent -match 'version:\s*(\d+\.\d+\.\d+)\+(\d+)') {
                 $BuildNumber = [int]$Matches[2] + 1
-                $PubRegex = [regex] 'version:\s*\d+\.\d+\.\d+\+\d+'
-                $PubContent = $PubRegex.Replace($PubContent, ("version: $Version+$BuildNumber"), 1)
+                $PubContent = ([regex]'version:\s*\d+\.\d+\.\d+\+\d+').Replace($PubContent, ("version: $Version+$BuildNumber"), 1)
                 [System.IO.File]::WriteAllText($Pubspec, $PubContent)
                 Write-Output "  [ok] Updated pubspec.yaml"
             }
@@ -75,13 +79,18 @@ if (Test-Path $CargoToml) {
     }
 }
 
-# --- Pre-flight: frontend build ---
-Write-Output ""
-Write-Output "Building frontend control panel..."
-Push-Location (Join-Path $ProjectRoot "ostp-control")
-& npm install | Out-Null
-& npm run build | Out-Null
-Pop-Location
+# --- Pre-flight: frontend build (only if the panel ships source) ---
+$ControlDir = Join-Path $ProjectRoot "ostp-control"
+if (Test-Path (Join-Path $ControlDir "package.json")) {
+    Write-Output ""
+    Write-Output "Building frontend control panel..."
+    Push-Location $ControlDir
+    & npm install | Out-Null
+    & npm run build | Out-Null
+    Pop-Location
+} else {
+    Write-Output "[skip] ostp-control has no package.json — using prebuilt dist/."
+}
 
 # --- Pre-flight: cargo check ---
 Write-Output ""
@@ -259,25 +268,46 @@ if (-not $TriggerOnly) {
 Write-Output ""
 Write-Output "--- Phase 3: CI/CD release ---"
 
-Write-Output "Pushing version metadata..."
-& git add Cargo.toml Cargo.lock
-& git commit -m "CI/CD: release version v$Version" --allow-empty | Out-Null
-& git push origin master | Out-Null
+if ($PreRelease) {
+    # Beta: tag the CURRENT commit as a pre-release. Do NOT bump/commit master.
+    # The workflow marks any tag containing '-' as a GitHub pre-release.
+    $existingBetas = @(& git tag -l "v$Version-beta.*")
+    $BetaNum = $existingBetas.Count + 1
+    $Tag = "v$Version-beta.$BetaNum"
+    Write-Output "Creating pre-release tag: $Tag"
+    & git tag $Tag
+    Write-Output "Pushing tag to GitHub..."
+    & git push origin $Tag
 
-Write-Output "Creating release tag: v$Version"
-& git tag -d "v$Version" 2>&1 | Out-Null
-& git tag "v$Version"
-
-Write-Output "Pushing tag to GitHub..."
-& git push origin "v$Version" --force
-
-if ($LASTEXITCODE -eq 0) {
-    Write-Output ""
-    Write-Output "[ok] Release v$Version triggered on GitHub Actions."
-    Write-Output "     Monitor: https://github.com/ospab/ostp/actions"
+    if ($LASTEXITCODE -eq 0) {
+        Write-Output ""
+        Write-Output "[ok] Pre-release $Tag triggered on GitHub Actions (marked as pre-release)."
+        Write-Output "     Monitor: https://github.com/ospab/ostp/actions"
+    } else {
+        Write-Output ""
+        Write-Output "[error] Failed to push pre-release tag."
+    }
 } else {
-    Write-Output ""
-    Write-Output "[error] Failed to push release tag."
+    Write-Output "Pushing version metadata..."
+    & git add Cargo.toml Cargo.lock
+    & git commit -m "CI/CD: release version v$Version" --allow-empty | Out-Null
+    & git push origin master | Out-Null
+
+    Write-Output "Creating release tag: v$Version"
+    & git tag -d "v$Version" 2>&1 | Out-Null
+    & git tag "v$Version"
+
+    Write-Output "Pushing tag to GitHub..."
+    & git push origin "v$Version" --force
+
+    if ($LASTEXITCODE -eq 0) {
+        Write-Output ""
+        Write-Output "[ok] Release v$Version triggered on GitHub Actions."
+        Write-Output "     Monitor: https://github.com/ospab/ostp/actions"
+    } else {
+        Write-Output ""
+        Write-Output "[error] Failed to push release tag."
+    }
 }
 
 Pop-Location

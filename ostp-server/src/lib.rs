@@ -551,7 +551,8 @@ async fn handle_udp_packet(
     last_empty_app_log: &mut Instant,
 ) -> Result<()> {
     let size = packet.len();
-    match dispatcher.on_datagram(peer, packet) {
+    match dispatcher.on_datagram(peer, packet.clone()) {
+        Ok(DispatchOutcome::Junk) => return Ok(()),
         Ok(DispatchOutcome::Unauthorized) => {
             let _ = ui_event_tx.send(UiEvent::UnauthorizedProbe { peer: peer.ip(), bytes: size });
         }

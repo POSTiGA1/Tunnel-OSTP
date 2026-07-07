@@ -43,6 +43,45 @@
   color: var(--c-txt-1);
 }
 
+/* ── Light theme (inverted monochrome) ──────────────────────────────── */
+:root.light {
+  --c-bg:          #f4f4f5;
+  --c-surface:     #ffffff;
+  --c-card:        rgba(0,0,0,0.03);
+  --c-card-border: rgba(0,0,0,0.10);
+  --c-card-hover:  rgba(0,0,0,0.05);
+  --c-accent:      #18181b;
+  --c-accent-dim:  rgba(0,0,0,0.08);
+  --c-accent-glow: rgba(0,0,0,0.14);
+  --c-green:       #18181b;
+  --c-green-glow:  rgba(0,0,0,0.16);
+  --c-green-dim:   rgba(0,0,0,0.05);
+  --c-red:         #dc2626;
+  --c-amber:       #d97706;
+  --c-txt-1:       #18181b;
+  --c-txt-2:       #71717a;
+  --c-txt-3:       #c4c4cc;
+  color: var(--c-txt-1);
+}
+/* Eagle watermark is a light asset — invert it so it stays visible on light bg */
+:root.light .watermark img { filter: invert(1); }
+
+/* Theme toggle: show the icon of the theme you'd switch TO */
+#icon-moon { display: none; }
+#icon-sun  { display: block; }
+:root.light #icon-moon { display: block; }
+:root.light #icon-sun  { display: none; }
+
+/* GUI version footer at the bottom of Settings */
+.app-version {
+  text-align: center;
+  font-size: 0.68rem;
+  letter-spacing: 0.05em;
+  color: var(--c-txt-2);
+  opacity: 0.7;
+  padding: 16px 0 20px;
+}
+
 /* ── Reset ───────────────────────────────────────────────────────────── */
 *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
 html, body { width: 100%; height: 100%; background: var(--c-bg); overflow: hidden; user-select: none; }
@@ -368,6 +407,7 @@ a { text-decoration: none; }
 /* ── Settings body ───────────────────────────────────────────────────── */
 .settings-body {
   flex: 1;
+  min-height: 0;
   display: flex;
   flex-direction: column;
   gap: 0;

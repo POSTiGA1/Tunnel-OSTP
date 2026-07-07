@@ -67,6 +67,10 @@ pub struct Bridge {
     pub transport_mode: String,
     pub stealth_sni: String,
     pub tcp_fragmentation: bool,
+    pub frag_chunk: usize,
+    pub frag_sleep: u64,
+    pub junk_pc: [usize; 2],
+    pub junk_ps: [usize; 2],
     pub mtu: usize,
     pub kill_switch: bool,
     pub reload_tx: Option<watch::Sender<crate::config::ExclusionConfig>>,
@@ -100,6 +104,10 @@ impl Bridge {
             transport_mode: config.transport.mode.clone(),
             stealth_sni: config.transport.stealth_sni.clone(),
             tcp_fragmentation: config.transport.tcp_fragmentation,
+            frag_chunk: config.transport.frag_chunk,
+            frag_sleep: config.transport.frag_sleep,
+            junk_pc: config.transport.junk_pc,
+            junk_ps: config.transport.junk_ps,
             mtu: config.ostp.mtu,
             kill_switch: config.kill_switch,
             reload_tx: None,
@@ -1027,6 +1035,10 @@ impl Bridge {
         self.transport_mode = cfg.transport.mode.clone();
         self.stealth_sni = cfg.transport.stealth_sni.clone();
         self.tcp_fragmentation = cfg.transport.tcp_fragmentation;
+        self.frag_chunk = cfg.transport.frag_chunk.max(1);
+        self.frag_sleep = cfg.transport.frag_sleep;
+        self.junk_pc = cfg.transport.junk_pc;
+        self.junk_ps = cfg.transport.junk_ps;
         self.mtu = cfg.ostp.mtu;
         self.keepalive_interval_sec = cfg.ostp.keepalive_interval_sec;
         self.kill_switch = cfg.kill_switch;
@@ -1044,31 +1056,37 @@ impl Bridge {
             let (mut read_half, mut write_half) = stream.into_split();
 
             let tcp_fragmentation = self.tcp_fragmentation;
+            let frag_chunk = self.frag_chunk;
+            let frag_sleep = self.frag_sleep;
+            let [junk_pc_min, junk_pc_max] = self.junk_pc;
+            let [junk_ps_min, junk_ps_max] = self.junk_ps;
+            // Per-key junk marker (derived from the access key) — NOT a global
+            // constant, so junk frames carry no universal DPI signature.
+            let junk_marker = ostp_core::crypto::derive_all_secrets(&self.access_key).junk_marker;
 
-            // Amnezia-style junk to perturb DPI heuristics — ONLY over stream
-            // transports, where each junk frame rides inside the connection. The
-            // server reads it as a length-prefixed frame, fails to authenticate
-            // it, drops it, and keeps reading (drop-and-continue), so junk does
-            // not break the connection. Over plain UDP each junk would be a lone
-            // datagram indistinguishable from a port scan (probe-flood / wasted
-            // CPU), so junk is NEVER sent over UDP. Ranges are hardcoded for now;
-            // §E will make Jc/Jmin/Jmax configurable. (Ported from 0.3.x.)
             {
                 use tokio::io::AsyncWriteExt;
                 // Build all junk frames up front so ThreadRng isn't held across an
                 // await point (keeps this future Send).
                 let junk_frames: Vec<Vec<u8>> = {
-                    use rand::Rng;
                     let mut rng = rand::thread_rng();
-                    let num_junk = rng.gen_range(2..=5);
+                    let min_c = junk_pc_min;
+                    let max_c = junk_pc_max.max(min_c);
+                    let num_junk = rng.gen_range(min_c..=max_c);
                     (0..num_junk)
                         .map(|_| {
-                            let junk_len = rng.gen_range(100..=1000usize);
+                            let min_s = junk_ps_min.max(1);
+                            let max_s = junk_ps_max.max(min_s);
+                            let junk_len = rng.gen_range(min_s..=max_s);
                             let mut frame = Vec::with_capacity(2 + junk_len);
                             frame.extend_from_slice(&(junk_len as u16).to_be_bytes());
                             let start = frame.len();
                             frame.resize(start + junk_len, 0);
                             rng.fill(&mut frame[start..]);
+                            // Stamp this key's derived junk marker so the server drops it silently.
+                            if junk_len >= 4 {
+                                frame[start..start+4].copy_from_slice(&junk_marker);
+                            }
                             frame
                         })
                         .collect()
@@ -1098,9 +1116,9 @@ impl Bridge {
                         if write_half.write_all(&len_buf[1..2]).await.is_err() { break; }
                         tokio::time::sleep(std::time::Duration::from_millis(5)).await;
                         let mut broke = false;
-                        for chunk in data.chunks(2) {
+                        for chunk in data.chunks(frag_chunk) {
                             if write_half.write_all(chunk).await.is_err() { broke = true; break; }
-                            tokio::time::sleep(std::time::Duration::from_millis(2)).await;
+                            tokio::time::sleep(std::time::Duration::from_millis(frag_sleep)).await;
                         }
                         if broke { break; }
                     } else {

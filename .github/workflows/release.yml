@@ -146,11 +146,17 @@ jobs:
         uses: actions/setup-node@v4
         with:
           node-version: 20
-      - name: Build Web Panel
+      - name: Build Web Panel (skip if no source; use committed dist/)
         working-directory: ostp-control
+        shell: bash
         run: |
-          npm install
-          npm run build
+          if [ -f package.json ]; then
+            npm install && npm run build
+          else
+            echo "ostp-control has no package.json — using committed dist/"
+            mkdir -p dist
+            [ -f dist/index.html ] || echo '<!doctype html><title>OSTP</title>' > dist/index.html
+          fi
 
       # ── Rust toolchain ─────────────────────────────────────────────────────
       - name: Setup Rust toolchain
@@ -236,6 +242,7 @@ jobs:
         if: ${{ startsWith(github.ref, 'refs/tags/') }}
         uses: softprops/action-gh-release@v2
         with:
+          prerelease: ${{ contains(github.ref_name, '-') }}
           files: ${{ matrix.release_name }}
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
@@ -310,6 +317,7 @@ jobs:
         if: ${{ startsWith(github.ref, 'refs/tags/') }}
         uses: softprops/action-gh-release@v2
         with:
+          prerelease: ${{ contains(github.ref_name, '-') }}
           files: ostp-windows-gui-${{ matrix.arch }}.zip
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
@@ -370,6 +378,7 @@ jobs:
         if: ${{ startsWith(github.ref, 'refs/tags/') }}
         uses: softprops/action-gh-release@v2
         with:
+          prerelease: ${{ contains(github.ref_name, '-') }}
           files: ostp-linux-gui-${{ matrix.arch }}.tar.gz
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
@@ -427,6 +436,7 @@ jobs:
         if: ${{ startsWith(github.ref, 'refs/tags/') }}
         uses: softprops/action-gh-release@v2
         with:
+          prerelease: ${{ contains(github.ref_name, '-') }}
           files: ostp-macos-gui-${{ matrix.arch }}.tar.gz
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
@@ -495,6 +505,7 @@ jobs:
         if: ${{ startsWith(github.ref, 'refs/tags/') }}
         uses: softprops/action-gh-release@v2
         with:
+          prerelease: ${{ contains(github.ref_name, '-') }}
           files: ostp-flutter/ostp-android-${{ matrix.arch }}.apk
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
