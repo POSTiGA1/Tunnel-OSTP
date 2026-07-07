@@ -25,6 +25,10 @@ test_route.ps1
 config.json
 wintun.dll
 
+# Server runtime cache (public IP autodetect) — must never be committed,
+# it's regenerated locally and leaks whatever host it ran on last.
+.ostp_public_ip
+
 # Logs
 *.log
 
