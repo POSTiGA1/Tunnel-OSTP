@@ -147,14 +147,14 @@ jobs:
         with:
           node-version: 20
       - name: Build Web Panel (skip if no source; use committed dist/)
-        working-directory: ostp-control
         shell: bash
         run: |
+          mkdir -p ostp-control/dist
+          cd ostp-control
           if [ -f package.json ]; then
             npm install && npm run build
           else
             echo "ostp-control has no package.json — using committed dist/"
-            mkdir -p dist
             [ -f dist/index.html ] || echo '<!doctype html><title>OSTP</title>' > dist/index.html
           fi
 
