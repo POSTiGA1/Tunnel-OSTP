@@ -9,59 +9,88 @@ use colored::Colorize;
 #[command(author, version, about = "OSTP Core - Ospab Stealth Transport Protocol", long_about = None)]
 struct Args {
     /// Path to the JSON configuration file
-    #[cfg_attr(unix, arg(long, default_value = "/etc/ostp/config.json"))]
-    #[cfg_attr(windows, arg(long, default_value = "config.json"))]
+    #[cfg_attr(unix, arg(short, long, default_value = "/etc/ostp/config.json", global = true))]
+    #[cfg_attr(windows, arg(short, long, default_value = "config.json", global = true))]
     config: PathBuf,
 
-    /// Optional mode to initialize the config for (client or server)
-    #[arg(short, long)]
-    init: Option<String>,
+    #[command(subcommand)]
+    command: Option<Commands>,
+}
 
+#[derive(clap::Subcommand, Debug)]
+enum Commands {
     /// Run the interactive setup wizard
-    #[arg(long)]
-    setup: bool,
-
-    /// Generate a new secure access key and exit
-    #[arg(short = 'g', long)]
-    generate_key: bool,
-
-    /// Format for generated key (hex, base64)
-    #[arg(long, default_value = "hex")]
-    format: String,
-
-    /// Number of keys to generate
-    #[arg(short = 'c', long, default_value_t = 1)]
-    count: usize,
-
+    Setup {
+        /// Optional mode to initialize the config for (client or server)
+        #[arg(short, long)]
+        init: Option<String>,
+    },
+    /// Initialize config for client, server, or relay mode
+    Init {
+        mode: String,
+    },
+    /// Generate a new secure access key
+    GenerateKey {
+        /// Format for generated key (hex, base64)
+        #[arg(long, default_value = "hex")]
+        format: String,
+        /// Number of keys to generate
+        // NOT short='c' — `--config` is a global arg (propagated into every
+        // subcommand's scope), so a local '-c' here would collide with it.
+        // Clap validates the whole command tree on the first parse() and
+        // panics on a duplicate short flag, breaking the ENTIRE CLI.
+        #[arg(short = 'n', long, default_value_t = 1)]
+        count: usize,
+    },
     /// Output ready-to-use client sharing links (ostp://...) from the server configuration
-    #[arg(long)]
-    links: bool,
-
-    /// Validate configuration file and exit
-    #[arg(long)]
-    check: bool,
-
-    /// Optional client connection share link (ostp://ACCESS_KEY@HOST:PORT) to run instantly
-    url: Option<String>,
-
+    Links,
+    /// Validate configuration file
+    Check,
+    /// Connect using a share link (ostp://ACCESS_KEY@HOST:PORT)
+    Connect {
+        url: String,
+    },
     /// Uninstall OSTP: stop service, remove binary and configuration files
-    #[arg(long)]
-    uninstall: bool,
-
+    Uninstall,
     /// Update OSTP: re-run the install script to fetch and install the latest version
-    #[arg(long)]
+    Update {
+        /// Release branch to update from (stable, pre-release, nightly)
+        #[arg(short = 'b', long, default_value = "stable")]
+        branch: String,
+        /// Exact release version to update to (e.g. 0.4.1 or 0.4.1-beta.3),
+        /// overriding the latest release on the selected branch
+        #[arg(short = 'v', long, value_name = "VERSION")]
+        version: Option<String>,
+    },
+    /// Import a share link (ostp://...) into the configuration file
+    Import {
+        url: String,
+    },
+    /// Output shell export commands for proxy (eval $(ostp proxy-env))
+    ProxyEnv,
+    /// Output shell export commands to clear proxy (eval $(ostp proxy-env-clear))
+    ProxyEnvClear,
+}
+
+/// Bridges the new subcommand-based CLI onto the original flat-flag dispatch
+/// below, so the ~500 lines of existing command logic don't need to change —
+/// only how they get populated does.
+struct LegacyArgs {
+    config: PathBuf,
+    init: Option<String>,
+    setup: bool,
+    generate_key: bool,
+    format: String,
+    count: usize,
+    links: bool,
+    check: bool,
+    url: Option<String>,
+    uninstall: bool,
     update: bool,
-
-    /// Import a share link (ostp://...) into the configuration file and exit
-    #[arg(long)]
+    update_branch: String,
+    target_version: Option<String>,
     import: Option<String>,
-
-    /// Output shell export commands for proxy (eval $(ostp --proxy-env))
-    #[arg(long)]
     proxy_env: bool,
-
-    /// Output shell export commands to clear proxy (eval $(ostp --proxy-env-clear))
-    #[arg(long)]
     proxy_env_clear: bool,
 }
 
@@ -1022,14 +1051,48 @@ fn wizard_register_windows_service(config_path: &std::path::Path) -> Result<()> 
 }
 
 async fn run_app() -> Result<()> {
-    let args = Args::parse();
+    let raw_args = Args::parse();
+    let mut args = LegacyArgs {
+        config: raw_args.config.clone(),
+        init: None,
+        setup: false,
+        generate_key: false,
+        format: "hex".to_string(),
+        count: 1,
+        links: false,
+        check: false,
+        url: None,
+        uninstall: false,
+        update: false,
+        update_branch: "stable".to_string(),
+        target_version: None,
+        import: None,
+        proxy_env: false,
+        proxy_env_clear: false,
+    };
+
+    if let Some(cmd) = raw_args.command {
+        match cmd {
+            Commands::Setup { init } => { args.setup = true; args.init = init; }
+            Commands::Init { mode } => { args.init = Some(mode); }
+            Commands::GenerateKey { format, count } => { args.generate_key = true; args.format = format; args.count = count; }
+            Commands::Links => { args.links = true; }
+            Commands::Check => { args.check = true; }
+            Commands::Connect { url } => { args.url = Some(url); }
+            Commands::Uninstall => { args.uninstall = true; }
+            Commands::Update { branch, version } => { args.update = true; args.update_branch = branch; args.target_version = version; }
+            Commands::Import { url } => { args.import = Some(url); }
+            Commands::ProxyEnv => { args.proxy_env = true; }
+            Commands::ProxyEnvClear => { args.proxy_env_clear = true; }
+        }
+    }
 
     if args.uninstall {
         return cmd_uninstall();
     }
 
     if args.update {
-        return cmd_update();
+        return cmd_update(args.update_branch, args.target_version);
     }
 
     // ── Setup wizard: explicit flag or first-time (no config) ────────
@@ -1577,12 +1640,26 @@ fn cmd_uninstall() -> Result<()> {
 // Update command
 // ---------------------------------------------------------------------------
 #[cfg(unix)]
-fn cmd_update() -> Result<()> {
+fn cmd_update(branch: String, version: Option<String>) -> Result<()> {
     use std::process::Command;
 
-    println!("[ostp] Updating OSTP...");
+    println!("[ostp] Updating OSTP (branch={branch})...");
+
+    let mut script_args = vec!["-c".to_string()];
+    if let Some(v) = version {
+        script_args.push(format!(
+            "bash <(curl -Ls https://raw.githubusercontent.com/ospab/ostp/master/scripts/install.sh) --branch {} -v {}",
+            branch, v
+        ));
+    } else {
+        script_args.push(format!(
+            "bash <(curl -Ls https://raw.githubusercontent.com/ospab/ostp/master/scripts/install.sh) --branch {}",
+            branch
+        ));
+    }
+
     let status = Command::new("bash")
-        .args(["-c", "bash <(curl -Ls https://raw.githubusercontent.com/ospab/ostp/master/scripts/install.sh)"])
+        .args(&script_args)
         .status()
         .map_err(|e| anyhow!("Failed to run update: {e}"))?;
 
@@ -1593,14 +1670,91 @@ fn cmd_update() -> Result<()> {
 }
 
 #[cfg(not(unix))]
-fn cmd_update() -> Result<()> {
+fn cmd_update(_branch: String, _version: Option<String>) -> Result<()> {
     anyhow::bail!("The 'update' command is only supported on Linux/Unix systems.");
+}
+
+#[cfg(target_os = "windows")]
+fn ensure_elevated_for_tun() -> Result<()> {
+    #[link(name = "shell32")]
+    extern "system" {
+        fn IsUserAnAdmin() -> i32;
+        fn ShellExecuteW(h: *mut std::ffi::c_void, op: *const u16, f: *const u16, p: *const u16, d: *const u16, s: i32) -> isize;
+    }
+    #[link(name = "kernel32")]
+    extern "system" {
+        fn GetLastError() -> u32;
+    }
+
+    let is_admin = unsafe { IsUserAnAdmin() != 0 };
+    if is_admin {
+        return Ok(());
+    }
+
+    use std::ffi::OsStr;
+    use std::os::windows::ffi::OsStrExt;
+
+    let exe = std::env::current_exe()?;
+    let exe_wstr: Vec<u16> = exe.as_os_str().encode_wide().chain(Some(0)).collect();
+    let verb_wstr: Vec<u16> = OsStr::new("runas").encode_wide().chain(Some(0)).collect();
+
+    // Reconstruct arguments so the elevated relaunch runs the same command.
+    let args: Vec<String> = std::env::args().skip(1).collect();
+    let params_str = args.iter().map(|s| format!("\"{}\"", s)).collect::<Vec<_>>().join(" ");
+    let params_wstr: Vec<u16> = OsStr::new(&params_str).encode_wide().chain(Some(0)).collect();
+
+    let cwd = std::env::current_dir()?;
+    let cwd_wstr: Vec<u16> = cwd.as_os_str().encode_wide().chain(Some(0)).collect();
+
+    println!("{}", "[ostp] TUN mode requires administrator privileges. Requesting elevation...".yellow());
+
+    let ret = unsafe {
+        ShellExecuteW(
+            std::ptr::null_mut(),
+            verb_wstr.as_ptr(),
+            exe_wstr.as_ptr(),
+            params_wstr.as_ptr(),
+            cwd_wstr.as_ptr(),
+            1, // SW_SHOWNORMAL
+        )
+    };
+
+    // ShellExecuteW's return is a pseudo-HINSTANCE: > 32 means the call itself
+    // "succeeded" — but that range INCLUDES ERROR_CANCELLED (1223), which is
+    // exactly what Windows returns when the user clicks "No" on the UAC
+    // prompt. The old check (`ret <= 32` only) treated a user-denied prompt
+    // as success and silently exited without ever starting the tunnel.
+    if ret == 1223 {
+        anyhow::bail!("UAC elevation was denied. TUN mode requires administrator privileges.");
+    }
+    if ret <= 32 {
+        let win_err = unsafe { GetLastError() };
+        anyhow::bail!(
+            "Failed to request UAC elevation (ShellExecuteW ret={}, GetLastError={}). \
+             If this keeps happening, an unsigned binary can be silently blocked by \
+             SmartScreen/antivirus during elevation — try running this as Administrator manually.",
+            ret, win_err
+        );
+    }
+    std::process::exit(0);
 }
 
 async fn run_client_directly(client_cfg: ClientConfig) -> Result<()> {
     let is_tun_enabled = client_cfg.tun.as_ref().map(|t| t.enable).unwrap_or(false);
     let mode_str = if is_tun_enabled { "tun" } else { "proxy" };
-    println!("{} Starting client (mode={}, server={})", "[ostp]".cyan().bold(), mode_str.yellow(), client_cfg.server.cyan());    let client_conf = ostp_client::config::ClientConfig {
+    println!("{} Starting client (mode={}, server={})", "[ostp]".cyan().bold(), mode_str.yellow(), client_cfg.server.cyan());
+
+    // TUN mode needs admin rights to create the WinTun adapter. This was
+    // missing entirely before — the CLI would just try to create the
+    // adapter unelevated and fail at the driver level with no UAC prompt
+    // ever shown, which is what "UAC denied regardless of GUI or TUI"
+    // actually was for this code path: TUI never asked for elevation at all.
+    #[cfg(target_os = "windows")]
+    if is_tun_enabled {
+        ensure_elevated_for_tun()?;
+    }
+
+    let client_conf = ostp_client::config::ClientConfig {
         mode: if is_tun_enabled { "tun".to_string() } else { "proxy".to_string() },
         tun_stack: "native".to_string(),
         debug: client_cfg.debug.unwrap_or(false),

@@ -6,6 +6,9 @@ on:
   push:
     tags:
       - "v*"
+    branches:
+      - nightly
+      - pre-release
   workflow_dispatch:
 
 permissions:
@@ -239,10 +242,17 @@ jobs:
 
       # ── Upload ─────────────────────────────────────────────────────────────
       - name: Upload to GitHub Release
-        if: ${{ startsWith(github.ref, 'refs/tags/') }}
         uses: softprops/action-gh-release@v2
         with:
-          prerelease: ${{ contains(github.ref_name, '-') }}
+          # Version tags (v0.4.1, v0.4.1-beta.N) use their own name as the
+          # release; branch pushes (nightly/pre-release) roll a release named
+          # after the branch itself — no name remapping needed since
+          # github.ref_name is already the tag OR the branch name as-is.
+          tag_name: ${{ github.ref_name }}
+          # Any branch push is a rolling prerelease; for real version tags,
+          # a hyphenated suffix (-beta.N) marks it prerelease, a bare
+          # semver tag (v0.4.1) is a stable release.
+          prerelease: ${{ !startsWith(github.ref, 'refs/tags/') || contains(github.ref_name, '-') }}
           files: ${{ matrix.release_name }}
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
@@ -314,10 +324,17 @@ jobs:
           Compress-Archive -Path "$dir/*" -DestinationPath "ostp-windows-gui-${{ matrix.arch }}.zip" -Force
 
       - name: Upload to GitHub Release
-        if: ${{ startsWith(github.ref, 'refs/tags/') }}
         uses: softprops/action-gh-release@v2
         with:
-          prerelease: ${{ contains(github.ref_name, '-') }}
+          # Version tags (v0.4.1, v0.4.1-beta.N) use their own name as the
+          # release; branch pushes (nightly/pre-release) roll a release named
+          # after the branch itself — no name remapping needed since
+          # github.ref_name is already the tag OR the branch name as-is.
+          tag_name: ${{ github.ref_name }}
+          # Any branch push is a rolling prerelease; for real version tags,
+          # a hyphenated suffix (-beta.N) marks it prerelease, a bare
+          # semver tag (v0.4.1) is a stable release.
+          prerelease: ${{ !startsWith(github.ref, 'refs/tags/') || contains(github.ref_name, '-') }}
           files: ostp-windows-gui-${{ matrix.arch }}.zip
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
@@ -375,10 +392,17 @@ jobs:
           tar -czf ostp-linux-gui-${{ matrix.arch }}.tar.gz ostp-linux-gui-${{ matrix.arch }}
 
       - name: Upload to GitHub Release
-        if: ${{ startsWith(github.ref, 'refs/tags/') }}
         uses: softprops/action-gh-release@v2
         with:
-          prerelease: ${{ contains(github.ref_name, '-') }}
+          # Version tags (v0.4.1, v0.4.1-beta.N) use their own name as the
+          # release; branch pushes (nightly/pre-release) roll a release named
+          # after the branch itself — no name remapping needed since
+          # github.ref_name is already the tag OR the branch name as-is.
+          tag_name: ${{ github.ref_name }}
+          # Any branch push is a rolling prerelease; for real version tags,
+          # a hyphenated suffix (-beta.N) marks it prerelease, a bare
+          # semver tag (v0.4.1) is a stable release.
+          prerelease: ${{ !startsWith(github.ref, 'refs/tags/') || contains(github.ref_name, '-') }}
           files: ostp-linux-gui-${{ matrix.arch }}.tar.gz
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
@@ -433,10 +457,17 @@ jobs:
           tar -czf ostp-macos-gui-${{ matrix.arch }}.tar.gz ostp-macos-gui-${{ matrix.arch }}
 
       - name: Upload to GitHub Release
-        if: ${{ startsWith(github.ref, 'refs/tags/') }}
         uses: softprops/action-gh-release@v2
         with:
-          prerelease: ${{ contains(github.ref_name, '-') }}
+          # Version tags (v0.4.1, v0.4.1-beta.N) use their own name as the
+          # release; branch pushes (nightly/pre-release) roll a release named
+          # after the branch itself — no name remapping needed since
+          # github.ref_name is already the tag OR the branch name as-is.
+          tag_name: ${{ github.ref_name }}
+          # Any branch push is a rolling prerelease; for real version tags,
+          # a hyphenated suffix (-beta.N) marks it prerelease, a bare
+          # semver tag (v0.4.1) is a stable release.
+          prerelease: ${{ !startsWith(github.ref, 'refs/tags/') || contains(github.ref_name, '-') }}
           files: ostp-macos-gui-${{ matrix.arch }}.tar.gz
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
@@ -502,10 +533,17 @@ jobs:
           cp build/app/outputs/flutter-apk/app-release.apk ostp-android-${{ matrix.arch }}.apk
 
       - name: Upload to GitHub Release
-        if: ${{ startsWith(github.ref, 'refs/tags/') }}
         uses: softprops/action-gh-release@v2
         with:
-          prerelease: ${{ contains(github.ref_name, '-') }}
+          # Version tags (v0.4.1, v0.4.1-beta.N) use their own name as the
+          # release; branch pushes (nightly/pre-release) roll a release named
+          # after the branch itself — no name remapping needed since
+          # github.ref_name is already the tag OR the branch name as-is.
+          tag_name: ${{ github.ref_name }}
+          # Any branch push is a rolling prerelease; for real version tags,
+          # a hyphenated suffix (-beta.N) marks it prerelease, a bare
+          # semver tag (v0.4.1) is a stable release.
+          prerelease: ${{ !startsWith(github.ref, 'refs/tags/') || contains(github.ref_name, '-') }}
           files: ostp-flutter/ostp-android-${{ matrix.arch }}.apk
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
