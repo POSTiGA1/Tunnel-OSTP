@@ -134,7 +134,7 @@ async fn start_udp_bypass_session(
     }
     
     #[cfg(target_os = "linux")]
-    if let Some(ref name) = phys_if_name {
+    if let Some(ref name) = _phys_if_name {
         let _ = crate::tunnel::proxy::bind_socket_to_interface(&socket, name);
     }
 
