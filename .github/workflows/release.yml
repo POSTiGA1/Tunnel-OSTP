@@ -8,7 +8,13 @@ name: CI/CD
 # exactly like a literal release tag and caused real confusion — the actual
 # release tag has been correct (versioned) all along; only this label lied
 # about it. Spell out "channel" so nobody mistakes one for the other again.
-run-name: ${{ startsWith(github.ref, 'refs/tags/') && format('Release build: {0}', github.ref_name) || format('Release build: {0} channel', github.ref_name) }}
+# NOTE: this value MUST be quoted. The GHA string literal below contains
+# "Release build: {0}" — an unquoted YAML plain scalar treats ": " (colon
+# then space) as starting a nested mapping, which is exactly what broke every
+# single push since this line was introduced: GitHub rejected the whole
+# workflow file at parse time (before any job runs), silently burning an
+# Actions-minutes-billed run per push for nothing.
+run-name: "${{ startsWith(github.ref, 'refs/tags/') && format('Release build: {0}', github.ref_name) || format('Release build: {0} channel', github.ref_name) }}"
 
 on:
   push:
