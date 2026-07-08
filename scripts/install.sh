@@ -178,52 +178,15 @@ if [ -f "$CONFIG_FILE" ]; then
     echo "Existing configuration found at $CONFIG_FILE."
     echo "Binary updated to ${LATEST_RELEASE:-latest}."
 
-    # ── Config migration: add new fields, preserve existing values ──
-    echo "Checking for new config fields..."
-    python3 << 'PYEOF'
-import json, sys
-
-CONFIG = '/etc/ostp/config.json'
-
-with open(CONFIG) as f:
-    raw = f.read()
-lines = [l for l in raw.split('\n') if not l.strip().startswith('//')]
-cfg = json.loads('\n'.join(lines))
-
-changed = False
-
-# Ensure api section has all modern fields
-if cfg.get('mode') == 'server':
-    if 'api' not in cfg:
-        cfg['api'] = {}
-        changed = True
-
-    api_defaults = {
-        'enabled': False,
-        'bind': '0.0.0.0:9090',
-        'webpath': '',
-        'username': '',
-        'password_hash': '',
-    }
-    for k, v in api_defaults.items():
-        if k not in cfg['api']:
-            cfg['api'][k] = v
-            changed = True
-            print(f'[migration] Added api.{k} = {json.dumps(v)}')
-
-    # Remove legacy "token" field if present
-    if 'token' in cfg['api']:
-        del cfg['api']['token']
-        changed = True
-        print('[migration] Removed legacy api.token field')
-
-if changed:
-    with open(CONFIG, 'w') as f:
-        json.dump(cfg, f, indent=2, ensure_ascii=False)
-    print('[ok] Config migrated: new fields added, existing data preserved.')
-else:
-    print('[ok] Config is up to date, no migration needed.')
-PYEOF
+    # Config SCHEMA migration does NOT happen here (or anywhere automatic) —
+    # it used to be an ad-hoc Python snippet embedded right in this script,
+    # silently rewriting config.json on every update. That's exactly the kind
+    # of surprise this project no longer does: the ONE place a config's shape
+    # is ever changed is the explicit `ostp migrate` command (see
+    # ostp-client::migrate), which backs up the original file first and
+    # prints exactly what it changed. If your config predates this install,
+    # run it yourself:
+    echo "If this config is from an older OSTP version, run 'ostp migrate' to upgrade it."
 
     # Update systemd service to use new paths
     if [ -f "/etc/systemd/system/ostp.service" ]; then

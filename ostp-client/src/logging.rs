@@ -71,9 +71,28 @@ pub fn init_tracing(level: &str, app_name: &str, version: &str) -> Option<tracin
         .and_then(|p| p.parent().map(|d| d.join(format!("{}.log", app_name))))
         .unwrap_or_else(|| PathBuf::from(format!("{}.log", app_name)));
 
-    if let Ok(file) = OpenOptions::new().create(true).append(true).open(&path) {
+    if let Ok(mut file) = OpenOptions::new().create(true).append(true).open(&path) {
+        // Write the startup banner directly to the log file, bypassing the
+        // tracing subscriber entirely. Emitting it via tracing::info!() hits
+        // BOTH layers below (file AND stderr), so every one-shot CLI command
+        // (`ostp -V`, `ostp gk`, `ostp check`, ...) printed this banner to the
+        // terminal on every single invocation — pure noise for anything that
+        // isn't the long-running daemon. It's still genuinely useful for
+        // whoever's reading the log file later, so keep it there, just not on
+        // screen for commands that aren't the daemon.
+        let _ = writeln!(
+            file,
+            "{} v{} | OS: {} | Arch: {} | log_level: {} | log_file: {}",
+            app_name,
+            version,
+            std::env::consts::OS,
+            std::env::consts::ARCH,
+            level,
+            path.display(),
+        );
+
         let (file_writer, guard) = tracing_appender::non_blocking(file);
-        
+
         let fmt_layer = tracing_subscriber::fmt::layer()
             .with_target(true)
             .with_line_number(true)
@@ -81,7 +100,7 @@ pub fn init_tracing(level: &str, app_name: &str, version: &str) -> Option<tracin
             .with_thread_names(false)
             .with_ansi(false)
             .with_writer(file_writer);
-            
+
         let stderr_layer = tracing_subscriber::fmt::layer()
             .with_target(true)
             .with_writer(std::io::stderr);
@@ -91,17 +110,7 @@ pub fn init_tracing(level: &str, app_name: &str, version: &str) -> Option<tracin
             .with(fmt_layer)
             .with(stderr_layer)
             .try_init();
-            
-        tracing::info!(
-            "{} v{} | OS: {} | Arch: {} | log_level: {} | log_file: {}",
-            app_name,
-            version,
-            std::env::consts::OS,
-            std::env::consts::ARCH,
-            level,
-            path.display(),
-        );
-        
+
         Some(guard)
     } else {
         // Fallback: stderr only

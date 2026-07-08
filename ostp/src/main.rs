@@ -71,6 +71,11 @@ enum Commands {
     ProxyEnv,
     /// Output shell export commands to clear proxy (eval $(ostp proxy-env-clear))
     ProxyEnvClear,
+    /// Upgrade the configuration file to the current schema. This is the
+    /// ONLY place config migration ever runs — never automatically at
+    /// startup or during install/update, so a config never changes shape
+    /// without you asking it to.
+    Migrate,
 }
 
 /// Bridges the new subcommand-based CLI onto the original flat-flag dispatch
@@ -93,6 +98,60 @@ struct LegacyArgs {
     import: Option<String>,
     proxy_env: bool,
     proxy_env_clear: bool,
+    migrate: bool,
+}
+
+/// Asks the same TUN/mux/debug questions regardless of how a share link
+/// reached this config — connecting directly (`ostp connect <url>`) or
+/// importing it to disk (`ostp import <url>`). Previously only the connect
+/// path asked; `import` just wrote flat defaults with no way to turn any of
+/// this on short of hand-editing the resulting config.json.
+fn prompt_client_options(client_cfg: &mut ClientConfig) {
+    use std::io::Write;
+    let mut input = String::new();
+
+    print!("{} Enable TUN (VPN) mode? [y/N]: ", "?".blue().bold());
+    std::io::stdout().flush().unwrap();
+    std::io::stdin().read_line(&mut input).unwrap();
+    if input.trim().eq_ignore_ascii_case("y") {
+        if let Some(tun) = &mut client_cfg.tun {
+            tun.enable = true;
+        }
+    }
+
+    print!("{} Enable connection multiplexing (mux)? [y/N]: ", "?".blue().bold());
+    std::io::stdout().flush().unwrap();
+    input.clear();
+    std::io::stdin().read_line(&mut input).unwrap();
+    if input.trim().eq_ignore_ascii_case("y") {
+        print!("How many sessions? [5]: ");
+        std::io::stdout().flush().unwrap();
+        input.clear();
+        std::io::stdin().read_line(&mut input).unwrap();
+        let mut sessions = 5;
+        if !input.trim().is_empty() {
+            if let Ok(s) = input.trim().parse() {
+                sessions = s;
+            }
+        }
+        if client_cfg.mux.is_none() {
+            client_cfg.mux = Some(MuxConfig {
+                enabled: Some(true),
+                sessions: Some(sessions),
+            });
+        } else if let Some(mux) = &mut client_cfg.mux {
+            mux.enabled = Some(true);
+            mux.sessions = Some(sessions);
+        }
+    }
+
+    print!("Enable debug mode? [y/N]: ");
+    std::io::stdout().flush().unwrap();
+    input.clear();
+    std::io::stdin().read_line(&mut input).unwrap();
+    if input.trim().eq_ignore_ascii_case("y") {
+        client_cfg.debug = Some(true);
+    }
 }
 
 fn parse_ostp_link(link: &str) -> Result<ClientConfig> {
@@ -1070,6 +1129,7 @@ async fn run_app() -> Result<()> {
         import: None,
         proxy_env: false,
         proxy_env_clear: false,
+        migrate: false,
     };
 
     if let Some(cmd) = raw_args.command {
@@ -1085,6 +1145,7 @@ async fn run_app() -> Result<()> {
             Commands::Import { url } => { args.import = Some(url); }
             Commands::ProxyEnv => { args.proxy_env = true; }
             Commands::ProxyEnvClear => { args.proxy_env_clear = true; }
+            Commands::Migrate => { args.migrate = true; }
         }
     }
 
@@ -1094,6 +1155,10 @@ async fn run_app() -> Result<()> {
 
     if args.update {
         return cmd_update(args.update_branch, args.target_version);
+    }
+
+    if args.migrate {
+        return cmd_migrate(&args.config);
     }
 
     // ── Setup wizard: explicit flag or first-time (no config) ────────
@@ -1181,8 +1246,9 @@ async fn run_app() -> Result<()> {
 
     if let Some(import_url) = args.import {
         println!("{} Importing configuration from share link...", "[ostp]".cyan().bold());
-        let client_cfg = parse_ostp_link(&import_url)
+        let mut client_cfg = parse_ostp_link(&import_url)
             .map_err(|e| anyhow!("Share Link Error: {e}"))?;
+        prompt_client_options(&mut client_cfg);
         let unified = UnifiedConfig {
             mode: AppMode::Client(client_cfg),
             log_level: Some("info".to_string()),
@@ -1202,53 +1268,7 @@ async fn run_app() -> Result<()> {
         println!("{} Connecting via share link...", "[ostp]".cyan().bold());
         let mut client_cfg = parse_ostp_link(&url)
             .map_err(|e| anyhow!("Share Link Error: {e}"))?;
-        
-        // Interactive prompt for URL launch
-        use std::io::Write;
-        
-        print!("{} Enable TUN (VPN) mode? [y/N]: ", "?".blue().bold());
-        std::io::stdout().flush().unwrap();
-        let mut input = String::new();
-        std::io::stdin().read_line(&mut input).unwrap();
-        if input.trim().eq_ignore_ascii_case("y") {
-            if let Some(tun) = &mut client_cfg.tun {
-                tun.enable = true;
-            }
-        }
-        
-        print!("{} Enable connection multiplexing (mux)? [y/N]: ", "?".blue().bold());
-        std::io::stdout().flush().unwrap();
-        input.clear();
-        std::io::stdin().read_line(&mut input).unwrap();
-        if input.trim().eq_ignore_ascii_case("y") {
-            print!("How many sessions? [5]: ");
-            std::io::stdout().flush().unwrap();
-            input.clear();
-            std::io::stdin().read_line(&mut input).unwrap();
-            let mut sessions = 5;
-            if !input.trim().is_empty() {
-                if let Ok(s) = input.trim().parse() {
-                    sessions = s;
-                }
-            }
-            if client_cfg.mux.is_none() {
-                client_cfg.mux = Some(MuxConfig {
-                    enabled: Some(true),
-                    sessions: Some(sessions),
-                });
-            } else if let Some(mux) = &mut client_cfg.mux {
-                mux.enabled = Some(true);
-                mux.sessions = Some(sessions);
-            }
-        }
-        
-        print!("Enable debug mode? [y/N]: ");
-        std::io::stdout().flush().unwrap();
-        input.clear();
-        std::io::stdin().read_line(&mut input).unwrap();
-        if input.trim().eq_ignore_ascii_case("y") {
-            client_cfg.debug = Some(true);
-        }
+        prompt_client_options(&mut client_cfg);
 
         return run_client_directly(client_cfg).await;
     }
@@ -1673,6 +1693,66 @@ fn cmd_update(branch: String, version: Option<String>) -> Result<()> {
 #[cfg(not(unix))]
 fn cmd_update(_branch: String, _version: Option<String>) -> Result<()> {
     anyhow::bail!("The 'update' command is only supported on Linux/Unix systems.");
+}
+
+/// The ONLY place config migration ever runs — see ostp_client::migrate for
+/// why (and for the actual field-by-field mapping). Never called
+/// automatically; only this explicit command touches an existing config's
+/// shape.
+fn cmd_migrate(config_path: &std::path::Path) -> Result<()> {
+    if !config_path.exists() {
+        anyhow::bail!("Configuration file not found at {:?}", config_path);
+    }
+
+    let raw_content = fs::read_to_string(config_path)?;
+    let mut stripped = json_comments::StripComments::new(raw_content.as_bytes());
+    let mut content_str = String::new();
+    {
+        use std::io::Read;
+        stripped.read_to_string(&mut content_str)?;
+    }
+    let parsed: serde_json::Value = serde_json::from_str(&content_str)
+        .map_err(|e| anyhow!("Failed to parse {:?} as JSON: {}", config_path, e))?;
+
+    let kind = ostp_client::migrate::detect_kind(&parsed)
+        .ok_or_else(|| anyhow!("Could not determine whether {:?} is a client, server, or relay config.", config_path))?;
+
+    let (migrated, report) = match kind {
+        ostp_client::migrate::ConfigKind::Client => {
+            let (mut v, r) = ostp_client::migrate::migrate_client_json(parsed);
+            if v.get("mode").is_none() { v["mode"] = serde_json::json!("client"); }
+            (v, r)
+        }
+        ostp_client::migrate::ConfigKind::Server => {
+            let (mut v, r) = ostp_client::migrate::migrate_server_json(parsed);
+            if v.get("mode").is_none() { v["mode"] = serde_json::json!("server"); }
+            (v, r)
+        }
+        ostp_client::migrate::ConfigKind::Relay => {
+            // The relay shape hasn't changed since it was introduced — nothing to migrate yet.
+            (parsed, ostp_client::migrate::MigrationReport::default())
+        }
+    };
+
+    if !report.changed {
+        println!("{} Config is already up to date, nothing to migrate.", "[ostp]".green().bold());
+        return Ok(());
+    }
+
+    let backup_path = config_path.with_extension("json.bak");
+    fs::copy(config_path, &backup_path)?;
+    println!("{} Original config backed up to {:?}", "[ostp]".cyan().bold(), backup_path);
+
+    let new_content = serde_json::to_string_pretty(&migrated)?;
+    fs::write(config_path, new_content)?;
+
+    println!("{} Migrated {:?} — changes made:", "[ostp]".green().bold(), config_path);
+    for note in &report.notes {
+        println!("  - {note}");
+    }
+    println!("\n{} Run 'ostp check' to validate the migrated config.", "[ostp]".cyan().bold());
+
+    Ok(())
 }
 
 #[cfg(target_os = "windows")]
