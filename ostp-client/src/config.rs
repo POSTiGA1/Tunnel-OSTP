@@ -293,3 +293,249 @@ impl ClientConfig {
         })
     }
 }
+
+// ═══════════════════════════════════════════════════════════════════════
+// On-disk config.json shapes — client, server, and relay.
+//
+// This is the ONE place these are defined. They used to be declared locally
+// inside ostp/src/main.rs (the CLI binary) with no other consumer able to
+// see them, which is exactly how ostp-client::migrate ended up working
+// against loosely-typed serde_json::Value instead of a real schema, and how
+// the CLI, the migrator, and this crate's own hot-reload path could each
+// silently drift out of sync with what a config.json actually looks like.
+// main.rs now imports these instead of re-declaring them (see the `use
+// ostp_client::config::{...}` at its top).
+//
+// These are DELIBERATELY separate from ClientConfig/OstpConfig/etc. above:
+// this section is the friendly, minimal shape a user actually edits by
+// hand; the types above are what the running engine needs internally
+// (handshake/io timeouts, resolved addresses, ...) and are built FROM one
+// of these via the mapping in ostp/src/main.rs::run_client_directly. Only
+// `ClientConfig` collides by name with the runtime type above, so the
+// on-disk one is `ClientFileConfig` — everything else keeps its natural name.
+// ═══════════════════════════════════════════════════════════════════════
+
+#[derive(Debug, Deserialize, Serialize)]
+#[serde(tag = "mode", rename_all = "lowercase")]
+pub enum AppMode {
+    Server(ServerConfig),
+    Client(ClientFileConfig),
+    Relay(RelayServerConfig),
+}
+
+#[derive(Debug, Deserialize, Serialize)]
+pub struct UnifiedConfig {
+    #[serde(flatten)]
+    pub mode: AppMode,
+    pub log_level: Option<String>,
+}
+
+impl UnifiedConfig {
+    pub fn validate(&self) -> Result<()> {
+        match &self.mode {
+            AppMode::Server(cfg) => {
+                if cfg.access_keys.is_empty() {
+                    anyhow::bail!("Server configuration must contain at least one access_key.");
+                }
+                if let Some(outbound) = &cfg.outbound {
+                    if outbound.enabled {
+                        let action = outbound.default_action.as_deref().unwrap_or("direct");
+                        if action == "direct" && outbound.rules.is_empty() {
+                            println!("\n[WARNING] Server outbound proxy is ENABLED, but default_action is 'direct' and there are no rules!");
+                            println!("          This means ALL traffic will bypass the proxy and go out directly from the server IP.");
+                            println!("          If you want all traffic to be proxied, change 'default_action' to 'proxy'.\n");
+                        }
+                    }
+                }
+            }
+            AppMode::Client(cfg) => {
+                if cfg.access_key.is_empty() {
+                    anyhow::bail!("Client configuration must contain an access_key.");
+                }
+            }
+            AppMode::Relay(cfg) => {
+                if cfg.upstream_tcp.is_empty() {
+                    anyhow::bail!("Relay configuration must specify upstream_tcp address.");
+                }
+                if cfg.upstream_api_url.is_empty() {
+                    anyhow::bail!("Relay configuration must specify upstream_api_url.");
+                }
+            }
+        }
+        Ok(())
+    }
+}
+
+#[derive(Debug, Deserialize, Serialize, Clone)]
+#[serde(untagged)]
+pub enum UserConfig {
+    Detailed {
+        access_key: String,
+        name: Option<String>,
+        limit_bytes: Option<u64>,
+    },
+    KeyOnly(String),
+}
+
+impl UserConfig {
+    pub fn key(&self) -> String {
+        match self {
+            UserConfig::KeyOnly(k) => k.clone(),
+            UserConfig::Detailed { access_key, .. } => access_key.clone(),
+        }
+    }
+    pub fn name(&self) -> Option<String> {
+        match self {
+            UserConfig::KeyOnly(_) => None,
+            UserConfig::Detailed { name, .. } => name.clone(),
+        }
+    }
+    pub fn limit(&self) -> Option<u64> {
+        match self {
+            UserConfig::KeyOnly(_) => None,
+            UserConfig::Detailed { limit_bytes, .. } => *limit_bytes,
+        }
+    }
+}
+
+#[derive(Debug, Deserialize, Serialize)]
+pub struct ServerConfig {
+    pub listen: ListenConfig,
+    pub access_keys: Vec<UserConfig>,
+    pub debug: Option<bool>,
+    pub outbound: Option<OutboundConfig>,
+    pub api: Option<ApiConfig>,
+    pub fallback: Option<FallbackCfg>,
+    pub transport: Option<TransportConfigRaw>,
+    // Left untyped: ostp-client does not (and should not) depend on
+    // ostp-server just to name its DnsConfig type. The CLI binary — which
+    // already depends on both crates — deserializes this into
+    // ostp_server::dns::DnsConfig right before handing it to run_server().
+    pub dns: Option<serde_json::Value>,
+}
+
+/// Relay-node config.json shape.
+#[derive(Debug, Deserialize, Serialize)]
+pub struct RelayServerConfig {
+    /// Listen address(es) (UDP + TCP UoT)
+    pub listen: ListenConfig,
+    /// Upstream address for TCP (UoT) traffic
+    pub upstream_tcp: String,
+    /// Upstream address for UDP traffic
+    pub upstream_udp: String,
+    /// Target server's API URL, for key sync
+    pub upstream_api_url: String,
+    /// Bearer token for the target server's API
+    #[serde(default)]
+    pub upstream_api_token: String,
+    /// Key sync interval in seconds (default 30)
+    #[serde(default = "default_sync_interval")]
+    pub sync_interval_secs: u64,
+    pub debug: Option<bool>,
+}
+
+fn default_sync_interval() -> u64 { 30 }
+
+/// Supports both a single string "0.0.0.0:50000" and an array
+/// ["0.0.0.0:50000", "[::]:50000"].
+#[derive(Debug, Deserialize, Serialize, Clone)]
+#[serde(untagged)]
+pub enum ListenConfig {
+    Single(String),
+    Multiple(Vec<String>),
+}
+
+impl ListenConfig {
+    pub fn addresses(&self) -> Vec<String> {
+        match self {
+            ListenConfig::Single(s) => vec![s.clone()],
+            ListenConfig::Multiple(v) => v.clone(),
+        }
+    }
+
+    pub fn primary(&self) -> String {
+        match self {
+            ListenConfig::Single(s) => s.clone(),
+            ListenConfig::Multiple(v) => v.first().cloned().unwrap_or_default(),
+        }
+    }
+}
+
+#[derive(Debug, Deserialize, Serialize)]
+pub struct ApiConfig {
+    pub enabled: Option<bool>,
+    pub bind: Option<String>,
+    pub token: Option<String>,
+    pub webpath: Option<String>,
+    pub username: Option<String>,
+    pub password_hash: Option<String>,
+}
+
+#[derive(Debug, Deserialize, Serialize)]
+pub struct FallbackCfg {
+    pub enabled: Option<bool>,
+    pub listen: Option<String>,
+    pub target: Option<String>,
+}
+
+#[derive(Debug, Deserialize, Serialize)]
+pub struct ClientFileConfig {
+    pub server: String,
+    pub access_key: String,
+    pub mtu: Option<usize>,
+    pub socks5_bind: Option<String>,
+    pub tun: Option<TunConfig>,
+    pub debug: Option<bool>,
+    pub exclude: Option<ExcludeConfig>,
+    pub mux: Option<MuxConfig>,
+    pub transport: Option<TransportConfigRaw>,
+    pub gui: Option<serde_json::Value>,
+}
+
+#[derive(Debug, Deserialize, Serialize, Clone)]
+pub struct TransportConfigRaw {
+    pub mode: Option<String>,
+    pub stealth_sni: Option<String>,
+    pub tcp_fragmentation: Option<bool>,
+}
+
+#[derive(Debug, Deserialize, Serialize, Clone)]
+pub struct TunConfig {
+    pub enable: bool,
+    pub wintun_path: Option<String>,
+    pub ipv4_address: Option<String>,
+    pub dns: Option<String>,
+    pub kill_switch: Option<bool>,
+}
+
+#[derive(Debug, Deserialize, Serialize)]
+pub struct OutboundConfig {
+    pub enabled: bool,
+    pub protocol: String,
+    pub address: String,
+    pub port: u16,
+    #[serde(default)]
+    pub rules: Vec<OutboundRule>,
+    pub default_action: Option<String>,
+}
+
+#[derive(Debug, Deserialize, Serialize)]
+pub struct OutboundRule {
+    pub domain_suffix: Option<Vec<String>>,
+    pub ip_cidr: Option<Vec<String>>,
+    pub protocol: Option<String>,
+    pub action: Option<String>,
+}
+
+#[derive(Debug, Deserialize, Serialize)]
+pub struct ExcludeConfig {
+    pub domains: Option<Vec<String>>,
+    pub ips: Option<Vec<String>>,
+    pub processes: Option<Vec<String>>,
+}
+
+#[derive(Debug, Deserialize, Serialize)]
+pub struct MuxConfig {
+    pub enabled: Option<bool>,
+    pub sessions: Option<usize>,
+}

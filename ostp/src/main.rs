@@ -1,6 +1,5 @@
 use anyhow::{anyhow, Result};
 use clap::Parser;
-use serde::{Deserialize, Serialize};
 use std::fs;
 use std::path::PathBuf;
 use colored::Colorize;
@@ -231,226 +230,19 @@ fn parse_outbound_action(value: Option<String>) -> ostp_server::OutboundAction {
     }
 }
 
-#[derive(Debug, Deserialize, Serialize)]
-#[serde(tag = "mode", rename_all = "lowercase")]
-enum AppMode {
-    Server(ServerConfig),
-    Client(ClientConfig),
-    Relay(RelayServerConfig),
-}
-
-#[derive(Debug, Deserialize, Serialize)]
-struct UnifiedConfig {
-    #[serde(flatten)]
-    mode: AppMode,
-    log_level: Option<String>,
-}
-
-impl UnifiedConfig {
-    fn validate(&self) -> Result<()> {
-        match &self.mode {
-            AppMode::Server(cfg) => {
-                if cfg.access_keys.is_empty() {
-                    anyhow::bail!("Server configuration must contain at least one access_key.");
-                }
-                if let Some(outbound) = &cfg.outbound {
-                    if outbound.enabled {
-                        let action = outbound.default_action.as_deref().unwrap_or("direct");
-                        if action == "direct" && outbound.rules.is_empty() {
-                            println!("\n[WARNING] Server outbound proxy is ENABLED, but default_action is 'direct' and there are no rules!");
-                            println!("          This means ALL traffic will bypass the proxy and go out directly from the server IP.");
-                            println!("          If you want all traffic to be proxied, change 'default_action' to 'proxy'.\n");
-                        }
-                    }
-                }
-            }
-            AppMode::Client(cfg) => {
-                if cfg.access_key.is_empty() {
-                    anyhow::bail!("Client configuration must contain an access_key.");
-                }
-            }
-            AppMode::Relay(cfg) => {
-                if cfg.upstream_tcp.is_empty() {
-                    anyhow::bail!("Relay configuration must specify upstream_tcp address.");
-                }
-                if cfg.upstream_api_url.is_empty() {
-                    anyhow::bail!("Relay configuration must specify upstream_api_url.");
-                }
-            }
-        }
-        Ok(())
-    }
-}
-
-#[derive(Debug, Deserialize, Serialize, Clone)]
-#[serde(untagged)]
-pub enum UserConfig {
-    Detailed {
-        access_key: String,
-        name: Option<String>,
-        limit_bytes: Option<u64>,
-    },
-    KeyOnly(String),
-}
-
-impl UserConfig {
-    pub fn key(&self) -> String {
-        match self {
-            UserConfig::KeyOnly(k) => k.clone(),
-            UserConfig::Detailed { access_key, .. } => access_key.clone(),
-        }
-    }
-    pub fn name(&self) -> Option<String> {
-        match self {
-            UserConfig::KeyOnly(_) => None,
-            UserConfig::Detailed { name, .. } => name.clone(),
-        }
-    }
-    pub fn limit(&self) -> Option<u64> {
-        match self {
-            UserConfig::KeyOnly(_) => None,
-            UserConfig::Detailed { limit_bytes, .. } => limit_bytes.clone(),
-        }
-    }
-}
-
-#[derive(Debug, Deserialize, Serialize)]
-struct ServerConfig {
-    listen: ListenConfig,
-    access_keys: Vec<UserConfig>,
-    debug: Option<bool>,
-    outbound: Option<OutboundConfig>,
-    api: Option<ApiConfig>,
-    fallback: Option<FallbackCfg>,
-    transport: Option<TransportConfigRaw>,
-    dns: Option<ostp_server::dns::DnsConfig>,
-}
-
-/// Конфигурация Relay-узла в config.json
-#[derive(Debug, Deserialize, Serialize)]
-struct RelayServerConfig {
-    /// Адрес(а) прослушивания (UDP + TCP UoT)
-    listen: ListenConfig,
-    /// Адрес upstream для TCP (UoT) трафика
-    upstream_tcp: String,
-    /// Адрес upstream для UDP трафика
-    upstream_udp: String,
-    /// URL API целевого сервера для синхронизации ключей
-    upstream_api_url: String,
-    /// Bearer-токен для API целевого сервера
-    #[serde(default)]
-    upstream_api_token: String,
-    /// Интервал синхронизации ключей в секундах (по умолчанию 30)
-    #[serde(default = "default_sync_interval")]
-    sync_interval_secs: u64,
-    debug: Option<bool>,
-}
-
-fn default_sync_interval() -> u64 { 30 }
-
-/// Supports both single string "0.0.0.0:50000" and array ["0.0.0.0:50000", "[::]:50000"]
-#[derive(Debug, Deserialize, Serialize, Clone)]
-#[serde(untagged)]
-enum ListenConfig {
-    Single(String),
-    Multiple(Vec<String>),
-}
-
-impl ListenConfig {
-    fn addresses(&self) -> Vec<String> {
-        match self {
-            ListenConfig::Single(s) => vec![s.clone()],
-            ListenConfig::Multiple(v) => v.clone(),
-        }
-    }
-
-    fn primary(&self) -> String {
-        match self {
-            ListenConfig::Single(s) => s.clone(),
-            ListenConfig::Multiple(v) => v.first().cloned().unwrap_or_default(),
-        }
-    }
-}
-
-#[derive(Debug, Deserialize, Serialize)]
-struct ApiConfig {
-    enabled: Option<bool>,
-    bind: Option<String>,
-    token: Option<String>,
-    webpath: Option<String>,
-    username: Option<String>,
-    password_hash: Option<String>,
-}
-
-#[derive(Debug, Deserialize, Serialize)]
-struct FallbackCfg {
-    enabled: Option<bool>,
-    listen: Option<String>,
-    target: Option<String>,
-}
-
-#[derive(Debug, Deserialize, Serialize)]
-struct ClientConfig {
-    server: String,
-    access_key: String,
-    mtu: Option<usize>,
-    socks5_bind: Option<String>,
-    tun: Option<TunConfig>,
-    debug: Option<bool>,
-    exclude: Option<ExcludeConfig>,
-    mux: Option<MuxConfig>,
-    transport: Option<TransportConfigRaw>,
-    gui: Option<serde_json::Value>,
-}
-
-#[derive(Debug, Deserialize, Serialize, Clone)]
-struct TransportConfigRaw {
-    mode: Option<String>,
-    stealth_sni: Option<String>,
-    tcp_fragmentation: Option<bool>,
-}
-
-#[derive(Debug, Deserialize, Serialize, Clone)]
-struct TunConfig {
-    enable: bool,
-    wintun_path: Option<String>,
-    ipv4_address: Option<String>,
-    dns: Option<String>,
-    kill_switch: Option<bool>,
-}
-
-
-#[derive(Debug, Deserialize, Serialize)]
-struct OutboundConfig {
-    enabled: bool,
-    protocol: String,
-    address: String,
-    port: u16,
-    #[serde(default)]
-    rules: Vec<OutboundRule>,
-    default_action: Option<String>,
-}
-
-#[derive(Debug, Deserialize, Serialize)]
-struct OutboundRule {
-    domain_suffix: Option<Vec<String>>,
-    ip_cidr: Option<Vec<String>>,
-    protocol: Option<String>,
-    action: Option<String>,
-}
-
-#[derive(Debug, Deserialize, Serialize)]
-struct ExcludeConfig {
-    domains: Option<Vec<String>>,
-    ips: Option<Vec<String>>,
-    processes: Option<Vec<String>>,
-}
-
-#[derive(Debug, Deserialize, Serialize)]
-struct MuxConfig {
-    enabled: Option<bool>,
-    sessions: Option<usize>,
-}
+// The on-disk config.json shapes (client/server/relay + all nested types)
+// live in ostp_client::config now — this used to be ~220 lines of struct
+// definitions duplicated here with no other consumer able to see them,
+// which is exactly why ostp_client::migrate had to work against loosely
+// typed JSON instead of a real schema. `ClientFileConfig` is aliased back to
+// the bare `ClientConfig` name used throughout the rest of this file, so it
+// doesn't collide with `ostp_client::config::ClientConfig` (the RUNTIME
+// shape the engine actually uses — a different thing on purpose; see the
+// doc comment on that struct).
+use ostp_client::config::{
+    AppMode, ClientFileConfig as ClientConfig, MuxConfig, TransportConfigRaw, TunConfig,
+    UnifiedConfig,
+};
 
 #[tokio::main]
 async fn main() -> Result<()> {
@@ -1570,8 +1362,16 @@ async fn run_app() -> Result<()> {
                 })
             }).collect::<Vec<_>>();
             let host = get_or_ask_public_ip(&args.config);
-            // Build DNS config and set owndns flag in subscribe links if DNS enabled
-            let dns_cfg = server_cfg.dns;
+            // Build DNS config and set owndns flag in subscribe links if DNS enabled.
+            // Kept untyped (serde_json::Value) in the shared ServerConfig so
+            // ostp-client doesn't need a dependency on ostp-server just to
+            // name this type — deserialize it here instead, where both
+            // crates are already in scope.
+            let dns_cfg: Option<ostp_server::dns::DnsConfig> = server_cfg
+                .dns
+                .map(serde_json::from_value)
+                .transpose()
+                .map_err(|e| anyhow!("Invalid 'dns' section in server config: {e}"))?;
             // Pass all listen addresses for multi-listener support
             ostp_server::run_server(listen_addrs, Some(host), access_keys_meta, outbound, api_config, fallback_config, debug, dns_cfg, Some(args.config)).await?;
         }
@@ -1738,6 +1538,18 @@ fn cmd_migrate(config_path: &std::path::Path) -> Result<()> {
         println!("{} Config is already up to date, nothing to migrate.", "[ostp]".green().bold());
         return Ok(());
     }
+
+    // Prove the migrator's output actually matches the ONE canonical schema
+    // (ostp_client::config) before ever touching the user's file — this is
+    // what makes "single source of truth" a guarantee instead of just an
+    // intention: if migrate.rs's hand-built JSON ever drifts from what
+    // UnifiedConfig actually expects, this catches it here, not as a
+    // corrupted config.json on someone's server.
+    serde_json::from_value::<ostp_client::config::UnifiedConfig>(migrated.clone())
+        .map_err(|e| anyhow!(
+            "Internal error: the migrated config does not match the current schema ({e}). \
+             Nothing was written — this is a bug in the migrator, please report it."
+        ))?;
 
     let backup_path = config_path.with_extension("json.bak");
     fs::copy(config_path, &backup_path)?;

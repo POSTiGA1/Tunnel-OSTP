@@ -483,6 +483,40 @@ mod tests {
         assert_eq!(new, current);
     }
 
+    /// Every migrated output must actually deserialize into the ONE
+    /// canonical schema (`crate::config`) — this is the same check
+    /// `cmd_migrate` runs at runtime before ever touching a user's file,
+    /// exercised here directly so a schema/migrator drift fails a fast unit
+    /// test instead of surfacing as "your migrated config won't load".
+    #[test]
+    fn every_migrated_output_matches_the_canonical_schema() {
+        let modular = json!({
+            "inbounds": [{ "type": "tun", "tag": "tun-in", "mtu": 1350 }],
+            "outbounds": [
+                { "type": "ostp", "tag": "proxy", "server": "1.2.3.4", "port": 50000, "access_key": "k" },
+                { "type": "direct", "tag": "direct" }
+            ],
+            "routing": { "rules": [], "default_outbound": "proxy" }
+        });
+        let (new, _) = migrate_client_json(modular);
+        serde_json::from_value::<crate::config::ClientFileConfig>(new)
+            .expect("modular->flat migration output must match ClientFileConfig");
+
+        let legacy_flat = json!({
+            "server": "1.2.3.4:50000",
+            "access_key": "k",
+            "tun": { "enable": true, "wintun_path": "x", "ipv4_address": "y" }
+        });
+        let (new, _) = migrate_client_json(legacy_flat);
+        serde_json::from_value::<crate::config::ClientFileConfig>(new)
+            .expect("legacy-flat migration output must match ClientFileConfig");
+
+        let server = json!({ "listen": "0.0.0.0:50000", "access_keys": ["k"] });
+        let (new, _) = migrate_server_json(server);
+        serde_json::from_value::<crate::config::ServerConfig>(new)
+            .expect("server migration output must match ServerConfig");
+    }
+
     #[test]
     fn server_config_backfills_api_defaults_and_drops_legacy_token() {
         let old = json!({
