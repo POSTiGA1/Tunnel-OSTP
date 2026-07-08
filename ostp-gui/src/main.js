@@ -154,6 +154,8 @@ const inExProcs     = $('in-ex-procs');
 const inAutoconnect = $('in-autoconnect');
 const inLaunchStartup = $('in-launch-startup');
 const inDebug       = $('in-debug');
+const inShowRtt     = $('in-show-rtt');
+const inShowSpeed   = $('in-show-speed');
 const groupKillSwitch  = $('group-kill-switch');
 const groupMuxSessions = $('group-mux-sessions');
 
@@ -664,6 +666,8 @@ function loadSettingsIntoForm() {
   inAutoconnect.checked = !!s.autoconnect;
   inLaunchStartup.checked = !!s.launchStartup;
   inDebug.checked       = !!s.debug;
+  inShowRtt.checked     = s.showRtt !== false;
+  inShowSpeed.checked   = s.showSpeed !== false;
   updateClientVisibility();
 }
 
@@ -682,6 +686,8 @@ function collectAndSaveSettings() {
     autoconnect:  inAutoconnect.checked,
     launchStartup: inLaunchStartup.checked,
     debug:        inDebug.checked,
+    showRtt:      inShowRtt.checked,
+    showSpeed:    inShowSpeed.checked,
   };
   saveClientSettings(s);
   updateClientVisibility();
@@ -703,6 +709,23 @@ function collectAndSaveSettings() {
 function updateClientVisibility() {
   groupKillSwitch.style.display  = inTun.checked  ? 'flex' : 'none';
   groupMuxSessions.style.display = inMux.checked  ? 'flex' : 'none';
+
+  const showRtt = inShowRtt.checked;
+  const showSpeed = inShowSpeed.checked;
+  const rttBox = $('stat-rtt-box');
+  const downBox = $('stat-down-box');
+  const upBox = $('stat-up-box');
+  const sep1 = $('stat-sep-1');
+  const sep2 = $('stat-sep-2');
+  const container = $('live-stats-container');
+
+  if (rttBox) rttBox.style.display = showRtt ? 'flex' : 'none';
+  if (downBox) downBox.style.display = showSpeed ? 'flex' : 'none';
+  if (upBox) upBox.style.display = showSpeed ? 'flex' : 'none';
+  
+  if (sep1) sep1.style.display = (showRtt && showSpeed) ? 'block' : 'none';
+  if (sep2) sep2.style.display = showSpeed ? 'block' : 'none';
+  if (container) container.style.display = (showRtt || showSpeed) ? 'flex' : 'none';
 }
 
 // ── INIT ──────────────────────────────────────────────────────────────
@@ -858,7 +881,7 @@ window.addEventListener('DOMContentLoaded', async () => {
   wintunModal.addEventListener('click', e => { if (e.target === wintunModal) wintunModal.classList.add('hidden'); });
 
   // Client settings — wire all inputs
-  [inTun, inKillSwitch, inMux, inAutoconnect, inLaunchStartup, inDebug]
+  [inTun, inKillSwitch, inMux, inAutoconnect, inLaunchStartup, inDebug, inShowRtt, inShowSpeed]
     .forEach(el => el.addEventListener('change', collectAndSaveSettings));
   [inMuxSessions, inMtu, inDns, inSocks, inExDomains, inExIps, inExProcs]
     .forEach(el => {
