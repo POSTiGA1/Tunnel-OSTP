@@ -14,7 +14,7 @@ name: CI/CD
 # single push since this line was introduced: GitHub rejected the whole
 # workflow file at parse time (before any job runs), silently burning an
 # Actions-minutes-billed run per push for nothing.
-run-name: "${{ startsWith(github.ref, 'refs/tags/') && format('Release build: {0}', github.ref_name) || format('Release build: {0} channel', github.ref_name) }}"
+run-name: "${{ startsWith(github.ref, 'refs/tags/') && (contains(github.ref_name, 'beta') && format('CI/CD: beta version {0}', github.ref_name) || contains(github.ref_name, 'nightly') && format('CI/CD: nightly version {0}', github.ref_name) || format('CI/CD: release version {0}', github.ref_name)) || format('CI/CD: {0} channel build', github.ref_name) }}"
 
 on:
   push:
