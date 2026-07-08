@@ -20,9 +20,6 @@ on:
   push:
     tags:
       - "v*"
-    branches:
-      - nightly
-      - pre-release
   workflow_dispatch:
     inputs:
       channel:
