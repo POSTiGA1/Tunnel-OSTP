@@ -95,10 +95,10 @@ graph TD
 
 ```bash
 # On your VPS (server):
-./ostp --init server
+./ostp init server
 
 # On your machine (client):
-./ostp --init client
+./ostp init client
 ```
 
 ### 2. Edit config
@@ -129,16 +129,16 @@ graph TD
 ### 3. Run
 
 ```bash
-./ostp                        # Uses config.json in current directory
-./ostp --config /path/to.json # Custom config path
-./ostp --check                # Validate config without running
-./ostp --generate-key         # Generate a new access key
-./ostp --links                # Print client share links
+./ostp                         # Uses config.json in current directory
+./ostp --config /path/to.json  # Custom config path
+./ostp check                   # Validate config without running
+./ostp gk                      # Generate a new access key
+./ostp links                   # Print client share links
 ```
 
 ### 4. Connect via share link (one-liner)
 ```bash
-./ostp "ostp://ACCESS_KEY@server.com:50000?..."
+./ostp connect "ostp://ACCESS_KEY@server.com:50000?..."
 ```
 
 > [!WARNING]
@@ -171,20 +171,33 @@ Full API reference: [Management API](https://github.com/ospab/ostp/wiki/Manageme
 ## CLI Reference
 
 ```
-ostp [OPTIONS] [URL]
+ostp [--config <PATH>] [COMMAND]
 
-Options:
+Commands:
+  run                    Run the daemon using the config file (default when no command is given)
+  connect <URL>          Connect once using a share link: ostp://KEY@HOST:PORT
+  setup                  Interactive setup wizard
+  init <MODE>            Generate a template config (server/client/relay)
+  check                  Validate the configuration file and exit
+  gk                     Generate a secure access key (alias: generate-key)
+    --format <FMT>         Key format: hex, base64 (default: hex)
+    -n, --count <N>        Number of keys to generate (default: 1)
+  links                  Print client share links from the server config
+  import <URL>           Import a share link into the config file
+  update                 Update OSTP to the latest release
+    -b, --branch <NAME>    Release channel: stable, pre-release, nightly (default: stable)
+    -v, --version <VER>    Update to an exact version instead of the channel's latest
+  migrate                Force-migrate the configuration file to the current format
+  prober                 Run the DNS-transport resolver prober
+  proxy-env               Print shell export commands for the local SOCKS proxy
+  proxy-env-clear         Print shell export commands to unset it
+  uninstall              Stop the service and remove the binary and config
+
+Global options:
   --config <PATH>        Config file path (default: config.json)
-  --init <MODE>          Generate template config (server/client)
-  --check                Validate configuration and exit
-  -g, --generate-key     Generate a secure access key
-  -c, --count <N>        Number of keys to generate (default: 1)
-  --format <FMT>         Key format: hex, base64 (default: hex)
-  --links                Print client share links from server config
-
-Arguments:
-  [URL]                  Connect via share link: ostp://KEY@HOST:PORT
 ```
+
+Every subcommand also accepts `-h`/`--help` for its own option list.
 
 ---
 
@@ -230,8 +243,7 @@ cargo test -p ostp-core -p ostp-server
 
 ## License
 
-Business Source License 1.1. Free for personal and non-commercial use.  
-Converts to MIT License on May 14, 2030.
+GNU Affero General Public License v3.0 (AGPL-3.0). See [LICENSE](LICENSE) for the full text.
 
 ---
 

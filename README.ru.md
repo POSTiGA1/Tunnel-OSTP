@@ -84,8 +84,8 @@ irm https://raw.githubusercontent.com/ospab/ostp/master/scripts/install.ps1 | ie
 
 Создать конфиг по умолчанию:
 ```bash
-./ostp --init server   # VPS
-./ostp --init client   # Локальная машина
+./ostp init server   # VPS
+./ostp init client   # Локальная машина
 ```
 
 ### Сервер (`config.json`)
@@ -156,6 +156,37 @@ irm https://raw.githubusercontent.com/ospab/ostp/master/scripts/install.ps1 | ie
 ./ostp
 ```
 
+### Справка по командам
+
+```
+ostp [--config <PATH>] [КОМАНДА]
+
+Команды:
+  run                    Запустить демон по конфигу (по умолчанию, если команда не указана)
+  connect <URL>          Подключиться по share-ссылке: ostp://KEY@HOST:PORT
+  setup                  Интерактивный мастер настройки
+  init <MODE>            Сгенерировать шаблон конфига (server/client/relay)
+  check                  Проверить конфиг и выйти
+  gk                     Сгенерировать access-key (алиас: generate-key)
+    --format <FMT>         Формат ключа: hex, base64 (по умолчанию hex)
+    -n, --count <N>        Количество ключей (по умолчанию 1)
+  links                  Вывести client-share-ссылки из серверного конфига
+  import <URL>           Импортировать share-ссылку в конфиг
+  update                 Обновить OSTP до актуального релиза
+    -b, --branch <NAME>    Канал релиза: stable, pre-release, nightly (по умолчанию stable)
+    -v, --version <VER>    Обновиться на точную версию вместо последней в канале
+  migrate                Принудительно мигрировать конфиг к текущему формату
+  prober                 Запустить DNS-transport prober
+  proxy-env               Вывести shell-команды для локального SOCKS-прокси
+  proxy-env-clear         Вывести shell-команды для их отмены
+  uninstall              Остановить сервис и удалить бинарник с конфигом
+
+Глобальные опции:
+  --config <PATH>        Путь к конфигу (по умолчанию config.json)
+```
+
+У каждой подкоманды есть своя справка через `-h`/`--help`.
+
 ### TUN-режим (Windows)
 Использует встроенный сетевой стек `smoltcp` и виртуальный адаптер `wintun` (необходима `wintun.dll`). Требует запуска с правами Администратора.
 
@@ -204,5 +235,4 @@ cross build --release --target x86_64-unknown-linux-gnu
 
 ## Лицензия
 
-Business Source License 1.1. Бесплатно для личного и некоммерческого использования.
-Переходит в MIT License 14 мая 2030 года.
+GNU Affero General Public License v3.0 (AGPL-3.0). Полный текст — в файле [LICENSE](LICENSE).

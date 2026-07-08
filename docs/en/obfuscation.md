@@ -5,40 +5,38 @@ Traditional tunneling protocols (such as TLS, OpenVPN, and WireGuard) exhibit di
 
 ---
 
-## Obfuscation Key Derivation
+## Secret Derivation
 
-To dynamically mask protocol data, an 8-byte obfuscation key is statically derived from the shared `access_key` configured on both the client and the server:
+Every protocol secret — the obfuscation key, the Noise PSK, the handshake padding range, and the per-key junk marker (see below) — is derived from the shared `access_key` via a single HKDF-SHA256 pass, domain-separated by a trailing info byte per output:
 
-$$\text{Key} = \text{SHA-256}(\text{access\_key})[0..8]$$
+```
+PRK              = HKDF-Extract(salt = SHA-256(access_key)[0..16], IKM = access_key || PROTOCOL_VERSION)
+obfuscation_key  = HKDF-Expand(PRK, info = SHA-256(access_key)[16..] || 0x01, 8 bytes)
+psk              = HKDF-Expand(PRK, info = SHA-256(access_key)[16..] || 0x02, 32 bytes)
+handshake_pad    = HKDF-Expand(PRK, info = SHA-256(access_key)[16..] || 0x03, 2 bytes)
+junk_marker      = HKDF-Expand(PRK, info = SHA-256(access_key)[16..] || 0x04, 4 bytes)
+```
 
-This key is established pre-session and is never transmitted across the wire in any capacity.
+The wire protocol version is mixed into the IKM, not sent as a plaintext byte: peers on a different protocol version derive an entirely different `obfuscation_key`, so they simply cannot deobfuscate each other's packets and are rejected as unauthorized — a hard version gate with no recognizable marker ever appearing on the wire. No secret is ever transmitted; both sides derive the same values independently from the shared access key.
 
 ---
 
 ## Dynamic In-Place Masking Algorithm
 
-OSTP datagrams are processed "in-place" immediately prior to transmission and right after arrival. Two distinct mathematical modes are utilized based on the current handshake phase:
+OSTP datagrams are masked "in-place" immediately prior to transmission and right after arrival. The mask itself is **derived from the packet's own ciphertext**, not from a fixed keystream or a counter, so it changes with every packet automatically:
+
+```
+mask = HMAC-SHA256(key = obfuscation_key, message = ciphertext[0..min(32, len)])
+```
 
 ### 1. Handshake Phase Mode (`is_handshake = true`)
-During connection initiation (Noise Handshake), the wire packet consists of a 4-byte `session_id` prefixed to the Noise payload. To mask the fixed session ID:
-
-*   **Masking**: The first 4 bytes are XORed with the first 4 bytes of the derived obfuscation key:
-    $$\text{raw}[i] = \text{raw}[i] \oplus \text{Key}[i \pmod 8], \quad i \in [0..3]$$
-*   **De-masking**: A repeated XOR with the identical key bytes recovers the original `session_id`.
+The wire packet is `[4-byte session_id][2-byte noise_len][Noise payload]`. The mask is computed over the Noise payload (`raw[6..]`), and its first 6 bytes are XORed onto `session_id || noise_len`.
 
 ### 2. Data Transmission Mode (`is_handshake = false`)
-Post-handshake, the wire layout contains:
-`[4-byte session_id]` + `[8-byte nonce]` + `[AEAD Ciphertext]`
+The wire packet is `[4-byte session_id][8-byte nonce][AEAD ciphertext]`. The mask is computed over the AEAD ciphertext, and its first 12 bytes are XORed onto `session_id || nonce`.
 
-To completely randomize metadata, a two-tiered dynamic XOR masking process is applied:
-
-1.  **Nonce Masking**: The 8-byte `nonce` (sequence counter) is XORed with the full 8-byte static key:
-    $$\text{nonce\_bytes}[i] = \text{nonce\_bytes}[i] \oplus \text{Key}[i], \quad i \in [0..7]$$
-2.  **Session ID Masking**: The 4-byte `session_id` is masked using high dynamic entropy — the lower 32 bits of the **original (unmasked)** `nonce` value:
-    $$\text{session\_id\_bytes}[i] = \text{session\_id\_bytes}[i] \oplus \text{real\_nonce\_low32\_bytes}[i], \quad i \in [0..3]$$
-
-#### Impact of the Scheme:
-Because the `nonce` increments strictly with each outgoing datagram, the session ID's masking keystream continuously changes. This breaks all packet header correlations and eliminates repeating byte patterns, rendering statistical fingerprinting futile.
+#### Impact of the Scheme
+Because the mask is keyed on both the shared secret and the packet's own ciphertext, no two packets — even consecutive ones from the same session — share a keystream, without needing an explicit counter-based scheme. This breaks all packet header correlations and eliminates repeating byte patterns, rendering statistical fingerprinting futile.
 
 ---
 
@@ -50,6 +48,13 @@ The `AdaptivePadder` calculates dynamic dummy byte quantities to append to the p
 - **Dynamic Distributions**: The padding algorithms emulate length profiles commonly seen in whitelisted HTTPS or real-time video streams.
 - **Encrypted Overheads**: The appended padding resides within the AEAD cipher scope. Consequently, passive observers cannot distinguish padding bytes from useful application payload, hiding the true message boundary lengths.
 
-## XTLS-Reality Impersonation
+---
 
-OSTP provides a custom, dependency-free implementation of the XTLS-Reality protocol. It fully simulates a TLS 1.3 handshake (with realistic ClientHello profiles) to bypass advanced DPI filters. Post-handshake, it utilizes ChaCha20Poly1305 to seamlessly encrypt and tunnel the inner HTTP/WSS connections.
+## Junk Packets & TCP Fragmentation
+
+OSTP does not try to impersonate a known protocol (TLS, HTTP, or otherwise) — a fingerprint-matching filter can always be updated to catch an impersonation attempt. Instead it follows a **zapret-like** approach: no recognizable header at all, plus active manipulation of packet boundaries, so there is nothing distinctive to fingerprint in the first place.
+
+- **Junk packets**: before the handshake, the client sends a configurable number (`junk_pc`) of random-size (`junk_ps`) filler datagrams. Each carries a 4-byte marker **derived from the access key** (the `junk_marker` above) rather than a fixed constant — a fixed marker would itself be a universal signature any observer could filter on across every OSTP deployment. The server derives the same per-key marker while trying candidate keys and drops matching junk silently, before it ever reaches the "unauthorized probe" logging path.
+- **TCP fragmentation** (UoT/TCP transport only): the first packet (the handshake) is split into small chunks (`frag_chunk` bytes) with short delays (`frag_sleep` ms) between writes, so DPI that inspects only the first TCP segment never sees a complete handshake to fingerprint.
+
+Both are configurable per-profile; neither is sent over plain UDP transport, where a standalone junk datagram would look exactly like a random one-off probe to the server.
