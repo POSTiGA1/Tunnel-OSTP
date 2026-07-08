@@ -604,6 +604,22 @@ a { text-decoration: none; }
   background: var(--c-accent);
 }
 
+.toggle-with-gear {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+.gear-btn {
+  width: 26px; height: 26px;
+  display: flex; align-items: center; justify-content: center;
+  border-radius: var(--r-xs);
+  color: var(--c-txt-2);
+  transition: all var(--t-fast);
+  background: transparent;
+}
+.gear-btn:hover { color: var(--c-txt-1); background: rgba(255,255,255,0.07); }
+:root.light .gear-btn:hover { background: rgba(0,0,0,0.05); }
+
 /* ── Inline field (label + input on one line) ────────────────────────── */
 .inline-field {
   display: flex;

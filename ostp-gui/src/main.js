@@ -159,6 +159,22 @@ const inShowSpeed   = $('in-show-speed');
 const groupKillSwitch  = $('group-kill-switch');
 const groupMuxSessions = $('group-mux-sessions');
 
+const inJunkEnabled   = $('cs-junk-enabled');
+const btnJunkSettings = $('btn-junk-settings');
+const junkModal       = $('junk-modal');
+const inJunkPcMin     = $('cs-junk-pc-min');
+const inJunkPcMax     = $('cs-junk-pc-max');
+const inJunkPsMin     = $('cs-junk-ps-min');
+const inJunkPsMax     = $('cs-junk-ps-max');
+const btnJunkDone     = $('btn-junk-done');
+
+const inTcpFrag       = $('cs-tcp-frag');
+const btnFragSettings = $('btn-frag-settings');
+const fragModal       = $('frag-modal');
+const inFragChunk     = $('cs-frag-chunk');
+const inFragSleep     = $('cs-frag-sleep');
+const btnFragDone     = $('btn-frag-done');
+
 // ── UTILITIES ─────────────────────────────────────────────────────────
 function fmtBytes(b) {
   if (!b || b === 0) return '0 B';
@@ -307,11 +323,11 @@ function buildConfig() {
     debug: !!s.debug,
     transport: {
       mode: active.transport || 'udp',
-      tcp_fragmentation: !!active.tcp_fragmentation,
-      frag_chunk: active.frag_chunk || 2,
-      frag_sleep: active.frag_sleep || 2,
-      junk_pc: active.junk_pc || [2, 5],
-      junk_ps: active.junk_ps || [100, 1000]
+      tcp_fragmentation: s.tcpFrag || !!active.tcp_fragmentation,
+      frag_chunk: s.tcpFrag ? (s.fragChunk || 2) : (active.frag_chunk || 2),
+      frag_sleep: s.tcpFrag ? (!isNaN(parseInt(s.fragSleep)) ? s.fragSleep : 2) : (active.frag_sleep !== undefined ? active.frag_sleep : 2),
+      junk_pc: s.junkEnabled ? [s.junkPcMin || 2, s.junkPcMax || 5] : (active.junk_pc || [2, 5]),
+      junk_ps: s.junkEnabled ? [s.junkPsMin || 100, s.junkPsMax || 1000] : (active.junk_ps || [100, 1000])
     },
     tun: {
       enable: !!s.tun,
@@ -668,6 +684,14 @@ function loadSettingsIntoForm() {
   inDebug.checked       = !!s.debug;
   inShowRtt.checked     = s.showRtt !== false;
   inShowSpeed.checked   = s.showSpeed !== false;
+  inJunkEnabled.checked = !!s.junkEnabled;
+  inJunkPcMin.value     = s.junkPcMin || 2;
+  inJunkPcMax.value     = s.junkPcMax || 5;
+  inJunkPsMin.value     = s.junkPsMin || 100;
+  inJunkPsMax.value     = s.junkPsMax || 1000;
+  inTcpFrag.checked     = !!s.tcpFrag;
+  inFragChunk.value     = s.fragChunk || 2;
+  inFragSleep.value     = !isNaN(parseInt(s.fragSleep)) ? s.fragSleep : 2;
   updateClientVisibility();
 }
 
@@ -688,6 +712,14 @@ function collectAndSaveSettings() {
     debug:        inDebug.checked,
     showRtt:      inShowRtt.checked,
     showSpeed:    inShowSpeed.checked,
+    junkEnabled:  inJunkEnabled.checked,
+    junkPcMin:    parseInt(inJunkPcMin.value) || 2,
+    junkPcMax:    parseInt(inJunkPcMax.value) || 5,
+    junkPsMin:    parseInt(inJunkPsMin.value) || 100,
+    junkPsMax:    parseInt(inJunkPsMax.value) || 1000,
+    tcpFrag:      inTcpFrag.checked,
+    fragChunk:    parseInt(inFragChunk.value) || 2,
+    fragSleep:    !isNaN(parseInt(inFragSleep.value)) ? parseInt(inFragSleep.value) : 2,
   };
   saveClientSettings(s);
   updateClientVisibility();
@@ -881,15 +913,30 @@ window.addEventListener('DOMContentLoaded', async () => {
   wintunModal.addEventListener('click', e => { if (e.target === wintunModal) wintunModal.classList.add('hidden'); });
 
   // Client settings — wire all inputs
-  [inTun, inKillSwitch, inMux, inAutoconnect, inLaunchStartup, inDebug, inShowRtt, inShowSpeed]
+  [inTun, inKillSwitch, inMux, inAutoconnect, inLaunchStartup, inDebug, inShowRtt, inShowSpeed, inJunkEnabled, inTcpFrag]
     .forEach(el => el.addEventListener('change', collectAndSaveSettings));
-  [inMuxSessions, inMtu, inDns, inSocks, inExDomains, inExIps, inExProcs]
+  [inMuxSessions, inMtu, inDns, inSocks, inExDomains, inExIps, inExProcs, inJunkPcMin, inJunkPcMax, inJunkPsMin, inJunkPsMax, inFragChunk, inFragSleep]
     .forEach(el => {
       el.addEventListener('input', () => {
         clearTimeout(el._saveTimer);
         el._saveTimer = setTimeout(collectAndSaveSettings, 400);
       });
     });
+
+  // Junk and Frag modals
+  btnJunkSettings.addEventListener('click', () => junkModal.classList.remove('hidden'));
+  btnJunkDone.addEventListener('click', () => {
+    collectAndSaveSettings();
+    junkModal.classList.add('hidden');
+  });
+  junkModal.addEventListener('click', e => { if (e.target === junkModal) junkModal.classList.add('hidden'); });
+
+  btnFragSettings.addEventListener('click', () => fragModal.classList.remove('hidden'));
+  btnFragDone.addEventListener('click', () => {
+    collectAndSaveSettings();
+    fragModal.classList.add('hidden');
+  });
+  fragModal.addEventListener('click', e => { if (e.target === fragModal) fragModal.classList.add('hidden'); });
 
   // ── Global Keyboard Shortcuts (TUI emulation) ─────────────────────
   window.addEventListener('keydown', async e => {
@@ -922,6 +969,8 @@ window.addEventListener('DOMContentLoaded', async () => {
             !profileModal.classList.contains('hidden') || 
             !shareModal.classList.contains('hidden') || 
             !wintunModal.classList.contains('hidden') ||
+            !junkModal.classList.contains('hidden') ||
+            !fragModal.classList.contains('hidden') ||
             !addMenu.classList.contains('hidden')) {
           return;
         }
