@@ -762,6 +762,7 @@ fn launch_as_admin(exe: &std::path::PathBuf, token: &str, port: u16) -> anyhow::
     let params_str = format!("--port {} --token-file \"{}\"", port, token_file.display());
     let params_wstr: Vec<u16> = OsStr::new(&params_str).encode_wide().chain(Some(0)).collect();
     #[link(name = "shell32")] extern "system" { fn ShellExecuteW(h: *mut std::ffi::c_void, op: *const u16, f: *const u16, p: *const u16, d: *const u16, s: i32) -> isize; }
+    #[link(name = "kernel32")] extern "system" { fn GetLastError() -> u32; }
     
     // Use the GUI executable's directory as the working directory so dependencies are found
     let cwd_path = std::env::current_exe().unwrap_or_else(|_| std::path::PathBuf::from("."));

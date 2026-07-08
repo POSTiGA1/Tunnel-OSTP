@@ -90,18 +90,18 @@
           </div>
 
           <!-- Live RTT + speeds -->
-          <div class="live-stats">
-            <div class="live-stat">
+          <div class="live-stats" id="live-stats-container">
+            <div class="live-stat" id="stat-rtt-box">
               <span class="live-stat-label">RTT</span>
               <span id="live-rtt" class="live-stat-value">--</span>
             </div>
-            <div class="live-stat-sep"></div>
-            <div class="live-stat">
+            <div class="live-stat-sep" id="stat-sep-1"></div>
+            <div class="live-stat" id="stat-down-box">
               <span class="live-stat-label">↓</span>
               <span id="live-down-speed" class="live-stat-value">0 B/s</span>
             </div>
-            <div class="live-stat-sep"></div>
-            <div class="live-stat">
+            <div class="live-stat-sep" id="stat-sep-2"></div>
+            <div class="live-stat" id="stat-up-box">
               <span class="live-stat-label">↑</span>
               <span id="live-up-speed" class="live-stat-value">0 B/s</span>
             </div>
@@ -276,6 +276,28 @@
             </div>
             <label class="toggle">
               <input type="checkbox" id="in-debug" />
+              <span class="toggle-track"><span class="toggle-thumb"></span></span>
+            </label>
+          </div>
+
+          <div class="toggle-row" style="border-top:none;">
+            <div class="toggle-text">
+              <span class="toggle-name">Show RTT</span>
+              <span class="toggle-hint">Display live ping on dashboard</span>
+            </div>
+            <label class="toggle">
+              <input type="checkbox" id="in-show-rtt" checked />
+              <span class="toggle-track"><span class="toggle-thumb"></span></span>
+            </label>
+          </div>
+
+          <div class="toggle-row" style="border-top:none;">
+            <div class="toggle-text">
+              <span class="toggle-name">Show Speed</span>
+              <span class="toggle-hint">Display traffic speed on dashboard</span>
+            </div>
+            <label class="toggle">
+              <input type="checkbox" id="in-show-speed" checked />
               <span class="toggle-track"><span class="toggle-thumb"></span></span>
             </label>
           </div>
