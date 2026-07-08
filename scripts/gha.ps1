@@ -119,7 +119,7 @@ if ($ResolvedBranch -ne "nightly") {
     if ($LASTEXITCODE -ne 0) {
         $msg = "'$ResolvedBranch' has diverged from nightly and can't fast-forward. " +
                "Per CONTRIBUTING.md, nothing should ever be committed directly to " +
-               "$ResolvedBranch — check what's there before forcing anything."
+               "$ResolvedBranch - check what's there before forcing anything."
         Fail $msg
     }
 }
