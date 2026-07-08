@@ -35,7 +35,7 @@ enum Commands {
         #[arg(long, default_value = "hex")]
         format: String,
         /// Number of keys to generate
-        // NOT short='c' — `--config` is a global arg (propagated into every
+        // NOT short='c' - `--config` is a global arg (propagated into every
         // subcommand's scope), so a local '-c' here would collide with it.
         // Clap validates the whole command tree on the first parse() and
         // panics on a duplicate short flag, breaking the ENTIRE CLI.
@@ -54,7 +54,7 @@ enum Commands {
     Uninstall,
     /// Update OSTP: re-run the install script to fetch and install the latest version
     Update {
-        /// Release branch to update from (stable, pre-release, nightly)
+        /// Release branch to update from (stable, pre-release, alpha)
         #[arg(short = 'b', long, default_value = "stable")]
         branch: String,
         /// Exact release version to update to (e.g. 0.4.1 or 0.4.1-beta.3),
@@ -71,14 +71,14 @@ enum Commands {
     /// Output shell export commands to clear proxy (eval $(ostp proxy-env-clear))
     ProxyEnvClear,
     /// Upgrade the configuration file to the current schema. This is the
-    /// ONLY place config migration ever runs — never automatically at
+    /// ONLY place config migration ever runs - never automatically at
     /// startup or during install/update, so a config never changes shape
     /// without you asking it to.
     Migrate,
 }
 
 /// Bridges the new subcommand-based CLI onto the original flat-flag dispatch
-/// below, so the ~500 lines of existing command logic don't need to change —
+/// below, so the ~500 lines of existing command logic don't need to change -
 /// only how they get populated does.
 struct LegacyArgs {
     config: PathBuf,
@@ -101,7 +101,7 @@ struct LegacyArgs {
 }
 
 /// Asks the same TUN/mux/debug questions regardless of how a share link
-/// reached this config — connecting directly (`ostp connect <url>`) or
+/// reached this config - connecting directly (`ostp connect <url>`) or
 /// importing it to disk (`ostp import <url>`). Previously only the connect
 /// path asked; `import` just wrote flat defaults with no way to turn any of
 /// this on short of hand-editing the resulting config.json.
@@ -231,13 +231,13 @@ fn parse_outbound_action(value: Option<String>) -> ostp_server::OutboundAction {
 }
 
 // The on-disk config.json shapes (client/server/relay + all nested types)
-// live in ostp_client::config now — this used to be ~220 lines of struct
+// live in ostp_client::config now - this used to be ~220 lines of struct
 // definitions duplicated here with no other consumer able to see them,
 // which is exactly why ostp_client::migrate had to work against loosely
 // typed JSON instead of a real schema. `ClientFileConfig` is aliased back to
 // the bare `ClientConfig` name used throughout the rest of this file, so it
 // doesn't collide with `ostp_client::config::ClientConfig` (the RUNTIME
-// shape the engine actually uses — a different thing on purpose; see the
+// shape the engine actually uses - a different thing on purpose; see the
 // doc comment on that struct).
 use ostp_client::config::{
     AppMode, ClientFileConfig as ClientConfig, MuxConfig, TransportConfigRaw, TunConfig,
@@ -384,7 +384,7 @@ fn wizard_step(n: usize, total: usize, title: &str) {
     println!("  {} {}",
         format!("[{}/{}]", n, total).bold().yellow(),
         title.bold());
-    println!("  {}", "─".repeat(50).dimmed());
+    println!("  {}", "-".repeat(50).dimmed());
 }
 
 fn wizard_box(lines: &[&str]) {
@@ -456,10 +456,10 @@ fn run_setup_wizard(config_path: &std::path::Path) -> Result<()> {
         "Press Enter to accept the value shown in [brackets].",
     ]);
 
-    // ── Mode selection ────────────────────────────────────────────────
+    // -- Mode selection ------------------------------------------------
     println!();
     println!("  {}", "Select operating mode:".bold());
-    println!("  {}", "─".repeat(50).dimmed());
+    println!("  {}", "-".repeat(50).dimmed());
 
     #[cfg(unix)]
     {
@@ -490,7 +490,7 @@ fn run_setup_wizard(config_path: &std::path::Path) -> Result<()> {
     }
 
     match mode_choice {
-        // ── CLIENT ────────────────────────────────────────────────────
+        // -- CLIENT ----------------------------------------------------
         "1" => {
             #[cfg(unix)]  const TOTAL: usize = 5;
             #[cfg(windows)] const TOTAL: usize = 4;
@@ -515,11 +515,11 @@ fn run_setup_wizard(config_path: &std::path::Path) -> Result<()> {
 
             wizard_step(3, TOTAL, "VPN (TUN) mode");
 
-            // SSH warning on Linux — always
+            // SSH warning on Linux - always
             #[cfg(unix)]
             {
                 println!();
-                println!("  ┌{}", "─".repeat(60));
+                println!("  ┌{}", "-".repeat(60));
                 println!("  │ {} {}",
                     "WARNING:".red().bold(),
                     "TUN mode captures ALL network traffic.".yellow());
@@ -531,7 +531,7 @@ fn run_setup_wizard(config_path: &std::path::Path) -> Result<()> {
                 println!("  │");
                 println!("  │    Make sure the VPN server is reachable before");
                 println!("  │    enabling TUN, or your SSH session may be lost!");
-                println!("  └{}", "─".repeat(60));
+                println!("  └{}", "-".repeat(60));
             }
 
             let tun_enable = wizard_yn("Enable TUN (full VPN) mode?", false);
@@ -551,7 +551,7 @@ fn run_setup_wizard(config_path: &std::path::Path) -> Result<()> {
                 s.parse::<usize>().unwrap_or(5)
             } else { 1 };
 
-            // Daemon step — Linux only
+            // Daemon step - Linux only
             #[cfg(unix)]
             {
                 wizard_step(5, TOTAL, "Auto-start (systemd)");
@@ -616,7 +616,7 @@ fn run_setup_wizard(config_path: &std::path::Path) -> Result<()> {
             ]);
         }
 
-        // ── SERVER ────────────────────────────────────────────────────
+        // -- SERVER ----------------------------------------------------
         "2" => {
             #[cfg(unix)]    const TOTAL: usize = 4;
             #[cfg(windows)] const TOTAL: usize = 3;
@@ -689,7 +689,7 @@ fn run_setup_wizard(config_path: &std::path::Path) -> Result<()> {
             ]);
         }
 
-        // ── SERVER + PANEL (Linux only) ───────────────────────────────
+        // -- SERVER + PANEL (Linux only) -------------------------------
         #[cfg(unix)]
         "3" => {
             const TOTAL: usize = 5;
@@ -792,7 +792,7 @@ fn run_setup_wizard(config_path: &std::path::Path) -> Result<()> {
             ]);
         }
 
-        // ── RELAY (Linux only) ────────────────────────────────────────
+        // -- RELAY (Linux only) ----------------------------------------
         #[cfg(unix)]
         "4" => {
             const TOTAL: usize = 3;
@@ -953,7 +953,7 @@ async fn run_app() -> Result<()> {
         return cmd_migrate(&args.config);
     }
 
-    // ── Setup wizard: explicit flag or first-time (no config) ────────
+    // -- Setup wizard: explicit flag or first-time (no config) --------
     if args.setup {
         return run_setup_wizard(&args.config);
     }
@@ -1365,7 +1365,7 @@ async fn run_app() -> Result<()> {
             // Build DNS config and set owndns flag in subscribe links if DNS enabled.
             // Kept untyped (serde_json::Value) in the shared ServerConfig so
             // ostp-client doesn't need a dependency on ostp-server just to
-            // name this type — deserialize it here instead, where both
+            // name this type - deserialize it here instead, where both
             // crates are already in scope.
             let dns_cfg: Option<ostp_server::dns::DnsConfig> = server_cfg
                 .dns
@@ -1495,7 +1495,7 @@ fn cmd_update(_branch: String, _version: Option<String>) -> Result<()> {
     anyhow::bail!("The 'update' command is only supported on Linux/Unix systems.");
 }
 
-/// The ONLY place config migration ever runs — see ostp_client::migrate for
+/// The ONLY place config migration ever runs - see ostp_client::migrate for
 /// why (and for the actual field-by-field mapping). Never called
 /// automatically; only this explicit command touches an existing config's
 /// shape.
@@ -1529,7 +1529,7 @@ fn cmd_migrate(config_path: &std::path::Path) -> Result<()> {
             (v, r)
         }
         ostp_client::migrate::ConfigKind::Relay => {
-            // The relay shape hasn't changed since it was introduced — nothing to migrate yet.
+            // The relay shape hasn't changed since it was introduced - nothing to migrate yet.
             (parsed, ostp_client::migrate::MigrationReport::default())
         }
     };
@@ -1540,7 +1540,7 @@ fn cmd_migrate(config_path: &std::path::Path) -> Result<()> {
     }
 
     // Prove the migrator's output actually matches the ONE canonical schema
-    // (ostp_client::config) before ever touching the user's file — this is
+    // (ostp_client::config) before ever touching the user's file - this is
     // what makes "single source of truth" a guarantee instead of just an
     // intention: if migrate.rs's hand-built JSON ever drifts from what
     // UnifiedConfig actually expects, this catches it here, not as a
@@ -1548,7 +1548,7 @@ fn cmd_migrate(config_path: &std::path::Path) -> Result<()> {
     serde_json::from_value::<ostp_client::config::UnifiedConfig>(migrated.clone())
         .map_err(|e| anyhow!(
             "Internal error: the migrated config does not match the current schema ({e}). \
-             Nothing was written — this is a bug in the migrator, please report it."
+             Nothing was written - this is a bug in the migrator, please report it."
         ))?;
 
     let backup_path = config_path.with_extension("json.bak");
@@ -1558,7 +1558,7 @@ fn cmd_migrate(config_path: &std::path::Path) -> Result<()> {
     let new_content = serde_json::to_string_pretty(&migrated)?;
     fs::write(config_path, new_content)?;
 
-    println!("{} Migrated {:?} — changes made:", "[ostp]".green().bold(), config_path);
+    println!("{} Migrated {:?} - changes made:", "[ostp]".green().bold(), config_path);
     for note in &report.notes {
         println!("  - {note}");
     }
@@ -1613,7 +1613,7 @@ fn ensure_elevated_for_tun() -> Result<()> {
     };
 
     // ShellExecuteW's return is a pseudo-HINSTANCE: > 32 means the call itself
-    // "succeeded" — but that range INCLUDES ERROR_CANCELLED (1223), which is
+    // "succeeded" - but that range INCLUDES ERROR_CANCELLED (1223), which is
     // exactly what Windows returns when the user clicks "No" on the UAC
     // prompt. The old check (`ret <= 32` only) treated a user-denied prompt
     // as success and silently exited without ever starting the tunnel.
@@ -1625,7 +1625,7 @@ fn ensure_elevated_for_tun() -> Result<()> {
         anyhow::bail!(
             "Failed to request UAC elevation (ShellExecuteW ret={}, GetLastError={}). \
              If this keeps happening, an unsigned binary can be silently blocked by \
-             SmartScreen/antivirus during elevation — try running this as Administrator manually.",
+             SmartScreen/antivirus during elevation - try running this as Administrator manually.",
             ret, win_err
         );
     }
@@ -1638,7 +1638,7 @@ async fn run_client_directly(client_cfg: ClientConfig) -> Result<()> {
     println!("{} Starting client (mode={}, server={})", "[ostp]".cyan().bold(), mode_str.yellow(), client_cfg.server.cyan());
 
     // TUN mode needs admin rights to create the WinTun adapter. This was
-    // missing entirely before — the CLI would just try to create the
+    // missing entirely before - the CLI would just try to create the
     // adapter unelevated and fail at the driver level with no UAC prompt
     // ever shown, which is what "UAC denied regardless of GUI or TUI"
     // actually was for this code path: TUI never asked for elevation at all.

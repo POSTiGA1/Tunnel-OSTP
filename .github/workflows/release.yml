@@ -1,20 +1,20 @@
 name: CI/CD
 
 
-# `run-name` is evaluated at workflow-start, BEFORE any job runs — it cannot
-# see resolve-channel's computed tag_name (e.g. "0.4.3-nightly"), only the
+# `run-name` is evaluated at workflow-start, BEFORE any job runs - it cannot
+# see resolve-channel's computed tag_name (e.g. "0.4.3-alpha"), only the
 # `github.*` context. The old "release version ${{ github.ref_name }}" showed
-# the bare branch name ("nightly"/"pre-release") for every run, which reads
-# exactly like a literal release tag and caused real confusion — the actual
+# the bare branch name ("alpha"/"pre-release") for every run, which reads
+# exactly like a literal release tag and caused real confusion - the actual
 # release tag has been correct (versioned) all along; only this label lied
 # about it. Spell out "channel" so nobody mistakes one for the other again.
 # NOTE: this value MUST be quoted. The GHA string literal below contains
-# "Release build: {0}" — an unquoted YAML plain scalar treats ": " (colon
+# "Release build: {0}" - an unquoted YAML plain scalar treats ": " (colon
 # then space) as starting a nested mapping, which is exactly what broke every
 # single push since this line was introduced: GitHub rejected the whole
 # workflow file at parse time (before any job runs), silently burning an
 # Actions-minutes-billed run per push for nothing.
-run-name: "${{ startsWith(github.ref, 'refs/tags/') && (contains(github.ref_name, 'beta') && format('CI/CD: beta version {0}', github.ref_name) || contains(github.ref_name, 'nightly') && format('CI/CD: nightly version {0}', github.ref_name) || format('CI/CD: release version {0}', github.ref_name)) || format('CI/CD: {0} channel build', github.ref_name) }}"
+run-name: "${{ startsWith(github.ref, 'refs/tags/') && (contains(github.ref_name, 'beta') && format('CI/CD: beta version {0}', github.ref_name) || contains(github.ref_name, 'alpha') && format('CI/CD: alpha version {0}', github.ref_name) || format('CI/CD: release version {0}', github.ref_name)) || format('CI/CD: {0} channel build', github.ref_name) }}"
 
 on:
   push:
@@ -25,20 +25,20 @@ on:
       channel:
         description: >-
           Manually build+release just this rolling channel. Stable releases
-          are NEVER picked here on purpose — cut those only via a real
+          are NEVER picked here on purpose - cut those only via a real
           "vX.Y.Z" tag push, so a manual dispatch can't accidentally publish
           a "stable" release.
         type: choice
         required: true
-        default: nightly
+        default: alpha
         options:
-          - nightly
+          - alpha
           - beta
 
 permissions:
   contents: write
 
-# ── Global defaults ─────────────────────────────────────────────────────────
+# -- Global defaults ---------------------------------------------------------
 env:
   CARGO_TERM_COLOR: always
   CARGO_INCREMENTAL: 0
@@ -52,9 +52,9 @@ jobs:
   #
   # Tag shape:
   #   - real "vX.Y.Z" / "vX.Y.Z-beta.N" tag push -> tag used as-is (stable promotion)
-  #   - push to `nightly`                        -> "{version}-nightly" (rolling, same tag every push)
+  #   - push to `alpha`                        -> "{version}-alpha" (rolling, same tag every push)
   #   - push to `pre-release`                     -> "{version}-beta"    (rolling, same tag every push)
-  #   - workflow_dispatch                         -> forced by the `channel` input (nightly|beta only)
+  #   - workflow_dispatch                         -> forced by the `channel` input (alpha|beta only)
   resolve-channel:
     name: Resolve release channel
     runs-on: ubuntu-latest
@@ -77,12 +77,12 @@ jobs:
             TAG="${{ github.ref_name }}"
           elif [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
             CHANNEL="${{ github.event.inputs.channel }}"
-          elif [ "${{ github.ref_name }}" = "nightly" ]; then
-            CHANNEL="nightly"
+          elif [ "${{ github.ref_name }}" = "alpha" ]; then
+            CHANNEL="alpha"
           elif [ "${{ github.ref_name }}" = "pre-release" ]; then
             CHANNEL="beta"
           else
-            CHANNEL="nightly"
+            CHANNEL="alpha"
           fi
 
           if [ "$CHANNEL" != "stable" ]; then
@@ -137,7 +137,7 @@ jobs:
       fail-fast: false
       matrix:
         include:
-          # ── Windows ──────────────────────────────────────────────────────
+          # -- Windows ------------------------------------------------------
           - os: windows-latest
             target: x86_64-pc-windows-msvc
             artifact_name: ostp.exe
@@ -156,7 +156,7 @@ jobs:
             release_name: ostp-windows-arm64.zip
             wintun_arch: arm64
 
-          # ── macOS ─────────────────────────────────────────────────────────
+          # -- macOS ---------------------------------------------------------
           - os: macos-latest
             target: x86_64-apple-darwin
             artifact_name: ostp
@@ -167,7 +167,7 @@ jobs:
             artifact_name: ostp
             release_name: ostp-darwin-arm64.tar.gz
 
-          # ── Linux native ──────────────────────────────────────────────────
+          # -- Linux native --------------------------------------------------
           - os: ubuntu-latest
             target: x86_64-unknown-linux-musl
             artifact_name: ostp
@@ -179,7 +179,7 @@ jobs:
             release_name: ostp-linux-386.tar.gz
             use_cross: true
 
-          # ── Linux cross ───────────────────────────────────────────────────
+          # -- Linux cross ---------------------------------------------------
           - os: ubuntu-latest
             target: aarch64-unknown-linux-musl
             artifact_name: ostp
@@ -203,7 +203,7 @@ jobs:
             artifact_name: ostp
             release_name: ostp-linux-mipsle.tar.gz
             use_cross: true
-            toolchain: nightly
+            toolchain: alpha
 
           - os: ubuntu-latest
             target: riscv64gc-unknown-linux-gnu
@@ -217,7 +217,7 @@ jobs:
       - name: Checkout code
         uses: actions/checkout@v4
 
-      # ── Frontend Build ─────────────────────────────────────────────────────
+      # -- Frontend Build -----------------------------------------------------
       - name: Setup Node.js
         uses: actions/setup-node@v4
         with:
@@ -230,18 +230,18 @@ jobs:
           if [ -f package.json ]; then
             npm install && npm run build
           else
-            echo "ostp-control has no package.json — using committed dist/"
+            echo "ostp-control has no package.json - using committed dist/"
             [ -f dist/index.html ] || echo '<!doctype html><title>OSTP</title>' > dist/index.html
           fi
 
-      # ── Rust toolchain ─────────────────────────────────────────────────────
+      # -- Rust toolchain -----------------------------------------------------
       - name: Setup Rust toolchain
         uses: dtolnay/rust-toolchain@stable
         with:
           toolchain: ${{ matrix.toolchain || 'stable' }}
           targets: ${{ !matrix.use_cross && matrix.target || '' }}
 
-      # ── Cargo cache (shared per target) ───────────────────────────────────
+      # -- Cargo cache (shared per target) -----------------------------------
       - name: Restore Cargo cache
         uses: actions/cache@v4
         with:
@@ -254,18 +254,18 @@ jobs:
           restore-keys: |
             cargo-${{ matrix.target }}-
 
-      # ── MUSL tools for native Linux musl builds ────────────────────────────
+      # -- MUSL tools for native Linux musl builds ----------------------------
       - name: Install musl-tools
         if: ${{ matrix.os == 'ubuntu-latest' && !matrix.use_cross }}
         run: sudo apt-get update && sudo apt-get install -y musl-tools
 
-      # ── Native build ───────────────────────────────────────────────────────
+      # -- Native build -------------------------------------------------------
       - name: Build (native)
         if: ${{ !matrix.use_cross }}
         shell: bash
         run: cargo build --release --target ${{ matrix.target }} --bin ostp
 
-      # ── Cross build ────────────────────────────────────────────────────────
+      # -- Cross build --------------------------------------------------------
       - name: Restore cross binary cache
         if: ${{ matrix.use_cross }}
         id: cross-cache
@@ -282,7 +282,7 @@ jobs:
         if: ${{ matrix.use_cross }}
         run: cross build --release --target ${{ matrix.target }} --bin ostp
 
-      # ── Driver dependencies ────────────────────────────────────────────────
+      # -- Driver dependencies ------------------------------------------------
       - name: Download wintun (Windows)
         if: ${{ matrix.os == 'windows-latest' }}
         shell: pwsh
@@ -294,7 +294,7 @@ jobs:
           Get-ChildItem "$dir/wt_tmp" -Filter "wintun.dll" -Recurse | Where-Object { $_.FullName -match 'bin[\\/]${{ matrix.wintun_arch }}[\\/]' } | Copy-Item -Destination "$dir/"
           Remove-Item "$dir/wt.zip","$dir/wt_tmp" -Recurse -Force
 
-      # ── Package ────────────────────────────────────────────────────────────
+      # -- Package ------------------------------------------------------------
       - name: Package (Windows)
         if: ${{ matrix.os == 'windows-latest' }}
         shell: pwsh
@@ -313,12 +313,12 @@ jobs:
           FILES="${{ matrix.artifact_name }}"
           tar -czf "${{ matrix.release_name }}" -C "$dir" $FILES
 
-      # ── Upload ─────────────────────────────────────────────────────────────
+      # -- Upload -------------------------------------------------------------
       - name: Upload to GitHub Release
         uses: softprops/action-gh-release@v2
         with:
           # Computed once in resolve-channel so every platform/job in this run
-          # lands on the exact same tag: "{version}-nightly" / "{version}-beta"
+          # lands on the exact same tag: "{version}-alpha" / "{version}-beta"
           # for rolling channel pushes, or the pushed "vX.Y.Z" tag as-is for a
           # real stable release.
           tag_name: ${{ needs.resolve-channel.outputs.tag_name }}
@@ -397,7 +397,7 @@ jobs:
         uses: softprops/action-gh-release@v2
         with:
           # Computed once in resolve-channel so every platform/job in this run
-          # lands on the exact same tag: "{version}-nightly" / "{version}-beta"
+          # lands on the exact same tag: "{version}-alpha" / "{version}-beta"
           # for rolling channel pushes, or the pushed "vX.Y.Z" tag as-is for a
           # real stable release.
           tag_name: ${{ needs.resolve-channel.outputs.tag_name }}
@@ -462,7 +462,7 @@ jobs:
         uses: softprops/action-gh-release@v2
         with:
           # Computed once in resolve-channel so every platform/job in this run
-          # lands on the exact same tag: "{version}-nightly" / "{version}-beta"
+          # lands on the exact same tag: "{version}-alpha" / "{version}-beta"
           # for rolling channel pushes, or the pushed "vX.Y.Z" tag as-is for a
           # real stable release.
           tag_name: ${{ needs.resolve-channel.outputs.tag_name }}
@@ -524,7 +524,7 @@ jobs:
         uses: softprops/action-gh-release@v2
         with:
           # Computed once in resolve-channel so every platform/job in this run
-          # lands on the exact same tag: "{version}-nightly" / "{version}-beta"
+          # lands on the exact same tag: "{version}-alpha" / "{version}-beta"
           # for rolling channel pushes, or the pushed "vX.Y.Z" tag as-is for a
           # real stable release.
           tag_name: ${{ needs.resolve-channel.outputs.tag_name }}
@@ -597,7 +597,7 @@ jobs:
         uses: softprops/action-gh-release@v2
         with:
           # Computed once in resolve-channel so every platform/job in this run
-          # lands on the exact same tag: "{version}-nightly" / "{version}-beta"
+          # lands on the exact same tag: "{version}-alpha" / "{version}-beta"
           # for rolling channel pushes, or the pushed "vX.Y.Z" tag as-is for a
           # real stable release.
           tag_name: ${{ needs.resolve-channel.outputs.tag_name }}

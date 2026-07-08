@@ -1,4 +1,4 @@
-# OSTP — Ospab Stealth Transport Protocol
+# OSTP - Ospab Stealth Transport Protocol
 
 [Русский язык](README.ru.md) · [Wiki](https://github.com/ospab/ostp/wiki) · [Contributing](CONTRIBUTING.md) · [Releases](https://github.com/ospab/ostp/releases)
 
@@ -10,7 +10,7 @@
 
 > A fast, custom encrypted transport protocol written in Rust.
 
-**OSTP** (Ospab Stealth Transport Protocol) is a high-performance transport protocol. It implements a custom ARQ transport over UDP, as well as a UoT (UDP-over-TCP) mode. Every byte on the wire — including packet headers — is cryptographically indistinguishable from random noise, making it highly resistant to Deep Packet Inspection (DPI).
+**OSTP** (Ospab Stealth Transport Protocol) is a high-performance transport protocol. It implements a custom ARQ transport over UDP, as well as a UoT (UDP-over-TCP) mode. Every byte on the wire - including packet headers - is cryptographically indistinguishable from random noise, making it highly resistant to Deep Packet Inspection (DPI).
 
 ---
 
@@ -35,13 +35,13 @@ Download pre-built binaries for your platform from [GitHub Releases](https://git
 
 | Feature | Description |
 |---------|-------------|
-| **Full Traffic Obfuscation** | Every packet — including headers — is indistinguishable from random noise. Session IDs and nonces are masked with per-packet HMAC-derived keys. |
-| **Noise Protocol Handshake** | `Noise_NNpsk0_25519_ChaChaPoly_BLAKE2s` — PSK-authenticated, forward-secret key exchange with no static identity exposure. |
+| **Full Traffic Obfuscation** | Every packet - including headers - is indistinguishable from random noise. Session IDs and nonces are masked with per-packet HMAC-derived keys. |
+| **Noise Protocol Handshake** | `Noise_NNpsk0_25519_ChaChaPoly_BLAKE2s` - PSK-authenticated, forward-secret key exchange with no static identity exposure. |
 | **Reliable UDP (ARQ)** | Selective ACK/NACK with rate-limited retransmission, configurable reorder buffer, and exponential backoff. |
 | **Multiplexed Streams** | Multiple logical TCP streams over a single encrypted UDP session with per-stream flow control. |
-| **Seamless Roaming** | Clients can switch networks (WiFi ↔ LTE) without session interruption — tracked by session-ID, not IP. |
+| **Seamless Roaming** | Clients can switch networks (WiFi ↔ LTE) without session interruption - tracked by session-ID, not IP. |
 | **Management API** | Built-in REST API for third-party panels (3x-ui, custom dashboards). Per-user stats, traffic limits, key CRUD. |
-| **Fallback Server** | TCP fallback proxy to a web server — makes OSTP indistinguishable from nginx during active probing. |
+| **Fallback Server** | TCP fallback proxy to a web server - makes OSTP indistinguishable from nginx during active probing. |
 | **Multi-Listener** | Bind to multiple addresses simultaneously (dual-stack IPv4/IPv6, multi-port). |
 | **TUN Mode** | Full-system VPN via native `smoltcp` network stack without external dependencies. All traffic transparently routed through the tunnel. |
 | **xHTTP Stealth (UoT)** | UDP-over-TCP tunnel that completely hides traffic. Since all data is fully encrypted and length-prefixed, it bypasses DPI filters that block unknown UDP traffic by riding over a plain TCP connection. |
@@ -103,7 +103,7 @@ graph TD
 
 ### 2. Edit config
 
-**Server** — set your access keys:
+**Server** - set your access keys:
 ```jsonc
 {
   "mode": "server",
@@ -114,7 +114,7 @@ graph TD
 }
 ```
 
-**Client** — point to your server:
+**Client** - point to your server:
 ```jsonc
 {
   "mode": "client",
@@ -185,7 +185,7 @@ Commands:
   links                  Print client share links from the server config
   import <URL>           Import a share link into the config file
   update                 Update OSTP to the latest release
-    -b, --branch <NAME>    Release channel: stable, pre-release, nightly (default: stable)
+    -b, --branch <NAME>    Release channel: stable, pre-release, alpha (default: stable)
     -v, --version <VER>    Update to an exact version instead of the channel's latest
   migrate                Force-migrate the configuration file to the current format
   prober                 Run the DNS-transport resolver prober
@@ -231,7 +231,7 @@ cargo test -p ostp-core -p ostp-server
 
 ## Documentation
 
-- **[Wiki](https://github.com/ospab/ostp/wiki)** — Full documentation
+- **[Wiki](https://github.com/ospab/ostp/wiki)** - Full documentation
 - [Installation](https://github.com/ospab/ostp/wiki/Installation)
 - [Configuration Reference](https://github.com/ospab/ostp/wiki/Configuration)
 - [Management API](https://github.com/ospab/ostp/wiki/Management-API)

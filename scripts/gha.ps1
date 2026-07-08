@@ -5,14 +5,14 @@
 
 .DESCRIPTION
   Three release channels, in increasing order of stability:
-    nightly      -> pushes the `nightly` branch     -> tag "{version}-nightly"
+    alpha      -> pushes the `alpha` branch     -> tag "{version}-alpha"
     pre-release  -> pushes the `pre-release` branch  -> tag "{version}-beta"
     master       -> pushes an actual "v{version}" tag -> real stable release
 
   Promoting to pre-release/master first fast-forwards that branch to
-  `nightly` (--ff-only — this always succeeds cleanly as long as nobody ever
+  `alpha` (--ff-only - this always succeeds cleanly as long as nobody ever
   commits directly to pre-release/master, per CONTRIBUTING.md's branch
-  strategy), so a release always ships nightly's latest, not a stale branch.
+  strategy), so a release always ships alpha's latest, not a stale branch.
 
   Remembers the last {version, branch, prefix} it used in .release-state.json
   at the repo root. Running with no arguments repeats last time's branch and
@@ -25,11 +25,11 @@
   of the last released version. Becomes the new baseline for future bare runs.
 
 .PARAMETER Branch
-  Which branch to release from: master, pre-release, or nightly.
+  Which branch to release from: master, pre-release, or alpha.
   Defaults to whatever was used last time (see .release-state.json).
 
 .PARAMETER Prefix
-  Tag suffix for non-stable channels: beta or nightly. Ignored (forced empty)
+  Tag suffix for non-stable channels: beta or alpha. Ignored (forced empty)
   when -Branch master, since stable releases are bare "vX.Y.Z" tags.
   Defaults to whatever was used last time.
 
@@ -43,14 +43,14 @@
 
 .EXAMPLE
   .\scripts\gha.ps1 -Branch pre-release -Prefix beta
-  Promotes nightly -> pre-release and ships "{version}-beta".
+  Promotes alpha -> pre-release and ships "{version}-beta".
 #>
 [CmdletBinding()]
 param(
     [string]$Switch,
-    [ValidateSet('master', 'beta', 'nightly')]
+    [ValidateSet('master', 'beta', 'alpha')]
     [string]$Branch,
-    [ValidateSet('beta', 'nightly')]
+    [ValidateSet('beta', 'alpha')]
     [string]$Prefix
 )
 
@@ -60,38 +60,38 @@ function Write-Step($msg) { Write-Host "==> $msg" -ForegroundColor Cyan }
 function Write-Warn2($msg) { Write-Host "!! $msg" -ForegroundColor Yellow }
 function Fail($msg) { Write-Host "ERROR: $msg" -ForegroundColor Red; exit 1 }
 
-# ── Locate repo root, regardless of where this script was invoked from ──────
+# -- Locate repo root, regardless of where this script was invoked from ------
 $RepoRoot = (git rev-parse --show-toplevel 2>$null)
 if (-not $RepoRoot) { Fail "Not inside a git repository." }
 Set-Location $RepoRoot
 
 $StateFile = Join-Path $RepoRoot ".release-state.json"
 
-# ── Refuse to run on a dirty tree: this script commits, and an autocommit ──
-# ── silently sweeping up unrelated WIP changes would be a nasty surprise. ──
+# -- Refuse to run on a dirty tree: this script commits, and an autocommit --
+# -- silently sweeping up unrelated WIP changes would be a nasty surprise. --
 $dirty = git status --porcelain
 if ($dirty) {
     Write-Host $dirty
     Fail "Working tree has uncommitted changes. Commit or stash them first."
 }
 
-# ── Load remembered state (branch/prefix/version from the last release) ────
+# -- Load remembered state (branch/prefix/version from the last release) ----
 $State = $null
 if (Test-Path $StateFile) {
     $State = Get-Content $StateFile -Raw | ConvertFrom-Json
 }
 
-$ResolvedBranch = if ($Branch) { $Branch } elseif ($State) { $State.branch } else { "nightly" }
-$ResolvedPrefix = if ($Prefix) { $Prefix } elseif ($State) { $State.prefix } else { "nightly" }
+$ResolvedBranch = if ($Branch) { $Branch } elseif ($State) { $State.branch } else { "alpha" }
+$ResolvedPrefix = if ($Prefix) { $Prefix } elseif ($State) { $State.prefix } else { "alpha" }
 
-# Stable releases are always a bare "vX.Y.Z" tag, never suffixed — master
+# Stable releases are always a bare "vX.Y.Z" tag, never suffixed - master
 # never carries a prefix regardless of what was remembered or passed in.
 if ($ResolvedBranch -eq "master") {
     if ($Prefix) { Write-Warn2 "-Prefix is ignored for -Branch master (stable releases are bare 'vX.Y.Z' tags)." }
     $ResolvedPrefix = ""
 }
 
-# ── Resolve the version: exact via -Switch, else auto-increment the patch ──
+# -- Resolve the version: exact via -Switch, else auto-increment the patch --
 $CurrentVersion = if ($State) { $State.version } else {
     (Select-String -Path (Join-Path $RepoRoot "Cargo.toml") -Pattern '^version = "([0-9]+\.[0-9]+\.[0-9]+)"').Matches[0].Groups[1].Value
 }
@@ -106,32 +106,32 @@ if ($Switch) {
 
 Write-Step "Releasing $NewVersion on '$ResolvedBranch'$(if ($ResolvedPrefix) { " (tag suffix: -$ResolvedPrefix)" } else { " (stable, tag v$NewVersion)" })"
 
-# ── Checkout the target branch, promoting it from nightly first ────────────
+# -- Checkout the target branch, promoting it from alpha first ------------
 $CurrentBranch = git rev-parse --abbrev-ref HEAD
 if ($CurrentBranch -ne $ResolvedBranch) {
     Write-Step "Checking out $ResolvedBranch"
     git checkout $ResolvedBranch 2>&1 | Out-Null
     if ($LASTEXITCODE -ne 0) { Fail "Could not check out branch '$ResolvedBranch'." }
 }
-if ($ResolvedBranch -ne "nightly") {
-    Write-Step "Fast-forwarding $ResolvedBranch to nightly (promotion)"
-    git merge nightly --ff-only 2>&1 | Out-Null
+if ($ResolvedBranch -ne "alpha") {
+    Write-Step "Fast-forwarding $ResolvedBranch to alpha (promotion)"
+    git merge alpha --ff-only 2>&1 | Out-Null
     if ($LASTEXITCODE -ne 0) {
-        $msg = "'$ResolvedBranch' has diverged from nightly and can't fast-forward. " +
+        $msg = "'$ResolvedBranch' has diverged from alpha and can't fast-forward. " +
                "Per CONTRIBUTING.md, nothing should ever be committed directly to " +
-               "$ResolvedBranch — check what's there before forcing anything."
+               "$ResolvedBranch - check what's there before forcing anything."
         Fail $msg
     }
 }
 
-# ── Bump the version across every manifest that carries one ────────────────
+# -- Bump the version across every manifest that carries one ----------------
 Write-Step "Bumping version $CurrentVersion -> $NewVersion"
 
 function Set-VersionLine($Path, $Pattern, $Replacement) {
     $full = Join-Path $RepoRoot $Path
     $text = Get-Content $full -Raw
     $updated = $text -replace $Pattern, $Replacement
-    if ($updated -eq $text) { Fail "Version pattern not found in $Path — refusing to proceed with a stale file." }
+    if ($updated -eq $text) { Fail "Version pattern not found in $Path - refusing to proceed with a stale file." }
     [System.IO.File]::WriteAllText($full, $updated)
 }
 
@@ -140,7 +140,7 @@ Set-VersionLine "ostp-gui/src-tauri/Cargo.toml" '(?m)^version = "[0-9]+\.[0-9]+\
 Set-VersionLine "ostp-gui/src-tauri/tauri.conf.json" '"version": "[0-9]+\.[0-9]+\.[0-9]+"' "`"version`": `"$NewVersion`""
 Set-VersionLine "ostp-gui/package.json" '"version": "[0-9]+\.[0-9]+\.[0-9]+"' "`"version`": `"$NewVersion`""
 
-# Flutter build number must increase monotonically (Android versionCode) —
+# Flutter build number must increase monotonically (Android versionCode) -
 # bump it alongside the version string, don't just rewrite the version part.
 $pubspecPath = Join-Path $RepoRoot "ostp-flutter/pubspec.yaml"
 $pubspecText = Get-Content $pubspecPath -Raw
@@ -152,13 +152,13 @@ if ($pubspecText -match 'version: [0-9]+\.[0-9]+\.[0-9]+\+([0-9]+)') {
     Fail "Version pattern not found in ostp-flutter/pubspec.yaml."
 }
 
-# ── Refresh Cargo.lock's per-package version entries ────────────────────────
+# -- Refresh Cargo.lock's per-package version entries ------------------------
 # ostp-gui/src-tauri is excluded from the main workspace (its own Tauri build
 # graph), so it has its own separate Cargo.lock that the main `cargo check`
-# below never touches — needs its own pass or it'd drift from Cargo.toml.
+# below never touches - needs its own pass or it'd drift from Cargo.toml.
 Write-Step "Running cargo check to refresh Cargo.lock (main workspace)"
 cargo check --workspace --exclude ostp-jni --quiet
-if ($LASTEXITCODE -ne 0) { Fail "cargo check failed after the version bump — not committing a broken build." }
+if ($LASTEXITCODE -ne 0) { Fail "cargo check failed after the version bump - not committing a broken build." }
 
 Write-Step "Running cargo check to refresh Cargo.lock (ostp-gui/src-tauri)"
 Push-Location (Join-Path $RepoRoot "ostp-gui/src-tauri")
@@ -167,14 +167,14 @@ $tauriCheckExit = $LASTEXITCODE
 Pop-Location
 if ($tauriCheckExit -ne 0) { Fail "cargo check failed in ostp-gui/src-tauri after the version bump." }
 
-# ── Persist the new state ───────────────────────────────────────────────────
+# -- Persist the new state ---------------------------------------------------
 [PSCustomObject]@{
     version = $NewVersion
     branch  = $ResolvedBranch
     prefix  = $ResolvedPrefix
 } | ConvertTo-Json | Set-Content $StateFile
 
-# ── Commit ───────────────────────────────────────────────────────────────────
+# -- Commit -------------------------------------------------------------------
 $suffixLabel = if ($ResolvedPrefix) { "-$ResolvedPrefix" } else { "" }
 $commitMsg = "chore: release $NewVersion$suffixLabel on $ResolvedBranch"
 Write-Step "Committing: $commitMsg"
@@ -183,9 +183,9 @@ git add Cargo.toml Cargo.lock ostp-gui/src-tauri/Cargo.toml ostp-gui/src-tauri/C
     .release-state.json
 git commit -m $commitMsg | Out-Null
 
-# ── Push: branch push for nightly/pre-release (CI computes the tag itself), ─
-# ── a real "vX.Y.Z" tag for master (the only path that yields a stable      ─
-# ── release per release.yml's resolve-channel job).                        ─
+# -- Push: branch push for alpha/pre-release (CI computes the tag itself), -
+# -- a real "vX.Y.Z" tag for master (the only path that yields a stable      -
+# -- release per release.yml's resolve-channel job).                        -
 if ($ResolvedBranch -eq "master") {
     $tag = "v$NewVersion"
     Write-Step "Tagging $tag and pushing master + tag"

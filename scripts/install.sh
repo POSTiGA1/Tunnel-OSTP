@@ -28,7 +28,7 @@ fi
 mkdir -p "$INSTALL_DIR"
 mkdir -p "$CONFIG_DIR"
 
-# ── Migration from legacy installations ──────────────────────────────
+# -- Migration from legacy installations ------------------------------
 
 migrate_legacy() {
     local old_dir="$1"
@@ -68,7 +68,7 @@ if [ -L "$BIN_LINK" ] && [ ! -e "$BIN_LINK" ]; then
     rm -f "$BIN_LINK"
 fi
 
-# ── Architecture detection ───────────────────────────────────────────
+# -- Architecture detection -------------------------------------------
 
 ARCH=$(uname -m)
 case "$ARCH" in
@@ -85,7 +85,7 @@ esac
 
 echo "Platform: linux/$ARCH"
 
-# ── Parse arguments ────────────────────────────────────────────────────
+# -- Parse arguments ----------------------------------------------------
 TARGET_VERSION=""
 TARGET_BRANCH="stable"
 while [[ $# -gt 0 ]]; do
@@ -104,20 +104,20 @@ while [[ $# -gt 0 ]]; do
   esac
 done
 
-# ── Download binary ──────────────────────────────────────────────────
+# -- Download binary --------------------------------------------------
 
 if [ -n "$TARGET_VERSION" ]; then
     LATEST_RELEASE="$TARGET_VERSION"
     # Ensure it starts with 'v' if it's supposed to (only for real stable
-    # semver tags — the nightly/pre-release channels use bare tag names).
+    # semver tags - the alpha/pre-release channels use bare tag names).
     if [[ ! "$LATEST_RELEASE" =~ ^v ]] && [ "$TARGET_BRANCH" == "stable" ]; then
         LATEST_RELEASE="v$LATEST_RELEASE"
     fi
     echo "Fetching requested release $LATEST_RELEASE..."
 else
-    if [ "$TARGET_BRANCH" == "nightly" ]; then
-        echo "Fetching nightly release..."
-        LATEST_RELEASE="nightly"
+    if [ "$TARGET_BRANCH" == "alpha" ]; then
+        echo "Fetching alpha release..."
+        LATEST_RELEASE="alpha"
     elif [ "$TARGET_BRANCH" == "pre-release" ]; then
         echo "Fetching pre-release..."
         LATEST_RELEASE="pre-release"
@@ -166,19 +166,19 @@ else
     exit 1
 fi
 
-# ── Create global symlink ────────────────────────────────────────────
+# -- Create global symlink --------------------------------------------
 
 ln -sf "$INSTALL_DIR/ostp" "$BIN_LINK"
 echo "Symlink created: $BIN_LINK -> $INSTALL_DIR/ostp"
 
-# ── Update detection ─────────────────────────────────────────────────
+# -- Update detection -------------------------------------------------
 
 if [ -f "$CONFIG_FILE" ]; then
     echo "--------------------------------------------------------"
     echo "Existing configuration found at $CONFIG_FILE."
     echo "Binary updated to ${LATEST_RELEASE:-latest}."
 
-    # Config SCHEMA migration does NOT happen here (or anywhere automatic) —
+    # Config SCHEMA migration does NOT happen here (or anywhere automatic) -
     # it used to be an ad-hoc Python snippet embedded right in this script,
     # silently rewriting config.json on every update. That's exactly the kind
     # of surprise this project no longer does: the ONE place a config's shape
@@ -231,7 +231,7 @@ EOF
     exit 0
 fi
 
-# ── First install: delegate to the built-in setup wizard ─────────────
+# -- First install: delegate to the built-in setup wizard -------------
 
 echo ""
 echo "No configuration found. Launching setup wizard..."

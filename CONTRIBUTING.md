@@ -40,7 +40,7 @@ To build and test OSTP locally, you will need:
     cargo build
     ```
     `ostp-control` (the web panel) is only needed if you're working on it
-    specifically — the server build embeds a dummy `dist/` via `rust-embed`
+    specifically - the server build embeds a dummy `dist/` via `rust-embed`
     otherwise, so this step is not required for day-to-day core/client/server
     work. If you *are* touching the panel:
     ```bash
@@ -73,22 +73,22 @@ The repository runs three long-lived branches, in increasing order of stability:
 
 | Branch | Role |
 |---|---|
-| `nightly` | Active development. All feature work and fixes land here first. |
-| `pre-release` | Periodically fast-forwarded from `nightly` once it's had some soak time. Ships as the `{version}-beta` release channel. |
+| `alpha` | Active development. All feature work and fixes land here first. |
+| `pre-release` | Periodically fast-forwarded from `alpha` once it's had some soak time. Ships as the `{version}-beta` release channel. |
 | `master` | Fast-forwarded from `pre-release` when it's proven stable. Real, tagged releases (`vX.Y.Z`) are cut from here. |
 
-`pre-release` and `master` are **never** committed to directly — they only ever move forward by fast-forwarding from the branch below them. This means promotion is always a plain `git merge` with zero conflicts by construction: don't `git merge`/rebase feature work directly onto `pre-release` or `master`.
+`pre-release` and `master` are **never** committed to directly - they only ever move forward by fast-forwarding from the branch below them. This means promotion is always a plain `git merge` with zero conflicts by construction: don't `git merge`/rebase feature work directly onto `pre-release` or `master`.
 
-**Contributor PRs target `nightly`**, not `master`.
+**Contributor PRs target `alpha`**, not `master`.
 
 ---
 
 ## Development Workflow
 
 1.  **Check for existing issues** or open a new one to discuss proposed changes before starting work.
-2.  **Fork the repository** and create a new branch from `nightly`:
+2.  **Fork the repository** and create a new branch from `alpha`:
     ```bash
-    git checkout nightly
+    git checkout alpha
     git checkout -b feat/your-feature-name
     ```
 3.  **Implement your changes**, ensuring you write appropriate unit or integration tests.
@@ -112,13 +112,13 @@ The repository runs three long-lived branches, in increasing order of stability:
 ```
 <type>(<scope>): <short, imperative summary>
 
-<optional body — explain WHY, not what; the diff already shows what changed>
+<optional body - explain WHY, not what; the diff already shows what changed>
 ```
 
-- **Type** — one of: `feat` (new capability), `fix` (bug fix), `docs`, `refactor` (no behavior change), `perf`, `test`, `chore` (deps/tooling/version bumps), `ci`, `security`.
-- **Scope** (optional) — the crate or area touched: `client`, `server`, `core`, `gui`, `flutter`, `ci`, `docs`, etc. e.g. `fix(client): ...`.
-- **Summary** — imperative mood ("add", not "added"/"adds"), no trailing period, ideally under ~70 characters.
-- **Body** — only when the *why* isn't obvious from the diff: a prior bug this fixes, a constraint that shaped the approach, a tradeoff you made. Don't restate what the diff already shows. Wrap at ~72 columns.
+- **Type** - one of: `feat` (new capability), `fix` (bug fix), `docs`, `refactor` (no behavior change), `perf`, `test`, `chore` (deps/tooling/version bumps), `ci`, `security`.
+- **Scope** (optional) - the crate or area touched: `client`, `server`, `core`, `gui`, `flutter`, `ci`, `docs`, etc. e.g. `fix(client): ...`.
+- **Summary** - imperative mood ("add", not "added"/"adds"), no trailing period, ideally under ~70 characters.
+- **Body** - only when the *why* isn't obvious from the diff: a prior bug this fixes, a constraint that shaped the approach, a tradeoff you made. Don't restate what the diff already shows. Wrap at ~72 columns.
 
 ```
 fix(server): drop junk frames by per-key marker instead of a global one
@@ -129,7 +129,7 @@ from the access key (HKDF, same scheme as obfuscation_key/psk) so it's
 per-user and indistinguishable from the packet's own random payload.
 ```
 
-Multiple unrelated changes belong in separate commits, not one bundled commit — it keeps `git bisect` and review useful. Squash-merge is fine for a PR with a few "fix typo" / "address review" commits, but don't squash logically distinct changes together.
+Multiple unrelated changes belong in separate commits, not one bundled commit - it keeps `git bisect` and review useful. Squash-merge is fine for a PR with a few "fix typo" / "address review" commits, but don't squash logically distinct changes together.
 
 ---
 
@@ -148,7 +148,7 @@ Multiple unrelated changes belong in separate commits, not one bundled commit �
     ```bash
     git push origin feat/your-feature-name
     ```
-2.  Open a Pull Request (PR) targeting the `nightly` branch (see [Branch Strategy](#branch-strategy) — `master` only receives fast-forwards from `pre-release`, never direct PRs).
+2.  Open a Pull Request (PR) targeting the `alpha` branch (see [Branch Strategy](#branch-strategy) - `master` only receives fast-forwards from `pre-release`, never direct PRs).
 3.  In your PR description, explain the rationale behind your changes, what was fixed/added, and how it was tested.
 4.  Verify that GitHub Actions CI runs successfully on your PR.
 
