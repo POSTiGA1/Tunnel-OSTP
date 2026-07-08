@@ -183,7 +183,64 @@ pub async fn run_client(config: crate::config::ClientConfig) -> Result<()> {
     run_client_core(config, metrics, shutdown_rx, None).await
 }
 
+/// Runs the client with auto-reconnect: any subsystem ending — a network
+/// change stranding the TUN adapter/UDP socket on a dead interface, the OSTP
+/// protocol connection dropping in a way the inner Bridge-level retry (see
+/// `UiEvent::TunnelStopped` below) couldn't recover from, or a proxy/TUN task
+/// crashing outright — triggers a full clean restart (fresh DNS resolution,
+/// fresh Bridge, fresh TUN/proxy) with exponential backoff, instead of the
+/// client just dying. Only an explicit shutdown request stops this loop.
 pub async fn run_client_core(
+    config: crate::config::ClientConfig,
+    metrics: Arc<BridgeMetrics>,
+    mut shutdown_rx_ext: watch::Receiver<bool>,
+    config_rx: Option<watch::Receiver<crate::config::ClientConfig>>,
+) -> Result<()> {
+    use portable_atomic::Ordering;
+
+    const BACKOFF_SCHEDULE_SECS: [u64; 6] = [1, 2, 5, 10, 20, 30];
+    // A run that stayed up at least this long counts as "was actually
+    // connected", so a later drop restarts the backoff from the top instead
+    // of inheriting a long delay from a previous flaky stretch.
+    const STABLE_UPTIME: std::time::Duration = std::time::Duration::from_secs(60);
+    let mut backoff_idx = 0usize;
+
+    loop {
+        if *shutdown_rx_ext.borrow() {
+            return Ok(());
+        }
+
+        let attempt_start = std::time::Instant::now();
+        let result = run_client_once(config.clone(), metrics.clone(), shutdown_rx_ext.clone(), config_rx.clone()).await;
+
+        if *shutdown_rx_ext.borrow() {
+            // Shutdown was requested during (or right after) this attempt — honor it, don't retry.
+            return result;
+        }
+        if let Err(ref e) = result {
+            tracing::warn!("client run ended unexpectedly, will auto-reconnect: {e}");
+        }
+
+        if attempt_start.elapsed() >= STABLE_UPTIME {
+            backoff_idx = 0;
+        }
+        let delay = BACKOFF_SCHEDULE_SECS[backoff_idx.min(BACKOFF_SCHEDULE_SECS.len() - 1)];
+        backoff_idx += 1;
+
+        // Reflect the retry wait as "connecting" rather than "disconnected".
+        metrics.connection_state.store(1, Ordering::Relaxed);
+        tokio::select! {
+            _ = tokio::time::sleep(std::time::Duration::from_secs(delay)) => {}
+            _ = shutdown_rx_ext.changed() => {
+                if *shutdown_rx_ext.borrow() {
+                    return Ok(());
+                }
+            }
+        }
+    }
+}
+
+async fn run_client_once(
     mut config: crate::config::ClientConfig,
     metrics: Arc<BridgeMetrics>,
     mut shutdown_rx_ext: watch::Receiver<bool>,
