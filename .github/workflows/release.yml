@@ -1,6 +1,14 @@
 name: CI/CD
 
-run-name: "CI/CD: release version ${{ github.ref_name }}"
+
+# `run-name` is evaluated at workflow-start, BEFORE any job runs — it cannot
+# see resolve-channel's computed tag_name (e.g. "0.4.3-nightly"), only the
+# `github.*` context. The old "release version ${{ github.ref_name }}" showed
+# the bare branch name ("nightly"/"pre-release") for every run, which reads
+# exactly like a literal release tag and caused real confusion — the actual
+# release tag has been correct (versioned) all along; only this label lied
+# about it. Spell out "channel" so nobody mistakes one for the other again.
+run-name: ${{ startsWith(github.ref, 'refs/tags/') && format('Release build: {0}', github.ref_name) || format('Release build: {0} channel', github.ref_name) }}
 
 on:
   push:
