@@ -83,7 +83,7 @@ jobs:
           fi
 
           if [ "$CHANNEL" != "stable" ]; then
-            TAG="${BASE_VERSION}-${CHANNEL}"
+            TAG="v${BASE_VERSION}-${CHANNEL}"
           fi
 
           echo "Resolved channel=$CHANNEL tag=$TAG (base version $BASE_VERSION)"
