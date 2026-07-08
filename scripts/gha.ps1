@@ -6,12 +6,12 @@
 .DESCRIPTION
   Three release channels, in increasing order of stability:
     nightly      -> pushes the `nightly` branch     -> tag "{version}-nightly"
-    beta  -> pushes the `beta` branch  -> tag "{version}-beta"
+    pre-release  -> pushes the `pre-release` branch  -> tag "{version}-beta"
     master       -> pushes an actual "v{version}" tag -> real stable release
 
-  Promoting to beta/master first fast-forwards that branch to
+  Promoting to pre-release/master first fast-forwards that branch to
   `nightly` (--ff-only — this always succeeds cleanly as long as nobody ever
-  commits directly to beta/master, per CONTRIBUTING.md's branch
+  commits directly to pre-release/master, per CONTRIBUTING.md's branch
   strategy), so a release always ships nightly's latest, not a stale branch.
 
   Remembers the last {version, branch, prefix} it used in .release-state.json
@@ -25,7 +25,7 @@
   of the last released version. Becomes the new baseline for future bare runs.
 
 .PARAMETER Branch
-  Which branch to release from: master, beta, or nightly.
+  Which branch to release from: master, pre-release, or nightly.
   Defaults to whatever was used last time (see .release-state.json).
 
 .PARAMETER Prefix
@@ -42,8 +42,8 @@
   Starts releasing the 0.4.x line from now on; this run ships exactly 0.4.0.
 
 .EXAMPLE
-  .\scripts\gha.ps1 -Branch beta -Prefix beta
-  Promotes nightly -> beta and ships "{version}-beta".
+  .\scripts\gha.ps1 -Branch pre-release -Prefix beta
+  Promotes nightly -> pre-release and ships "{version}-beta".
 #>
 [CmdletBinding()]
 param(
@@ -183,7 +183,7 @@ git add Cargo.toml Cargo.lock ostp-gui/src-tauri/Cargo.toml ostp-gui/src-tauri/C
     .release-state.json
 git commit -m $commitMsg | Out-Null
 
-# ── Push: branch push for nightly/beta (CI computes the tag itself), ─
+# ── Push: branch push for nightly/pre-release (CI computes the tag itself), ─
 # ── a real "vX.Y.Z" tag for master (the only path that yields a stable      ─
 # ── release per release.yml's resolve-channel job).                        ─
 if ($ResolvedBranch -eq "master") {
