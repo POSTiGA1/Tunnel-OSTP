@@ -73,19 +73,27 @@ jobs:
           BASE_VERSION=$(grep -m1 '^version' Cargo.toml | sed -E 's/version *= *"([^"]+)"/\1/')
 
           if [[ "${{ github.ref }}" == refs/tags/v* ]]; then
-            CHANNEL="stable"
+            # A pushed tag is authoritative — use it AS-IS (never recompute it
+            # from Cargo.toml, or the release would upload to a different tag than
+            # the one that triggered this run). The channel, and thus prerelease,
+            # is decided by the tag's suffix: v0.4.7-beta / v0.4.7-alpha are
+            # prereleases; a bare vX.Y.Z is the only thing that becomes stable.
             TAG="${{ github.ref_name }}"
-          elif [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
-            CHANNEL="${{ github.event.inputs.channel }}"
-          elif [ "${{ github.ref_name }}" = "alpha" ]; then
-            CHANNEL="alpha"
-          elif [ "${{ github.ref_name }}" = "pre-release" ]; then
-            CHANNEL="beta"
+            case "$TAG" in
+              *-alpha*) CHANNEL="alpha" ;;
+              *-beta*)  CHANNEL="beta"  ;;
+              *)        CHANNEL="stable" ;;
+            esac
           else
-            CHANNEL="alpha"
-          fi
-
-          if [ "$CHANNEL" != "stable" ]; then
+            # No tag (workflow_dispatch, or a legacy branch push): pick the
+            # channel, then synthesize the rolling tag from Cargo.toml's version.
+            if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
+              CHANNEL="${{ github.event.inputs.channel }}"
+            elif [ "${{ github.ref_name }}" = "pre-release" ]; then
+              CHANNEL="beta"
+            else
+              CHANNEL="alpha"
+            fi
             TAG="v${BASE_VERSION}-${CHANNEL}"
           fi
 
