@@ -486,7 +486,9 @@ class _HomeScreenState extends State<HomeScreen> with TickerProviderStateMixin {
                 child: Image.asset(
                   'assets/logo.png',
                   width: MediaQuery.of(context).size.shortestSide * 0.6,
-                  color: Colors.white,
+                  // No color tint needed — the asset now carries real alpha
+                  // (background pixels' luminance was baked into alpha, see
+                  // git history), so it's already a pure white silhouette.
                 ),
               ),
             ),
