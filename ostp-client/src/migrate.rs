@@ -71,6 +71,11 @@ pub fn detect_kind(json: &Value) -> Option<ConfigKind> {
 ///   never user-meaningful data) and `transport.wss` (the WSS framing
 ///   feature removed entirely in the 0.4.0 rebuild) — both dropped with an
 ///   explicit note; everything else maps 1:1, nothing to convert.
+/// - **configs carrying a leftover `transport.stealth_sni`**: dropped with a
+///   note, same reasoning as `wss` — it never fed into anything on the wire
+///   (no TLS/HTTP mimicry exists in this project), so there is no successor
+///   field. Not tied to a specific version: it lingered in the schema well
+///   past when the mimicry work it was meant for got removed.
 /// - **current flat schema**: no-op, `changed = false`.
 pub fn migrate_client_json(json: Value) -> (Value, MigrationReport) {
     let mut report = MigrationReport::default();
@@ -103,6 +108,14 @@ pub fn migrate_client_json(json: Value) -> (Value, MigrationReport) {
                 "Dropped transport.wss — WSS framing was removed in the 0.4.0 rebuild \
                  (the project follows a zapret-like approach: no protocol mimicry, \
                  just packet-level obfuscation/manipulation, so there is no successor field)."
+                    .to_string(),
+            );
+        }
+        if transport.remove("stealth_sni").is_some() {
+            report.note(
+                "Dropped transport.stealth_sni — never actually used to construct any wire \
+                 bytes (no TLS/HTTP mimicry exists in this project — same zapret-like \
+                 reasoning as transport.wss), so it was unused config plumbing with no effect."
                     .to_string(),
             );
         }
@@ -199,12 +212,14 @@ fn migrate_client_from_modular(json: Value, mut report: MigrationReport) -> (Val
         .and_then(|v| v.as_str())
         .unwrap_or("udp")
         .to_string();
-    let stealth_sni = primary
-        .get("transport")
-        .and_then(|t| t.get("stealth_sni"))
-        .and_then(|v| v.as_str())
-        .unwrap_or("")
-        .to_string();
+    if let Some(sni) = primary.get("transport").and_then(|t| t.get("stealth_sni")).and_then(|v| v.as_str()) {
+        if !sni.is_empty() {
+            report.note(format!(
+                "Dropped transport.stealth_sni ({sni:?}) — never actually used to construct \
+                 any wire bytes; unused config plumbing with no successor field."
+            ));
+        }
+    }
     let tcp_fragmentation = primary
         .get("transport")
         .and_then(|t| t.get("tcp_fragmentation"))
@@ -287,7 +302,6 @@ fn migrate_client_from_modular(json: Value, mut report: MigrationReport) -> (Val
         },
         "transport": {
             "mode": transport_type,
-            "stealth_sni": stealth_sni,
             "tcp_fragmentation": tcp_fragmentation,
         },
     });
@@ -388,13 +402,15 @@ mod tests {
         assert_eq!(new["debug"], true);
         assert_eq!(new["tun"]["enable"], true);
         assert_eq!(new["transport"]["mode"], "uot");
-        assert_eq!(new["transport"]["stealth_sni"], "vk.com");
         assert_eq!(new["transport"]["tcp_fragmentation"], true);
         assert_eq!(new["mux"]["enabled"], true);
         assert_eq!(new["mux"]["sessions"], 4);
         assert_eq!(new["exclude"]["domains"], json!(["local.lan", "internal.corp"]));
         assert_eq!(new["exclude"]["ips"], json!(["192.168.0.0/16"]));
         assert_eq!(new["exclude"]["processes"], json!(["steam.exe"]));
+        // stealth_sni never fed into any wire bytes — dropped, not carried forward.
+        assert!(new["transport"].get("stealth_sni").is_none());
+        assert!(report.notes.iter().any(|n| n.contains("stealth_sni") && n.contains("vk.com")));
     }
 
     /// Old modular configs that had MULTIPLE ostp outbounds (multi-server) —
@@ -423,9 +439,9 @@ mod tests {
     }
 
     /// Pre-0.3.1 flat config carrying fields that no longer exist
-    /// (tun.wintun_path, tun.ipv4_address, transport.wss) — those get
-    /// dropped with a note; every field that's still meaningful passes
-    /// through untouched, byte for byte.
+    /// (tun.wintun_path, tun.ipv4_address, transport.wss, transport.stealth_sni)
+    /// — those get dropped with a note; every field that's still meaningful
+    /// passes through untouched, byte for byte.
     #[test]
     fn flat_legacy_drops_only_dead_fields() {
         let old = json!({
@@ -455,15 +471,16 @@ mod tests {
         assert_eq!(new["tun"]["dns"], "1.1.1.1");
         assert_eq!(new["tun"]["kill_switch"], true);
         assert_eq!(new["exclude"]["domains"], json!(["a.com"]));
-        assert_eq!(new["transport"]["stealth_sni"], "bing.com");
         // Dead fields are gone...
         assert!(new["tun"].get("wintun_path").is_none());
         assert!(new["tun"].get("ipv4_address").is_none());
         assert!(new["transport"].get("wss").is_none());
+        assert!(new["transport"].get("stealth_sni").is_none());
         // ...and their removal was reported, not silent.
         assert!(report.notes.iter().any(|n| n.contains("wintun_path")));
         assert!(report.notes.iter().any(|n| n.contains("ipv4_address")));
         assert!(report.notes.iter().any(|n| n.contains("wss")));
+        assert!(report.notes.iter().any(|n| n.contains("stealth_sni")));
     }
 
     /// A config already in the current shape must be a true no-op: report
@@ -476,7 +493,7 @@ mod tests {
             "tun": { "enable": false, "dns": null, "kill_switch": false },
             "exclude": { "domains": [], "ips": [], "processes": [] },
             "mux": { "enabled": false, "sessions": 1 },
-            "transport": { "mode": "udp", "stealth_sni": "", "tcp_fragmentation": false }
+            "transport": { "mode": "udp", "tcp_fragmentation": false }
         });
         let (new, report) = migrate_client_json(current.clone());
         assert!(!report.changed);

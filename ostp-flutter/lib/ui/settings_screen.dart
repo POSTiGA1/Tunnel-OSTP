@@ -115,7 +115,6 @@ class _SettingsScreenState extends State<SettingsScreen> {
       final type = uri.queryParameters['type'];
       final transportMode = (type == 'tcp' || type == 'http') ? 'uot' : 'udp';
       final name = uri.queryParameters['name'] ?? host;
-      final stealthSni = uri.queryParameters['sni'] ?? '';
       final wasEmpty = _profiles.isEmpty;
 
       setState(() {
@@ -125,7 +124,6 @@ class _SettingsScreenState extends State<SettingsScreen> {
           serverAddr: host,
           accessKey: key,
           transportMode: transportMode,
-          stealthSni: stealthSni,
           active: wasEmpty,
         ));
         _saveProfiles();
@@ -207,15 +205,6 @@ class _SettingsScreenState extends State<SettingsScreen> {
     );
   }
 
-  static const List<String> _stealthDomains = [
-    'yastatic.net', 'mc.yandex.ru', 'st.mycdn.me',
-    'top-fwz1.mail.ru', 'sso.passport.yandex.ru',
-    'sberbank.ru', 'ad.mail.ru', 'ads.vk.com',
-    'login.vk.com', 'api.sberbank.ru', 'ok.ru',
-    'rostelecom.ru', 'rt.ru', 'tinkoff.ru',
-    'x5.ru', 'ozon.ru', 'wildberries.ru', 'gosuslugi.ru', 'vk.com',
-  ];
-
   void _showEditProfileDialog(OstpProfile? profile) {
     final isNew = profile == null;
     final nameCtrl = TextEditingController(text: profile?.name ?? '');
@@ -229,7 +218,6 @@ class _SettingsScreenState extends State<SettingsScreen> {
     final junkPsMaxCtrl = TextEditingController(text: (profile?.junkPsMax ?? 1000).toString());
     String transportMode = profile?.transportMode ?? 'udp';
     bool tcpFragmentation = profile?.tcpFragmentation ?? false;
-    String stealthSni = (profile?.stealthSni.isNotEmpty ?? false) ? profile!.stealthSni : 'vk.com';
     bool obscureKey = true;
 
     showDialog(
@@ -265,27 +253,12 @@ class _SettingsScreenState extends State<SettingsScreen> {
                     decoration: const InputDecoration(labelText: 'Transport'),
                     items: const [
                       DropdownMenuItem(value: 'udp', child: Text('UDP')),
-                      DropdownMenuItem(value: 'uot', child: Text('TCP (UoT) — xHTTP stealth')),
+                      DropdownMenuItem(value: 'uot', child: Text('TCP (UoT)')),
                     ],
                     onChanged: (v) {
                       if (v != null) setDialogState(() => transportMode = v);
                     },
                   ),
-                  if (transportMode == 'uot') ...[
-                    const SizedBox(height: 12),
-                    Builder(builder: (context) {
-                      final domains = [..._stealthDomains];
-                      if (!domains.contains(stealthSni)) domains.add(stealthSni);
-                      return DropdownButtonFormField<String>(
-                        value: stealthSni,
-                        decoration: const InputDecoration(labelText: 'Stealth SNI domain'),
-                        items: domains.map((d) => DropdownMenuItem(value: d, child: Text(d))).toList(),
-                        onChanged: (v) {
-                          if (v != null) setDialogState(() => stealthSni = v);
-                        },
-                      );
-                    }),
-                  ],
                   const Divider(height: 32),
                   // Junk packets + TCP fragmentation moved into their own
                   // modals (tap to configure) — this dialog was carrying too
@@ -358,7 +331,6 @@ class _SettingsScreenState extends State<SettingsScreen> {
                         serverAddr: server,
                         accessKey: key,
                         transportMode: transportMode,
-                        stealthSni: stealthSni,
                         active: wasEmpty,
                         tcpFragmentation: tcpFragmentation,
                         fragChunk: int.tryParse(fragChunkCtrl.text) ?? 2,
@@ -373,7 +345,6 @@ class _SettingsScreenState extends State<SettingsScreen> {
                       profile.serverAddr = server;
                       profile.accessKey = key;
                       profile.transportMode = transportMode;
-                      profile.stealthSni = stealthSni;
                       profile.tcpFragmentation = tcpFragmentation;
                       profile.fragChunk = int.tryParse(fragChunkCtrl.text) ?? 2;
                       profile.fragSleep = int.tryParse(fragSleepCtrl.text) ?? 2;
@@ -503,7 +474,6 @@ class _SettingsScreenState extends State<SettingsScreen> {
     final key = Uri.encodeComponent(p.accessKey);
     if (p.serverAddr.isEmpty || p.accessKey.isEmpty) return;
     final queryParams = <String>[];
-    if (p.stealthSni.isNotEmpty) queryParams.add('sni=${Uri.encodeComponent(p.stealthSni)}');
     if (p.transportMode != 'udp') queryParams.add('type=${p.transportMode}');
     final queryString = queryParams.isEmpty ? '' : '?${queryParams.join('&')}';
     final url = 'ostp://$key@${p.serverAddr}$queryString';

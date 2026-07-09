@@ -70,15 +70,13 @@ pub struct LocalProxyConfig {
 }
 
 /// Transport layer configuration.
-/// `mode` = "udp" (default) or "uot" (UDP over TCP с xHTTP-транспортом).
+/// `mode` = "udp" (default) or "uot" (UDP over TCP, no protocol mimicry —
+/// zapret-like: no recognizable header at all, not a fake TLS/HTTP shell).
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct TransportConfig {
     /// "udp" or "uot"
     #[serde(default = "default_transport_mode")]
     pub mode: String,
-    /// TLS SNI and HTTP Host for xHTTP routing
-    #[serde(default)]
-    pub stealth_sni: String,
     /// Split the first UoT/TCP packet (handshake) into tiny TCP segments to
     /// break DPI that inspects the first packet. UoT/TCP only; ignored for UDP.
     pub tcp_fragmentation: bool,
@@ -106,7 +104,6 @@ impl Default for TransportConfig {
     fn default() -> Self {
         Self {
             mode: default_transport_mode(),
-            stealth_sni: String::new(),
             tcp_fragmentation: false,
             frag_chunk: default_frag_chunk(),
             frag_sleep: default_frag_sleep(),
@@ -192,7 +189,6 @@ struct RawUnifiedConfig {
 #[derive(Debug, Deserialize)]
 struct RawTransportSection {
     mode: Option<String>,
-    stealth_sni: Option<String>,
     tcp_fragmentation: Option<bool>,
     frag_chunk: Option<usize>,
     frag_sleep: Option<u64>,
@@ -270,7 +266,6 @@ impl ClientConfig {
             },
             transport: TransportConfig {
                 mode: raw.transport.as_ref().and_then(|t| t.mode.clone()).unwrap_or_else(default_transport_mode),
-                stealth_sni: raw.transport.as_ref().and_then(|t| t.stealth_sni.clone()).unwrap_or_default(),
                 tcp_fragmentation: raw.transport.as_ref().and_then(|t| t.tcp_fragmentation).unwrap_or(false),
                 frag_chunk: raw.transport.as_ref().and_then(|t| t.frag_chunk).unwrap_or_else(default_frag_chunk),
                 frag_sleep: raw.transport.as_ref().and_then(|t| t.frag_sleep).unwrap_or_else(default_frag_sleep),
@@ -495,7 +490,6 @@ pub struct ClientFileConfig {
 #[derive(Debug, Deserialize, Serialize, Clone)]
 pub struct TransportConfigRaw {
     pub mode: Option<String>,
-    pub stealth_sni: Option<String>,
     pub tcp_fragmentation: Option<bool>,
 }
 

@@ -169,14 +169,12 @@ fn parse_ostp_link(link: &str) -> Result<ClientConfig> {
     let host = parsed.host_str().ok_or_else(|| anyhow!("Missing host in share link"))?;
     let port = parsed.port().ok_or_else(|| anyhow!("Missing port in share link"))?;
     let server = format!("{host}:{port}");
-    let mut sni = String::new();
     let mut transport_mode = String::from("udp");
     let mut tun_enabled = false;
     let mut tun_dns = None;
 
     for (k, v) in parsed.query_pairs() {
         match &*k {
-            "sni" => sni = v.into_owned(),
             "type" => transport_mode = v.into_owned(),
             "tun" => tun_enabled = v == "true",
             "dns" => tun_dns = Some(v.into_owned()),
@@ -190,7 +188,6 @@ fn parse_ostp_link(link: &str) -> Result<ClientConfig> {
         mtu: None,
         transport: Some(TransportConfigRaw {
             mode: Some(transport_mode),
-            stealth_sni: Some(sni.clone()),
             tcp_fragmentation: None,
         }),
         socks5_bind: Some("127.0.0.1:1088".to_string()),
@@ -503,15 +500,14 @@ fn run_setup_wizard(config_path: &std::path::Path) -> Result<()> {
 
             // Try import from link first
             let use_link = wizard_yn("Do you have a share link (ostp://...)?", false);
-            let (server, access_key, sni, transport_mode) = if use_link {
+            let (server, access_key, transport_mode) = if use_link {
                 let link_str = wizard_prompt("Paste link", "");
                 let parsed = url::Url::parse(&link_str).unwrap();
                 let mut p = parsed.query_pairs();
-                let sni = p.find(|(k, _)| k == "sni").map(|(_, v)| v.to_string()).unwrap_or_default();
                 let tm = p.find(|(k, _)| k == "type").map(|(_, v)| v.to_string()).unwrap_or("udp".to_string());
-                (parsed.host_str().unwrap().to_string() + ":" + &parsed.port().unwrap_or(50000).to_string(), parsed.username().to_string(), sni, tm)
+                (parsed.host_str().unwrap().to_string() + ":" + &parsed.port().unwrap_or(50000).to_string(), parsed.username().to_string(), tm)
             } else {
-                ("127.0.0.1:50000".to_string(), "".to_string(), "".to_string(), "udp".to_string())
+                ("127.0.0.1:50000".to_string(), "".to_string(), "udp".to_string())
             };
 
             wizard_step(2, TOTAL, "Local proxy");
@@ -564,7 +560,6 @@ fn run_setup_wizard(config_path: &std::path::Path) -> Result<()> {
             // Build and save config
             let key_for_gen = generate_secure_key("hex");
             let _ = key_for_gen;
-            let _ = &sni;
 
             let client_json = serde_json::json!({
                 "mode": "client",
@@ -585,8 +580,7 @@ fn run_setup_wizard(config_path: &std::path::Path) -> Result<()> {
                     "processes": []
                 },
                 "transport": {
-                    "mode": transport_mode,
-                    "stealth_sni": "www.microsoft.com"
+                    "mode": transport_mode
                 },
                 "mux": {
                     "enabled": mux_enable,
@@ -1222,10 +1216,9 @@ async fn run_app() -> Result<()> {
     "processes": []
   }},
   
-  // Transport Mode: "udp" (default WebRTC masquerade) or "uot" (TCP UoT)
+  // Transport Mode: "udp" (default) or "uot" (UDP over TCP, no mimicry)
   "transport": {{
-    "mode": "udp",
-    "stealth_sni": "www.microsoft.com"
+    "mode": "udp"
   }},
   
   "mux": {{
@@ -1679,7 +1672,6 @@ async fn run_client_directly(client_cfg: ClientConfig) -> Result<()> {
         },
         transport: ostp_client::config::TransportConfig {
             mode: client_cfg.transport.as_ref().and_then(|t| t.mode.clone()).unwrap_or_else(|| "udp".to_string()),
-            stealth_sni: client_cfg.transport.as_ref().and_then(|t| t.stealth_sni.clone()).unwrap_or_else(|| "microsoft.com".to_string()),
             tcp_fragmentation: client_cfg.transport.as_ref().and_then(|t| t.tcp_fragmentation).unwrap_or(false),
             frag_chunk: 2,
             frag_sleep: 2,

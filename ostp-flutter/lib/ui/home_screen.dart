@@ -115,7 +115,6 @@ class _HomeScreenState extends State<HomeScreen> with TickerProviderStateMixin {
       // shape as the desktop GUI's profile object — not global toggles.
       "transport": {
         "mode": p?.transportMode ?? 'udp',
-        "stealth_sni": (p?.stealthSni.isNotEmpty ?? false) ? p!.stealthSni : 'vk.com',
         "tcp_fragmentation": p?.tcpFragmentation ?? false,
         "frag_chunk": p?.fragChunk ?? 2,
         "frag_sleep": p?.fragSleep ?? 2,

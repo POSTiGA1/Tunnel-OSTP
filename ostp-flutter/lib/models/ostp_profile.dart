@@ -11,7 +11,6 @@ class OstpProfile {
   String serverAddr;
   String accessKey;
   String transportMode; // 'udp' | 'uot'
-  String stealthSni;
   bool active;
 
   // Junk packets + TCP fragmentation — per-profile, exactly like ostp-gui's
@@ -31,7 +30,6 @@ class OstpProfile {
     required this.serverAddr,
     required this.accessKey,
     this.transportMode = 'udp',
-    this.stealthSni = '',
     this.active = false,
     this.tcpFragmentation = false,
     this.fragChunk = 2,
@@ -49,7 +47,6 @@ class OstpProfile {
       'serverAddr': serverAddr,
       'accessKey': accessKey,
       'transportMode': transportMode,
-      'stealthSni': stealthSni,
       'active': active,
       'tcpFragmentation': tcpFragmentation,
       'fragChunk': fragChunk,
@@ -68,7 +65,6 @@ class OstpProfile {
       serverAddr: json['serverAddr'] as String? ?? '',
       accessKey: json['accessKey'] as String? ?? '',
       transportMode: json['transportMode'] as String? ?? 'udp',
-      stealthSni: json['stealthSni'] as String? ?? '',
       active: json['active'] as bool? ?? false,
       tcpFragmentation: json['tcpFragmentation'] as bool? ?? false,
       fragChunk: json['fragChunk'] as int? ?? 2,

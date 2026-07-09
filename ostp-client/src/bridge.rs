@@ -65,7 +65,6 @@ pub struct Bridge {
     pub mux_sessions: usize,
 
     pub transport_mode: String,
-    pub stealth_sni: String,
     pub tcp_fragmentation: bool,
     pub frag_chunk: usize,
     pub frag_sleep: u64,
@@ -102,7 +101,6 @@ impl Bridge {
             mux_sessions: config.multiplex.sessions.max(1),
 
             transport_mode: config.transport.mode.clone(),
-            stealth_sni: config.transport.stealth_sni.clone(),
             tcp_fragmentation: config.transport.tcp_fragmentation,
             frag_chunk: config.transport.frag_chunk,
             frag_sleep: config.transport.frag_sleep,
@@ -1033,7 +1031,6 @@ impl Bridge {
         self.mux_enabled = cfg.multiplex.enabled;
         self.mux_sessions = cfg.multiplex.sessions.max(1);
         self.transport_mode = cfg.transport.mode.clone();
-        self.stealth_sni = cfg.transport.stealth_sni.clone();
         self.tcp_fragmentation = cfg.transport.tcp_fragmentation;
         self.frag_chunk = cfg.transport.frag_chunk.max(1);
         self.frag_sleep = cfg.transport.frag_sleep;
