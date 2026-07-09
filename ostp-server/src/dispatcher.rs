@@ -305,14 +305,22 @@ impl Dispatcher {
         // Not an existing session — try each registered access key's derived obfuscation key
         let keys_snapshot: Vec<String> = self.access_keys.read().unwrap_or_else(|e| e.into_inner()).keys().cloned().collect();
 
+        // Junk marker rotates per time window; check the current and previous
+        // window so a client whose clock is up to ~1 window behind/ahead is still
+        // recognised. Computed once per datagram, not per candidate key.
+        let junk_window = ostp_core::crypto::current_junk_window();
+
         for candidate_key in keys_snapshot {
             let secrets = ostp_core::crypto::derive_all_secrets(candidate_key.as_bytes());
 
-            // Junk frames carry this key's per-key derived marker (no global
-            // constant → no universal DPI signature). Drop silently — the secrets
-            // for this key are already derived here, so the check is free.
-            if packet.len() >= 4 && packet[0..4] == secrets.junk_marker {
-                return Ok(DispatchOutcome::Junk);
+            // Junk frames carry this key's time-rotating marker (no global
+            // constant, no static per-user signature). Drop silently.
+            if packet.len() >= 4 {
+                let m_now = ostp_core::crypto::derive_junk_marker(candidate_key.as_bytes(), junk_window);
+                let m_prev = ostp_core::crypto::derive_junk_marker(candidate_key.as_bytes(), junk_window.wrapping_sub(1));
+                if packet[0..4] == m_now || packet[0..4] == m_prev {
+                    return Ok(DispatchOutcome::Junk);
+                }
             }
 
             // Decode the session_id using this key's obfuscation

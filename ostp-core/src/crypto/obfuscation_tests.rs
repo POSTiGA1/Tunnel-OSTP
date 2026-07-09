@@ -191,4 +191,29 @@ mod tests {
         assert_eq!(recovered_nonce, nonce);
         assert_eq!(&packet[12..], &ciphertext);
     }
+
+    /// The junk marker must: be stable within a window (client and server agree),
+    /// rotate across windows (no static on-wire fingerprint), and differ per key
+    /// (one user's marker never silently-drops on another user's flow).
+    #[test]
+    fn test_junk_marker_rotation() {
+        let key_a = b"access-key-alpha";
+        let key_b = b"access-key-bravo";
+
+        // Stable within a window.
+        assert_eq!(derive_junk_marker(key_a, 1000), derive_junk_marker(key_a, 1000));
+
+        // Rotates across adjacent windows.
+        assert_ne!(derive_junk_marker(key_a, 1000), derive_junk_marker(key_a, 1001));
+        assert_ne!(derive_junk_marker(key_a, 1000), derive_junk_marker(key_a, 999));
+
+        // Distinct per key within the same window.
+        assert_ne!(derive_junk_marker(key_a, 1000), derive_junk_marker(key_b, 1000));
+
+        // A different protocol version yields a different marker (version gate).
+        assert_ne!(
+            derive_junk_marker_versioned(key_a, 1000, PROTOCOL_VERSION),
+            derive_junk_marker_versioned(key_a, 1000, PROTOCOL_VERSION.wrapping_add(1)),
+        );
+    }
 }

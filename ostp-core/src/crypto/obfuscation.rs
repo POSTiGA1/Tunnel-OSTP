@@ -59,11 +59,10 @@ pub struct DerivedSecrets {
     pub psk: [u8; 32],
     pub handshake_pad_min: usize,
     pub handshake_pad_max: usize,
-    /// Per-key 4-byte prefix stamped on junk frames so the server can drop them
-    /// without a GLOBAL constant marker (which would be a universal DPI signature
-    /// for all OSTP users — exactly what the version gate avoids for the handshake).
-    pub junk_marker: [u8; 4],
 }
+// NOTE: the junk marker is NOT part of DerivedSecrets — it is time-rotating and
+// derived separately per window via `derive_junk_marker` (see below), so it
+// carries no static per-user signature.
 
 /// OSTP wire protocol version. Mixed into key derivation (NOT sent on the
 /// wire) so peers running incompatible versions derive entirely different
@@ -129,23 +128,59 @@ pub(crate) fn derive_all_secrets_versioned(access_key: &[u8], version: u8) -> De
     let pad_min = 16 + (pad_bytes[0] as usize % 64);       // 16-79
     let pad_max = pad_min + 48 + (pad_bytes[1] as usize % 128); // +48..+175
 
-    // Derive junk marker (4 bytes) — info = key_hash[16..] || 0x04.
-    // Per-key: to an outsider it is indistinguishable from the random junk
-    // payload, so there is no cross-user signature; the server, knowing the key,
-    // derives the same marker and drops the junk silently.
-    let mut junk_info = info_base.to_vec();
-    junk_info.push(0x04);
-    let junk_bytes = hkdf_expand(&prk, &junk_info, 4);
-    let mut junk_marker = [0u8; 4];
-    junk_marker.copy_from_slice(&junk_bytes);
-
     DerivedSecrets {
         obfuscation_key,
         psk,
         handshake_pad_min: pad_min,
         handshake_pad_max: pad_max,
-        junk_marker,
     }
+}
+
+/// Window length (seconds) for the rotating junk marker. The marker changes
+/// every window, so junk carries no static per-user fingerprint on the wire;
+/// the server checks the current and previous window to absorb clock skew.
+pub const JUNK_MARKER_WINDOW_SECS: u64 = 60;
+
+/// The current junk-marker time window (unix seconds / window length).
+pub fn current_junk_window() -> u64 {
+    std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_secs() / JUNK_MARKER_WINDOW_SECS)
+        .unwrap_or(0)
+}
+
+/// Derive the 4-byte junk marker for a given time `window`.
+///
+/// Uses the same version-gated HKDF scheme as [`derive_all_secrets`], with the
+/// window folded into the `info` (label byte `0x04`). Folding in the window
+/// makes the marker rotate: to an on-path observer the junk prefix changes every
+/// window (no fixed signature), and a captured marker is only valid for ~1
+/// window. Only a holder of the access key can compute it, so an outsider cannot
+/// forge a silently-dropped junk packet.
+pub fn derive_junk_marker(access_key: &[u8], window: u64) -> [u8; 4] {
+    derive_junk_marker_versioned(access_key, window, PROTOCOL_VERSION)
+}
+
+pub(crate) fn derive_junk_marker_versioned(access_key: &[u8], window: u64, version: u8) -> [u8; 4] {
+    use sha2::Digest;
+    let key_hash = sha2::Sha256::digest(access_key);
+    let salt = &key_hash[..16];
+    let info_base = &key_hash[16..];
+
+    let mut ikm = Vec::with_capacity(access_key.len() + 1);
+    ikm.extend_from_slice(access_key);
+    ikm.push(version);
+    let prk = hkdf_extract(salt, &ikm);
+
+    // info = key_hash[16..] || 0x04 || window(LE) — same label byte as before,
+    // now parameterised by the time window.
+    let mut info = info_base.to_vec();
+    info.push(0x04);
+    info.extend_from_slice(&window.to_le_bytes());
+    let bytes = hkdf_expand(&prk, &info, 4);
+    let mut marker = [0u8; 4];
+    marker.copy_from_slice(&bytes);
+    marker
 }
 
 // ── Legacy API (delegates to derive_all_secrets) ─────────────────────────────

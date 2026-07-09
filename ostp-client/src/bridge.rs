@@ -1060,9 +1060,14 @@ impl Bridge {
             let frag_sleep = self.frag_sleep;
             let [junk_pc_min, junk_pc_max] = self.junk_pc;
             let [junk_ps_min, junk_ps_max] = self.junk_ps;
-            // Per-key junk marker (derived from the access key) — NOT a global
-            // constant, so junk frames carry no universal DPI signature.
-            let junk_marker = ostp_core::crypto::derive_all_secrets(&self.access_key).junk_marker;
+            // Time-rotating per-key junk marker — NOT a global constant and NOT
+            // even a static per-user value: it changes every window, so junk
+            // carries no fixed DPI signature on the wire. All frames in this
+            // burst are sent within milliseconds, so one window applies to all.
+            let junk_marker = ostp_core::crypto::derive_junk_marker(
+                &self.access_key,
+                ostp_core::crypto::current_junk_window(),
+            );
 
             {
                 use tokio::io::AsyncWriteExt;
