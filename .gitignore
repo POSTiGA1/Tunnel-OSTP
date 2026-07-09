@@ -46,3 +46,4 @@ ostp-brain/
 ostp-control/
 
 .agents/
+netstack-smoltcp/
