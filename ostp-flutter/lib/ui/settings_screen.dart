@@ -555,20 +555,34 @@ class _SettingsScreenState extends State<SettingsScreen> {
           ),
         ],
       ),
-      body: ListView(
-        padding: const EdgeInsets.symmetric(horizontal: 24, vertical: 16),
+      body: Stack(
         children: [
-          const Text('PROFILES', style: TextStyle(color: Colors.white54, fontSize: 13, fontWeight: FontWeight.bold, letterSpacing: 1.0)),
-          const SizedBox(height: 16),
-          if (_profiles.isEmpty)
-            Center(
-              child: Padding(
-                padding: const EdgeInsets.all(32.0),
-                child: Text('Create a new profile', style: TextStyle(color: Colors.white.withOpacity(0.5), fontSize: 18)),
+          Positioned.fill(
+            child: Opacity(
+              opacity: 0.1,
+              child: Center(
+                child: Image.asset(
+                  'assets/logo.png',
+                  width: MediaQuery.of(context).size.shortestSide * 0.6,
+                  color: Colors.white,
+                ),
               ),
-            )
-          else
-            ..._buildProfileCards(),
+            ),
+          ),
+          ListView(
+            padding: const EdgeInsets.symmetric(horizontal: 24, vertical: 16),
+            children: [
+              const Text('PROFILES', style: TextStyle(color: Colors.white54, fontSize: 13, fontWeight: FontWeight.bold, letterSpacing: 1.0)),
+              const SizedBox(height: 16),
+              if (_profiles.isEmpty)
+                Center(
+                  child: Padding(
+                    padding: const EdgeInsets.all(32.0),
+                    child: Text('Create a new profile', style: TextStyle(color: Colors.white54, fontSize: 18)),
+                  ),
+                )
+              else
+                ..._buildProfileCards(),
 
           const SizedBox(height: 32),
           const Text('CLIENT SETTINGS', style: TextStyle(color: Colors.white54, fontSize: 13, fontWeight: FontWeight.bold, letterSpacing: 1.0)),
@@ -673,6 +687,8 @@ class _SettingsScreenState extends State<SettingsScreen> {
 
           const SizedBox(height: 40),
         ],
+      ),
+      ],
       ),
     );
   }

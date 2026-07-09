@@ -481,7 +481,7 @@ class _HomeScreenState extends State<HomeScreen> with TickerProviderStateMixin {
         children: [
           Positioned.fill(
             child: Opacity(
-              opacity: 0.03,
+              opacity: 0.1,
               child: Center(
                 child: Image.asset(
                   'assets/logo.png',
