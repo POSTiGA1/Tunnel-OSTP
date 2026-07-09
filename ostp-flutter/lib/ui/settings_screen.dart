@@ -37,6 +37,8 @@ class _SettingsScreenState extends State<SettingsScreen> {
   bool _debugMode = false;
   bool _muxEnabled = false;
   bool _isCheckingUpdates = false;
+  bool _showSpeed = true;
+  bool _showRtt = true;
 
   List<OstpProfile> _profiles = [];
 
@@ -57,6 +59,8 @@ class _SettingsScreenState extends State<SettingsScreen> {
     // doesn't map to anything meaningful on Android the way it does on desktop.
     _debugMode = widget.prefs.getBool('debug_mode') ?? false;
     _muxEnabled = widget.prefs.getBool('mux_enabled') ?? false;
+    _showSpeed = widget.prefs.getBool('show_speed') ?? true;
+    _showRtt = widget.prefs.getBool('show_rtt') ?? true;
     _muxSessionsCtrl = TextEditingController(text: widget.prefs.getString('mux_sessions') ?? '2');
     _profiles = decodeProfiles(widget.prefs.getString('profiles_json'));
   }
@@ -81,6 +85,8 @@ class _SettingsScreenState extends State<SettingsScreen> {
     widget.prefs.setString('ex_ips', _ipsCtrl.text.trim());
     widget.prefs.setBool('debug_mode', _debugMode);
     widget.prefs.setBool('mux_enabled', _muxEnabled);
+    widget.prefs.setBool('show_speed', _showSpeed);
+    widget.prefs.setBool('show_rtt', _showRtt);
     widget.prefs.setString('mux_sessions', _muxSessionsCtrl.text.trim());
     widget.prefs.setString('profiles_json', encodeProfiles(_profiles));
   }
@@ -700,6 +706,8 @@ class _SettingsScreenState extends State<SettingsScreen> {
                   _buildTextField('MUX Sessions', _muxSessionsCtrl, hint: 'e.g. 2, 4, 8'),
 
                 _buildToggle('Debug Mode', 'Verbose logging', _debugMode, (v) => _debugMode = v),
+                _buildToggle('Show Speed', 'Live download/upload speed on the home screen', _showSpeed, (v) => _showSpeed = v),
+                _buildToggle('Show RTT', 'Live server ping on the home screen', _showRtt, (v) => _showRtt = v),
 
                 _buildTextField('Local Proxy Bind', _localBindCtrl, hint: '127.0.0.1:1088'),
                 _buildTextField('Custom DNS Server', _dnsCtrl, hint: '1.1.1.1 (e.g. 8.8.8.8)'),

@@ -32,6 +32,16 @@ class _HomeScreenState extends State<HomeScreen> with TickerProviderStateMixin {
   String _download = '0 B';
   String _upload = '0 B';
 
+  // Live throughput (bytes/sec, computed from deltas between polls) and RTT
+  // are optional, same as the desktop GUI's "Show Speed" / "Show RTT" toggles
+  // in client settings — default on, persisted in prefs.
+  bool _showSpeed = true;
+  bool _showRtt = true;
+  String _downSpeed = '0 B/s';
+  String _upSpeed = '0 B/s';
+  int _prevBytesRecv = 0;
+  int _prevBytesSent = 0;
+
   late AnimationController _pulseController;
   late AnimationController _spinController;
 
@@ -73,6 +83,8 @@ class _HomeScreenState extends State<HomeScreen> with TickerProviderStateMixin {
       // happen — the editor enforces exclusivity — but don't crash on stale data).
       final actives = profiles.where((p) => p.active).toList();
       _activeProfile = actives.isNotEmpty ? actives.first : null;
+      _showSpeed = widget.prefs.getBool('show_speed') ?? true;
+      _showRtt = widget.prefs.getBool('show_rtt') ?? true;
     });
     _updateLatestConfigJson();
   }
@@ -402,6 +414,12 @@ class _HomeScreenState extends State<HomeScreen> with TickerProviderStateMixin {
               setState(() {
                 _download = _formatBytes(bytesRecv);
                 _upload = _formatBytes(bytesSent);
+                final dRecv = bytesRecv > _prevBytesRecv ? bytesRecv - _prevBytesRecv : 0;
+                final dSent = bytesSent > _prevBytesSent ? bytesSent - _prevBytesSent : 0;
+                _prevBytesRecv = bytesRecv;
+                _prevBytesSent = bytesSent;
+                _downSpeed = '${_formatBytes(dRecv)}/s';
+                _upSpeed = '${_formatBytes(dSent)}/s';
                 if (rttMs > 0 && !_isCheckingPing) {
                   _pingText = 'Server Ping: $rttMs ms';
                   if (rttMs < 100) {
@@ -438,7 +456,30 @@ class _HomeScreenState extends State<HomeScreen> with TickerProviderStateMixin {
       _pingColor = Colors.white70;
     });
 
-    await Future.delayed(const Duration(milliseconds: 500));
+    try {
+      final metricsJson = await platform.invokeMethod('getMetrics');
+      if (metricsJson != null && metricsJson.isNotEmpty) {
+        final Map<String, dynamic> parsed = jsonDecode(metricsJson);
+        final rttMs = parsed['rtt_ms'] as int? ?? 0;
+        if (mounted) {
+          setState(() {
+            if (rttMs > 0) {
+              _pingText = 'Server Ping: $rttMs ms';
+              _pingColor = rttMs < 100
+                  ? const Color(0xFF22D3A5)
+                  : rttMs < 250
+                      ? Colors.amberAccent
+                      : Colors.redAccent;
+            } else {
+              _pingText = 'Server Ping: -- ms';
+              _pingColor = Colors.white54;
+            }
+          });
+        }
+      }
+    } catch (e) {
+      debugPrint("Failed to check latency: $e");
+    }
 
     if (mounted) {
       setState(() {
@@ -453,6 +494,10 @@ class _HomeScreenState extends State<HomeScreen> with TickerProviderStateMixin {
       _state = ConnectionStateEnum.disconnected;
       _download = '0 B';
       _upload = '0 B';
+      _downSpeed = '0 B/s';
+      _upSpeed = '0 B/s';
+      _prevBytesRecv = 0;
+      _prevBytesSent = 0;
       _pingText = 'Target Ping: -- ms';
       _pingColor = Colors.white54;
       _isCheckingPing = false;
@@ -725,6 +770,7 @@ class _HomeScreenState extends State<HomeScreen> with TickerProviderStateMixin {
           ),
         ),
 
+        if (_showRtt)
         AnimatedOpacity(
           opacity: _state == ConnectionStateEnum.connected ? 1.0 : 0.0,
           duration: const Duration(milliseconds: 300),
@@ -809,15 +855,15 @@ class _HomeScreenState extends State<HomeScreen> with TickerProviderStateMixin {
       child: Row(
         mainAxisAlignment: MainAxisAlignment.spaceAround,
         children: [
-          _buildMetricItem(Icons.arrow_downward_rounded, 'Download', _download, theme.colorScheme.secondary),
+          _buildMetricItem(Icons.arrow_downward_rounded, 'Download', _download, theme.colorScheme.secondary, _showSpeed ? _downSpeed : null),
           Container(width: 1, height: 40, color: Colors.white.withOpacity(0.15)),
-          _buildMetricItem(Icons.arrow_upward_rounded, 'Upload', _upload, theme.colorScheme.primary),
+          _buildMetricItem(Icons.arrow_upward_rounded, 'Upload', _upload, theme.colorScheme.primary, _showSpeed ? _upSpeed : null),
         ],
       ),
     );
   }
 
-  Widget _buildMetricItem(IconData icon, String label, String value, Color color) {
+  Widget _buildMetricItem(IconData icon, String label, String value, Color color, [String? speed]) {
     return Expanded(
       child: Row(
         mainAxisAlignment: MainAxisAlignment.center,
@@ -856,6 +902,19 @@ class _HomeScreenState extends State<HomeScreen> with TickerProviderStateMixin {
                     color: Colors.white,
                   ),
                 ),
+                if (speed != null) ...[
+                  const SizedBox(height: 2),
+                  Text(
+                    speed,
+                    overflow: TextOverflow.ellipsis,
+                    style: TextStyle(
+                      fontFamily: 'monospace',
+                      fontSize: 12,
+                      fontWeight: FontWeight.w600,
+                      color: color,
+                    ),
+                  ),
+                ],
               ],
             ),
           )
