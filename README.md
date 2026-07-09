@@ -188,9 +188,8 @@ Commands:
     -b, --branch <NAME>    Release channel: stable, pre-release, alpha (default: stable)
     -v, --version <VER>    Update to an exact version instead of the channel's latest
   migrate                Force-migrate the configuration file to the current format
-  prober                 Run the DNS-transport resolver prober
-  proxy-env               Print shell export commands for the local SOCKS proxy
-  proxy-env-clear         Print shell export commands to unset it
+  proxy-env              Print shell export commands for the local SOCKS proxy
+  proxy-env-clear        Print shell export commands to unset it
   uninstall              Stop the service and remove the binary and config
 
 Global options:

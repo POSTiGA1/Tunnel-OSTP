@@ -175,9 +175,8 @@ ostp [--config <PATH>] [КОМАНДА]
     -b, --branch <NAME>    Канал релиза: stable, pre-release, alpha (по умолчанию stable)
     -v, --version <VER>    Обновиться на точную версию вместо последней в канале
   migrate                Принудительно мигрировать конфиг к текущему формату
-  prober                 Запустить DNS-transport prober
-  proxy-env               Вывести shell-команды для локального SOCKS-прокси
-  proxy-env-clear         Вывести shell-команды для их отмены
+  proxy-env              Вывести shell-команды для локального SOCKS-прокси
+  proxy-env-clear        Вывести shell-команды для их отмены
   uninstall              Остановить сервис и удалить бинарник с конфигом
 
 Глобальные опции:
