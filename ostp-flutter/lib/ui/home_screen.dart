@@ -479,31 +479,15 @@ class _HomeScreenState extends State<HomeScreen> with TickerProviderStateMixin {
     return Scaffold(
       body: Stack(
         children: [
-          Positioned(
-            top: -150, right: -100,
-            child: Container(
-              width: 400, height: 400,
-              decoration: BoxDecoration(
-                shape: BoxShape.circle,
-                color: theme.colorScheme.primary.withOpacity(0.15),
-              ),
-              child: BackdropFilter(
-                filter: ImageFilter.blur(sigmaX: 100, sigmaY: 100),
-                child: Container(),
-              ),
-            ),
-          ),
-          Positioned(
-            bottom: -100, left: -100,
-            child: Container(
-              width: 350, height: 350,
-              decoration: BoxDecoration(
-                shape: BoxShape.circle,
-                color: theme.colorScheme.secondary.withOpacity(0.1),
-              ),
-              child: BackdropFilter(
-                filter: ImageFilter.blur(sigmaX: 100, sigmaY: 100),
-                child: Container(),
+          Positioned.fill(
+            child: Opacity(
+              opacity: 0.03,
+              child: Center(
+                child: Image.asset(
+                  'assets/logo.png',
+                  width: MediaQuery.of(context).size.shortestSide * 0.6,
+                  color: Colors.white,
+                ),
               ),
             ),
           ),

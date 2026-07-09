@@ -26,11 +26,11 @@ class OstpApp extends StatelessWidget {
       debugShowCheckedModeBanner: false,
       theme: ThemeData(
         brightness: Brightness.dark,
-        scaffoldBackgroundColor: const Color(0xFF08080F),
+        scaffoldBackgroundColor: const Color(0xFF000000),
         colorScheme: const ColorScheme.dark(
-          primary: Color(0xFF6C72FF),
-          secondary: Color(0xFF22D3A5),
-          surface: Color(0xFF151522),
+          primary: Color(0xFFFFFFFF),
+          secondary: Color(0xFFAAAAAA),
+          surface: Color(0xFF111111),
         ),
         fontFamily: 'Inter',
         useMaterial3: true,
