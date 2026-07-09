@@ -96,24 +96,35 @@ class MainActivity : FlutterActivity() {
                     }
                 }
                 "getInstalledApps" -> {
-                    try {
-                        val pm = packageManager
-                        val apps = pm.getInstalledApplications(PackageManager.GET_META_DATA)
-                        val list = apps.map { app ->
-                            val isSystem = ((app.flags and ApplicationInfo.FLAG_SYSTEM) != 0) &&
-                                           (pm.getLaunchIntentForPackage(app.packageName) == null)
-                            val iconBase64 = getAppIconBase64(pm, app)
-                            mapOf(
-                                "name" to pm.getApplicationLabel(app).toString(),
-                                "package" to app.packageName,
-                                "isSystem" to isSystem,
-                                "icon" to (iconBase64 ?: "")
-                            )
+                    // MethodChannel handlers run on the main/UI thread by default.
+                    // Enumerating every installed package AND decoding+re-encoding
+                    // each one's icon to PNG/base64 is expensive (100+ apps is
+                    // common) — done inline here it blocked the main thread for
+                    // 10-15s, during which Flutter couldn't render ANY frame, not
+                    // even the "loading" spinner, so the screen just appeared to
+                    // hang before jumping straight to the fully-loaded list.
+                    // Do the work on a background thread; only the final
+                    // `result.success(...)` needs to hop back onto the UI thread.
+                    val pm = packageManager
+                    Thread {
+                        try {
+                            val apps = pm.getInstalledApplications(PackageManager.GET_META_DATA)
+                            val list = apps.map { app ->
+                                val isSystem = ((app.flags and ApplicationInfo.FLAG_SYSTEM) != 0) &&
+                                               (pm.getLaunchIntentForPackage(app.packageName) == null)
+                                val iconBase64 = getAppIconBase64(pm, app)
+                                mapOf(
+                                    "name" to pm.getApplicationLabel(app).toString(),
+                                    "package" to app.packageName,
+                                    "isSystem" to isSystem,
+                                    "icon" to (iconBase64 ?: "")
+                                )
+                            }
+                            runOnUiThread { result.success(list) }
+                        } catch (e: Exception) {
+                            runOnUiThread { result.error("ERROR", e.message, null) }
                         }
-                        result.success(list)
-                    } catch (e: Exception) {
-                        result.error("ERROR", e.message, null)
-                    }
+                    }.start()
                 }
                 else -> result.notImplemented()
             }

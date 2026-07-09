@@ -15,6 +15,13 @@ class AppRoutingScreen extends StatefulWidget {
   State<AppRoutingScreen> createState() => _AppRoutingScreenState();
 }
 
+/// Picks readable black/white text for a given (opaque) background color.
+/// The monochrome theme's `primary` is pure white — hardcoded white text on
+/// top of it was invisible; this picks the contrasting color instead.
+Color _onColor(Color bg) {
+  return ThemeData.estimateBrightnessForColor(bg) == Brightness.light ? Colors.black : Colors.white;
+}
+
 class _AppRoutingScreenState extends State<AppRoutingScreen> {
   static const platform = MethodChannel('com.ospab.ostp/vpn');
   
@@ -154,10 +161,13 @@ class _AppRoutingScreenState extends State<AppRoutingScreen> {
                               color: _routingMode == 'bypass' ? theme.colorScheme.primary : Colors.white.withOpacity(0.1),
                             ),
                           ),
-                          child: const Center(
+                          child: Center(
                             child: Text(
                               'Bypass Mode',
-                              style: TextStyle(fontWeight: FontWeight.bold, color: Colors.white),
+                              style: TextStyle(
+                                fontWeight: FontWeight.bold,
+                                color: _routingMode == 'bypass' ? _onColor(theme.colorScheme.primary) : Colors.white70,
+                              ),
                             ),
                           ),
                         ),
@@ -181,10 +191,13 @@ class _AppRoutingScreenState extends State<AppRoutingScreen> {
                               color: _routingMode == 'proxy' ? theme.colorScheme.secondary : Colors.white.withOpacity(0.1),
                             ),
                           ),
-                          child: const Center(
+                          child: Center(
                             child: Text(
                               'Proxy Mode',
-                              style: TextStyle(fontWeight: FontWeight.bold, color: Colors.white),
+                              style: TextStyle(
+                                fontWeight: FontWeight.bold,
+                                color: _routingMode == 'proxy' ? _onColor(theme.colorScheme.secondary) : Colors.white70,
+                              ),
                             ),
                           ),
                         ),

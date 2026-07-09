@@ -11,6 +11,13 @@ import 'package:url_launcher/url_launcher.dart';
 import 'package:package_info_plus/package_info_plus.dart';
 import '../models/ostp_profile.dart';
 
+/// Picks readable black/white text for a given (opaque) background color.
+/// The monochrome theme's `primary` is pure white — hardcoded white text on
+/// top of it was invisible; this picks the contrasting color instead.
+Color _onColor(Color bg) {
+  return ThemeData.estimateBrightnessForColor(bg) == Brightness.light ? Colors.black : Colors.white;
+}
+
 class SettingsScreen extends StatefulWidget {
   final SharedPreferences prefs;
   const SettingsScreen({super.key, required this.prefs});
@@ -25,7 +32,6 @@ class _SettingsScreenState extends State<SettingsScreen> {
   late TextEditingController _mtuCtrl;
   late TextEditingController _domainsCtrl;
   late TextEditingController _ipsCtrl;
-  late TextEditingController _processesCtrl;
   late TextEditingController _muxSessionsCtrl;
 
   bool _debugMode = false;
@@ -46,7 +52,9 @@ class _SettingsScreenState extends State<SettingsScreen> {
     _mtuCtrl = TextEditingController(text: widget.prefs.getString('mtu') ?? '1140');
     _domainsCtrl = TextEditingController(text: widget.prefs.getString('ex_domains') ?? '');
     _ipsCtrl = TextEditingController(text: widget.prefs.getString('ex_ips') ?? '');
-    _processesCtrl = TextEditingController(text: widget.prefs.getString('ex_processes') ?? '');
+    // No "Bypass Processes" field on mobile — Android per-app selection
+    // (Configure Split Tunneling) already covers this; a process-name field
+    // doesn't map to anything meaningful on Android the way it does on desktop.
     _debugMode = widget.prefs.getBool('debug_mode') ?? false;
     _muxEnabled = widget.prefs.getBool('mux_enabled') ?? false;
     _muxSessionsCtrl = TextEditingController(text: widget.prefs.getString('mux_sessions') ?? '2');
@@ -61,7 +69,6 @@ class _SettingsScreenState extends State<SettingsScreen> {
     _mtuCtrl.dispose();
     _domainsCtrl.dispose();
     _ipsCtrl.dispose();
-    _processesCtrl.dispose();
     _muxSessionsCtrl.dispose();
     super.dispose();
   }
@@ -72,7 +79,6 @@ class _SettingsScreenState extends State<SettingsScreen> {
     widget.prefs.setString('mtu', _mtuCtrl.text.trim());
     widget.prefs.setString('ex_domains', _domainsCtrl.text.trim());
     widget.prefs.setString('ex_ips', _ipsCtrl.text.trim());
-    widget.prefs.setString('ex_processes', _processesCtrl.text.trim());
     widget.prefs.setBool('debug_mode', _debugMode);
     widget.prefs.setBool('mux_enabled', _muxEnabled);
     widget.prefs.setString('mux_sessions', _muxSessionsCtrl.text.trim());
@@ -281,43 +287,38 @@ class _SettingsScreenState extends State<SettingsScreen> {
                     }),
                   ],
                   const Divider(height: 32),
-                  // ── Junk packets + TCP fragmentation — same per-profile
-                  // fields/defaults as the desktop GUI's profile editor. ──
-                  const Text('DPI obfuscation', style: TextStyle(fontWeight: FontWeight.bold, fontSize: 13, color: Colors.white54, letterSpacing: 1.0)),
+                  // Junk packets + TCP fragmentation moved into their own
+                  // modals (tap to configure) — this dialog was carrying too
+                  // many fields at once; these two are advanced/occasional
+                  // settings, not something every profile edit needs to see.
+                  const Text('DPI OBFUSCATION', style: TextStyle(fontWeight: FontWeight.bold, fontSize: 13, color: Colors.white54, letterSpacing: 1.0)),
                   const SizedBox(height: 12),
                   Row(
                     children: [
-                      Expanded(child: TextField(controller: junkPcMinCtrl, keyboardType: TextInputType.number, decoration: const InputDecoration(labelText: 'Junk packets (min)'))),
+                      Expanded(
+                        child: OutlinedButton.icon(
+                          icon: const Icon(Icons.shuffle_rounded, size: 18),
+                          label: const Text('Junk Packets'),
+                          onPressed: () => _showJunkPacketsModal(
+                            context, junkPcMinCtrl, junkPcMaxCtrl, junkPsMinCtrl, junkPsMaxCtrl,
+                          ),
+                        ),
+                      ),
                       const SizedBox(width: 12),
-                      Expanded(child: TextField(controller: junkPcMaxCtrl, keyboardType: TextInputType.number, decoration: const InputDecoration(labelText: 'Junk packets (max)'))),
+                      Expanded(
+                        child: OutlinedButton.icon(
+                          icon: Icon(tcpFragmentation ? Icons.call_split_rounded : Icons.horizontal_rule_rounded, size: 18),
+                          label: Text(tcpFragmentation ? 'TCP Frag: On' : 'TCP Frag: Off'),
+                          onPressed: () => _showTcpFragModal(
+                            context,
+                            tcpFragmentation,
+                            (v) => setDialogState(() => tcpFragmentation = v),
+                            fragChunkCtrl, fragSleepCtrl,
+                          ),
+                        ),
+                      ),
                     ],
                   ),
-                  const SizedBox(height: 12),
-                  Row(
-                    children: [
-                      Expanded(child: TextField(controller: junkPsMinCtrl, keyboardType: TextInputType.number, decoration: const InputDecoration(labelText: 'Junk size (min, bytes)'))),
-                      const SizedBox(width: 12),
-                      Expanded(child: TextField(controller: junkPsMaxCtrl, keyboardType: TextInputType.number, decoration: const InputDecoration(labelText: 'Junk size (max, bytes)'))),
-                    ],
-                  ),
-                  const SizedBox(height: 8),
-                  SwitchListTile(
-                    contentPadding: EdgeInsets.zero,
-                    title: const Text('TCP Fragmentation', style: TextStyle(fontSize: 14)),
-                    subtitle: const Text('Split the handshake into small chunks', style: TextStyle(fontSize: 12, color: Colors.white54)),
-                    value: tcpFragmentation,
-                    onChanged: (v) => setDialogState(() => tcpFragmentation = v),
-                  ),
-                  if (tcpFragmentation) ...[
-                    const SizedBox(height: 4),
-                    Row(
-                      children: [
-                        Expanded(child: TextField(controller: fragChunkCtrl, keyboardType: TextInputType.number, decoration: const InputDecoration(labelText: 'Chunk size (bytes)'))),
-                        const SizedBox(width: 12),
-                        Expanded(child: TextField(controller: fragSleepCtrl, keyboardType: TextInputType.number, decoration: const InputDecoration(labelText: 'Delay (ms)'))),
-                      ],
-                    ),
-                  ],
                 ],
               ),
             ),
@@ -394,6 +395,110 @@ class _SettingsScreenState extends State<SettingsScreen> {
     );
   }
 
+  // The numeric fields below all edit the SAME TextEditingControllers that
+  // the outer profile-edit dialog already holds — no extra propagation is
+  // needed for them, closing this modal just leaves the shared controllers
+  // updated. Only the `tcpFragmentation` bool (not a controller) needs an
+  // explicit callback to reach back into the outer dialog's state.
+
+  void _showJunkPacketsModal(
+    BuildContext context,
+    TextEditingController pcMin,
+    TextEditingController pcMax,
+    TextEditingController psMin,
+    TextEditingController psMax,
+  ) {
+    showDialog(
+      context: context,
+      builder: (context) => AlertDialog(
+        backgroundColor: Theme.of(context).colorScheme.surface,
+        title: const Text('Junk Packets'),
+        content: SingleChildScrollView(
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              const Text(
+                'Sends random-size filler packets before the handshake so DPI can\'t fingerprint its size or timing.',
+                style: TextStyle(fontSize: 12, color: Colors.white54),
+              ),
+              const SizedBox(height: 16),
+              Row(
+                children: [
+                  Expanded(child: TextField(controller: pcMin, keyboardType: TextInputType.number, decoration: const InputDecoration(labelText: 'Count (min)'))),
+                  const SizedBox(width: 12),
+                  Expanded(child: TextField(controller: pcMax, keyboardType: TextInputType.number, decoration: const InputDecoration(labelText: 'Count (max)'))),
+                ],
+              ),
+              const SizedBox(height: 12),
+              Row(
+                children: [
+                  Expanded(child: TextField(controller: psMin, keyboardType: TextInputType.number, decoration: const InputDecoration(labelText: 'Size min (bytes)'))),
+                  const SizedBox(width: 12),
+                  Expanded(child: TextField(controller: psMax, keyboardType: TextInputType.number, decoration: const InputDecoration(labelText: 'Size max (bytes)'))),
+                ],
+              ),
+            ],
+          ),
+        ),
+        actions: [TextButton(onPressed: () => Navigator.pop(context), child: const Text('Done'))],
+      ),
+    );
+  }
+
+  void _showTcpFragModal(
+    BuildContext context,
+    bool initialEnabled,
+    ValueChanged<bool> onChanged,
+    TextEditingController chunkCtrl,
+    TextEditingController sleepCtrl,
+  ) {
+    bool enabled = initialEnabled;
+    showDialog(
+      context: context,
+      builder: (context) => StatefulBuilder(
+        builder: (context, setModalState) => AlertDialog(
+          backgroundColor: Theme.of(context).colorScheme.surface,
+          title: const Text('TCP Fragmentation'),
+          content: SingleChildScrollView(
+            child: Column(
+              mainAxisSize: MainAxisSize.min,
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                SwitchListTile(
+                  contentPadding: EdgeInsets.zero,
+                  title: const Text('Enabled', style: TextStyle(fontSize: 14)),
+                  subtitle: const Text('Split the handshake into small chunks', style: TextStyle(fontSize: 12, color: Colors.white54)),
+                  value: enabled,
+                  onChanged: (v) => setModalState(() => enabled = v),
+                ),
+                if (enabled) ...[
+                  const SizedBox(height: 8),
+                  Row(
+                    children: [
+                      Expanded(child: TextField(controller: chunkCtrl, keyboardType: TextInputType.number, decoration: const InputDecoration(labelText: 'Chunk size (bytes)'))),
+                      const SizedBox(width: 12),
+                      Expanded(child: TextField(controller: sleepCtrl, keyboardType: TextInputType.number, decoration: const InputDecoration(labelText: 'Delay (ms)'))),
+                    ],
+                  ),
+                ],
+              ],
+            ),
+          ),
+          actions: [
+            TextButton(
+              onPressed: () {
+                onChanged(enabled);
+                Navigator.pop(context);
+              },
+              child: const Text('Done'),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+
   void _showShareModal(OstpProfile p) {
     final key = Uri.encodeComponent(p.accessKey);
     if (p.serverAddr.isEmpty || p.accessKey.isEmpty) return;
@@ -408,7 +513,11 @@ class _SettingsScreenState extends State<SettingsScreen> {
       builder: (context) => AlertDialog(
         backgroundColor: Theme.of(context).colorScheme.surface,
         shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(20)),
-        title: Text('Share "${p.name}"', textAlign: TextAlign.center),
+        // Deliberately generic — not "Share {name}": when a profile has no
+        // custom name, `name` falls back to the raw server address, and this
+        // dialog is exactly the wrong place to be casually displaying that
+        // (screenshots, screen recordings, shoulder-surfing).
+        title: const Text('Share Profile', textAlign: TextAlign.center),
         content: Column(
           mainAxisSize: MainAxisSize.min,
           children: [
@@ -418,20 +527,24 @@ class _SettingsScreenState extends State<SettingsScreen> {
               child: QrImageView(data: url, version: QrVersions.auto, size: 200.0),
             ),
             const SizedBox(height: 20),
-            ElevatedButton.icon(
-              onPressed: () {
-                Clipboard.setData(ClipboardData(text: url));
-                ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('Copied to clipboard')));
-                Navigator.pop(context);
-              },
-              icon: const Icon(Icons.copy_rounded, color: Colors.white),
-              label: const Text('Copy Link', style: TextStyle(color: Colors.white)),
-              style: ElevatedButton.styleFrom(
-                backgroundColor: Theme.of(context).colorScheme.primary,
-                padding: const EdgeInsets.symmetric(horizontal: 24, vertical: 12),
-                shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
-              ),
-            ),
+            Builder(builder: (context) {
+              final bg = Theme.of(context).colorScheme.primary;
+              final fg = _onColor(bg);
+              return ElevatedButton.icon(
+                onPressed: () {
+                  Clipboard.setData(ClipboardData(text: url));
+                  ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('Copied to clipboard')));
+                  Navigator.pop(context);
+                },
+                icon: Icon(Icons.copy_rounded, color: fg),
+                label: Text('Copy Link', style: TextStyle(color: fg)),
+                style: ElevatedButton.styleFrom(
+                  backgroundColor: bg,
+                  padding: const EdgeInsets.symmetric(horizontal: 24, vertical: 12),
+                  shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
+                ),
+              );
+            }),
           ],
         ),
         actions: [TextButton(onPressed: () => Navigator.pop(context), child: const Text('Close'))],
@@ -516,13 +629,25 @@ class _SettingsScreenState extends State<SettingsScreen> {
           groupValue: activeId,
           onChanged: (_) => _selectActive(p),
         ),
-        title: Text(p.name, style: const TextStyle(fontWeight: FontWeight.bold)),
-        subtitle: Text('${p.serverAddr} (${p.transportMode.toUpperCase()})', style: const TextStyle(fontSize: 12)),
+        title: Text(p.name, style: const TextStyle(fontWeight: FontWeight.bold), maxLines: 1, overflow: TextOverflow.ellipsis),
+        // If the profile was never given a distinct name, `name` falls back
+        // to the raw server address (see the editor below) — showing it a
+        // second time here would just repeat the title verbatim, so only
+        // add it when it's actually different information.
+        subtitle: Text(
+          p.name == p.serverAddr
+              ? p.transportMode.toUpperCase()
+              : '${p.serverAddr} · ${p.transportMode.toUpperCase()}',
+          style: const TextStyle(fontSize: 12),
+          maxLines: 1,
+          overflow: TextOverflow.ellipsis,
+          softWrap: false,
+        ),
         trailing: Row(
           mainAxisSize: MainAxisSize.min,
           children: [
             IconButton(
-              icon: const Icon(Icons.qr_code_rounded, size: 20, color: Colors.white54),
+              icon: const Icon(Icons.share_rounded, size: 20, color: Colors.white54),
               onPressed: () => _showShareModal(p),
             ),
             IconButton(
@@ -622,7 +747,6 @@ class _SettingsScreenState extends State<SettingsScreen> {
                 ),
                 _buildTextField('Bypass Domains', _domainsCtrl, hint: 'example.com\n*.google.com', maxLines: 3),
                 _buildTextField('Bypass IPs / CIDR', _ipsCtrl, hint: '192.168.1.0/24\n10.0.0.1', maxLines: 3),
-                _buildTextField('Bypass Processes', _processesCtrl, hint: 'com.example.app', maxLines: 3),
 
                 const SizedBox(height: 8),
                 SizedBox(

@@ -85,7 +85,6 @@ class _HomeScreenState extends State<HomeScreen> with TickerProviderStateMixin {
     final p = _activeProfile;
     final exDomains = widget.prefs.getString('ex_domains') ?? '';
     final exIps = widget.prefs.getString('ex_ips') ?? '';
-    final exProcesses = widget.prefs.getString('ex_processes') ?? '';
     final debugMode = widget.prefs.getBool('debug_mode') ?? false;
     final mtu = widget.prefs.getString('mtu') ?? '1140';
     final muxEnabled = widget.prefs.getBool('mux_enabled') ?? false;
@@ -130,7 +129,9 @@ class _HomeScreenState extends State<HomeScreen> with TickerProviderStateMixin {
       "exclusions": {
         "domains": exDomains.split('\n').where((s) => s.trim().isNotEmpty).toList(),
         "ips": exIps.split('\n').where((s) => s.trim().isNotEmpty).toList(),
-        "processes": exProcesses.split('\n').where((s) => s.trim().isNotEmpty).toList(),
+        // No per-process exclusion field on mobile — Android's per-app
+        // selection (app_rules below) is the equivalent, and correct, control.
+        "processes": const [],
       },
       "app_rules": {
         "mode": appRoutingMode,
