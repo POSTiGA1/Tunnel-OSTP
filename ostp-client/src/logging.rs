@@ -3,6 +3,53 @@ use std::io::Write;
 use std::path::PathBuf;
 use tracing_subscriber::{layer::SubscriberExt, util::SubscriberInitExt, EnvFilter};
 
+/// The single canonical log file for the whole core. Every process (CLI daemon,
+/// GUI, TUN helper) and every subsystem (tracing, the core event logger, the
+/// helper IPC, panics) writes here — no more per-binary / per-subsystem sprawl
+/// (`ostp-cli.log` + `ostp-core.log` + `ostp-helper.log` + `ostp-crash.log`).
+pub const LOG_FILE_NAME: &str = "ostp.log";
+
+/// Absolute path to the shared log file, next to the running executable.
+pub fn log_file_path() -> PathBuf {
+    std::env::current_exe()
+        .ok()
+        .and_then(|p| p.parent().map(|d| d.join(LOG_FILE_NAME)))
+        .unwrap_or_else(|| PathBuf::from(LOG_FILE_NAME))
+}
+
+/// True if this invocation is the long-running daemon (a client/server run),
+/// as opposed to a one-shot subcommand (`gk`, `check`, `init`, `-V`, ...).
+///
+/// Used to gate log truncation: only the daemon clears the log at startup, so a
+/// one-shot command run while a daemon is live can never wipe the daemon's log.
+/// A daemon invocation is simply one that carries none of the one-shot tokens
+/// (`ostp`, `ostp run`, `ostp connect <url>` → daemon; everything else → one-shot).
+pub fn invocation_is_daemon<I: IntoIterator<Item = String>>(args: I) -> bool {
+    const ONE_SHOT: &[&str] = &[
+        "gk", "generate-key", "check", "init", "setup", "links", "import",
+        "update", "migrate", "prober", "proxy-env", "proxy-env-clear",
+        "uninstall", "-V", "--version", "-h", "--help", "help",
+    ];
+    !args
+        .into_iter()
+        .skip(1) // program name
+        .any(|a| ONE_SHOT.contains(&a.as_str()))
+}
+
+/// Append a single timestamped line to the shared log file. Used by the manual
+/// writers (core event logger, TUN helper IPC) so their output lands in the same
+/// `ostp.log` as the tracing subscriber instead of a separate file.
+pub fn append_line(msg: &str) {
+    if let Ok(mut file) = OpenOptions::new().create(true).append(true).open(log_file_path()) {
+        let _ = writeln!(
+            file,
+            "[{}] {}",
+            chrono::Local::now().format("%Y-%m-%d %H:%M:%S"),
+            msg
+        );
+    }
+}
+
 pub fn setup_panic_hook() {
     std::panic::set_hook(Box::new(|info| {
         let payload = info.payload();
@@ -16,7 +63,7 @@ pub fn setup_panic_hook() {
 
         let location = info.location().unwrap_or_else(|| std::panic::Location::caller());
         let backtrace = std::backtrace::Backtrace::force_capture();
-        
+
         let crash_msg = format!(
             "[{}] PANIC at {}:{}\nMessage: {}\nBacktrace:\n{:?}",
             chrono::Local::now().format("%Y-%m-%d %H:%M:%S"),
@@ -29,19 +76,16 @@ pub fn setup_panic_hook() {
         eprintln!("{}", crash_msg);
         tracing::error!("{}", crash_msg);
 
-        let path = std::env::current_exe()
-            .ok()
-            .and_then(|p| p.parent().map(|d| d.join("ostp-crash.log")))
-            .unwrap_or_else(|| PathBuf::from("ostp-crash.log"));
-
-        if let Ok(mut file) = OpenOptions::new().create(true).append(true).open(path) {
+        // Crashes land in the same shared log file (append — a crash must never
+        // truncate, and the tracing worker may already be dead so we write direct).
+        if let Ok(mut file) = OpenOptions::new().create(true).append(true).open(log_file_path()) {
             let _ = file.write_all(crash_msg.as_bytes());
             let _ = file.write_all(b"\n===================================================\n");
         }
     }));
 }
 
-/// Initialises tracing and writes to `<app_name>.log` next to the executable.
+/// Initialises tracing and writes to the shared `ostp.log` next to the executable.
 ///
 /// The `level` parameter controls the minimum log level:
 /// - `"error"` — only errors
@@ -51,7 +95,17 @@ pub fn setup_panic_hook() {
 /// - `"trace"` — all messages including very verbose internal state
 ///
 /// The environment variable `RUST_LOG` overrides this value if set.
-pub fn init_tracing(level: &str, app_name: &str, version: &str) -> Option<tracing_appender::non_blocking::WorkerGuard> {
+///
+/// `truncate`: clear the log at startup. Honoured **only on Windows** — Linux
+/// servers keep their history (OS-rotated). Pass `true` only from the daemon's
+/// own entrypoint; one-shot commands and child processes (the TUN helper) pass
+/// `false` so they append instead of wiping a running daemon's log.
+pub fn init_tracing(
+    level: &str,
+    app_name: &str,
+    version: &str,
+    truncate: bool,
+) -> Option<tracing_appender::non_blocking::WorkerGuard> {
     // RUST_LOG overrides the config-derived level
     let env_filter = EnvFilter::try_from_default_env()
         .unwrap_or_else(|_| {
@@ -66,12 +120,20 @@ pub fn init_tracing(level: &str, app_name: &str, version: &str) -> Option<tracin
             }
         });
 
-    let path = std::env::current_exe()
-        .ok()
-        .and_then(|p| p.parent().map(|d| d.join(format!("{}.log", app_name))))
-        .unwrap_or_else(|| PathBuf::from(format!("{}.log", app_name)));
+    let path = log_file_path();
 
-    if let Ok(mut file) = OpenOptions::new().create(true).append(true).open(&path) {
+    let mut open_opts = OpenOptions::new();
+    open_opts.create(true);
+    // Truncate-on-startup is Windows-only and daemon-only. Everywhere else append:
+    // Linux keeps server history, and one-shot commands / the TUN helper must not
+    // wipe a running daemon's log.
+    if truncate && cfg!(windows) {
+        open_opts.write(true).truncate(true);
+    } else {
+        open_opts.append(true);
+    }
+
+    if let Ok(mut file) = open_opts.open(&path) {
         // Write the startup banner directly to the log file, bypassing the
         // tracing subscriber entirely. Emitting it via tracing::info!() hits
         // BOTH layers below (file AND stderr), so every one-shot CLI command

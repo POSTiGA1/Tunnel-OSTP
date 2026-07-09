@@ -8,7 +8,10 @@ fn main() {
     // Read config BEFORE init_tracing so we can use the correct log level from config.
     // If config is missing or debug=false we default to "info".
     let log_level = detect_log_level_from_config();
-    let _log_guard = ostp_client::logging::init_tracing(&log_level, "ostp-gui", env!("CARGO_PKG_VERSION"));
+    // The GUI launch IS the daemon's startup, so clear the shared log here
+    // (Windows-only inside init_tracing). The elevated TUN helper spawned later
+    // passes truncate=false so it appends instead of wiping this session's log.
+    let _log_guard = ostp_client::logging::init_tracing(&log_level, "ostp-gui", env!("CARGO_PKG_VERSION"), true);
 
     tracing::info!("ostp-gui starting (log_level={})", log_level);
 
@@ -28,7 +31,7 @@ fn main() {
         {
             use std::ffi::OsStr;
             use std::os::windows::ffi::OsStrExt;
-            let msg_w: Vec<u16> = OsStr::new(&format!("OSTP GUI crashed:\n\n{}\n\nSee ostp-gui.log for details.", msg))
+            let msg_w: Vec<u16> = OsStr::new(&format!("OSTP GUI crashed:\n\n{}\n\nSee ostp.log for details.", msg))
                 .encode_wide().chain(Some(0)).collect();
             let title_w: Vec<u16> = OsStr::new("OSTP GUI — Fatal Error").encode_wide().chain(Some(0)).collect();
             #[link(name = "user32")] extern "system" {

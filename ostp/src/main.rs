@@ -251,7 +251,11 @@ async fn main() -> Result<()> {
     // where it does not apply.
     let _ = rlimit::increase_nofile_limit(1048576);
     ostp_client::logging::setup_panic_hook();
-    let _log_guard = ostp_client::logging::init_tracing("info", "ostp-cli", env!("CARGO_PKG_VERSION"));
+    // Clear the shared log at startup only when THIS invocation is the daemon —
+    // a one-shot command (`ostp gk`, `ostp check`, ...) must not wipe a running
+    // daemon's log. (Truncation itself is additionally Windows-only.)
+    let is_daemon = ostp_client::logging::invocation_is_daemon(std::env::args());
+    let _log_guard = ostp_client::logging::init_tracing("info", "ostp-cli", env!("CARGO_PKG_VERSION"), is_daemon);
 
     let res = run_app().await;
     if let Err(e) = res {
