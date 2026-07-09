@@ -203,7 +203,7 @@ jobs:
             artifact_name: ostp
             release_name: ostp-linux-mipsle.tar.gz
             use_cross: true
-            toolchain: alpha
+            toolchain: nightly
 
           - os: ubuntu-latest
             target: riscv64gc-unknown-linux-gnu
