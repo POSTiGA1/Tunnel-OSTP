@@ -1,16 +1,12 @@
 import 'dart:async';
 import 'dart:convert';
-import 'dart:io';
 import 'dart:ui';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:shared_preferences/shared_preferences.dart';
-import 'package:mobile_scanner/mobile_scanner.dart';
 import '../models/connection_state_enum.dart';
+import '../models/ostp_profile.dart';
 import 'settings_screen.dart';
-import 'logs_screen.dart';
-import 'app_routing_screen.dart';
-import 'qr_scanner_screen.dart';
 
 class HomeScreen extends StatefulWidget {
   final SharedPreferences prefs;
@@ -22,15 +18,17 @@ class HomeScreen extends StatefulWidget {
 
 class _HomeScreenState extends State<HomeScreen> with TickerProviderStateMixin {
   static const platform = MethodChannel('com.ospab.ostp/vpn');
-  
+
   ConnectionStateEnum _state = ConnectionStateEnum.disconnected;
   Timer? _pollTimer;
   Timer? _uptimeTimer;
   int _uptimeSecs = 0;
-  
-  String _serverAddr = '127.0.0.1:443';
-  String _accessKey = 'default_key';
-  
+
+  // Single active profile — the core only ever connects to one server at a
+  // time (no multi-server/urltest failover since the 0.4.x flat config),
+  // matching how the desktop GUI picks exactly one profile as `activeId`.
+  OstpProfile? _activeProfile;
+
   String _download = '0 B';
   String _upload = '0 B';
 
@@ -67,40 +65,45 @@ class _HomeScreenState extends State<HomeScreen> with TickerProviderStateMixin {
       debugPrint("Failed to check initial state: $e");
     }
   }
-  
+
   void _loadSettings() {
     setState(() {
-      _serverAddr = widget.prefs.getString('server_addr') ?? '127.0.0.1:443';
-      _accessKey = widget.prefs.getString('access_key') ?? '';
+      final profiles = decodeProfiles(widget.prefs.getString('profiles_json'));
+      // Single-select: if more than one is somehow marked active (shouldn't
+      // happen — the editor enforces exclusivity — but don't crash on stale data).
+      final actives = profiles.where((p) => p.active).toList();
+      _activeProfile = actives.isNotEmpty ? actives.first : null;
     });
     _updateLatestConfigJson();
   }
 
-  void _updateLatestConfigJson() {
-
+  /// Builds the exact JSON the native core (ostp-jni) deserializes as
+  /// `ostp_client::config::ClientConfig`. Field names/nesting must match that
+  /// struct precisely — unknown keys are silently ignored by serde, so a typo
+  /// here doesn't fail loudly, it just quietly does nothing.
+  Map<String, dynamic> _buildConfigMap() {
+    final p = _activeProfile;
     final exDomains = widget.prefs.getString('ex_domains') ?? '';
     final exIps = widget.prefs.getString('ex_ips') ?? '';
     final exProcesses = widget.prefs.getString('ex_processes') ?? '';
     final debugMode = widget.prefs.getBool('debug_mode') ?? false;
-    final transportMode = widget.prefs.getString('transport_mode') ?? 'udp';
-    final stealthSni = widget.prefs.getString('stealth_sni') ?? 'vk.com';
     final mtu = widget.prefs.getString('mtu') ?? '1140';
     final muxEnabled = widget.prefs.getBool('mux_enabled') ?? false;
     final muxSessions = widget.prefs.getString('mux_sessions') ?? '2';
     final dnsServer = widget.prefs.getString('dns_server');
     final effectiveDnsServer = (dnsServer == null || dnsServer.isEmpty) ? '1.1.1.1' : dnsServer;
-    final tunStack = 'ostp';
+    const tunStack = 'ostp';
     final appRoutingMode = widget.prefs.getString('app_routing_mode') ?? 'bypass';
     final appRoutingPackages = widget.prefs.getStringList('app_routing_packages') ?? [];
-
     final localBind = widget.prefs.getString('local_bind') ?? '127.0.0.1:1088';
-    final configMap = {
+
+    return {
       "mode": "client",
       "debug": debugMode,
       "ostp": {
-        "server_addr": _serverAddr,
+        "server_addr": p?.serverAddr ?? '',
         "local_bind_addr": "0.0.0.0:0",
-        "access_key": _accessKey,
+        "access_key": p?.accessKey ?? '',
         "handshake_timeout_ms": 10000,
         "io_timeout_ms": 5000,
         "mtu": int.tryParse(mtu) ?? 1140,
@@ -109,17 +112,20 @@ class _HomeScreenState extends State<HomeScreen> with TickerProviderStateMixin {
         "bind_addr": localBind,
         "connect_timeout_ms": 15000,
       },
+      // Junk packets + TCP fragmentation are per-profile settings — same
+      // shape as the desktop GUI's profile object — not global toggles.
       "transport": {
-        "mode": transportMode,
-        "stealth_sni": stealthSni,
+        "mode": p?.transportMode ?? 'udp',
+        "stealth_sni": (p?.stealthSni.isNotEmpty ?? false) ? p!.stealthSni : 'vk.com',
+        "tcp_fragmentation": p?.tcpFragmentation ?? false,
+        "frag_chunk": p?.fragChunk ?? 2,
+        "frag_sleep": p?.fragSleep ?? 2,
+        "junk_pc": [p?.junkPcMin ?? 2, p?.junkPcMax ?? 5],
+        "junk_ps": [p?.junkPsMin ?? 100, p?.junkPsMax ?? 1000],
       },
       "multiplex": {
         "enabled": muxEnabled,
         "sessions": int.tryParse(muxSessions) ?? 2,
-      },
-      "tun": {
-        "enable": true,
-        "stack": tunStack
       },
       "exclusions": {
         "domains": exDomains.split('\n').where((s) => s.trim().isNotEmpty).toList(),
@@ -131,12 +137,14 @@ class _HomeScreenState extends State<HomeScreen> with TickerProviderStateMixin {
         "packages": appRoutingPackages,
       },
       "dns_server": effectiveDnsServer,
-      "tun_stack": tunStack
+      "tun_stack": tunStack,
     };
+  }
+
+  void _updateLatestConfigJson() {
+    final configMap = _buildConfigMap();
     widget.prefs.setString('latest_config_json', jsonEncode(configMap));
-    platform.invokeMethod('saveConfig', {
-      "configJson": jsonEncode(configMap)
-    });
+    platform.invokeMethod('saveConfig', {"configJson": jsonEncode(configMap)});
   }
 
   @override
@@ -150,87 +158,27 @@ class _HomeScreenState extends State<HomeScreen> with TickerProviderStateMixin {
 
   Future<void> _toggleConnection() async {
     if (_state == ConnectionStateEnum.disconnected) {
-      if (_serverAddr.isEmpty || _accessKey.isEmpty) {
+      if (_activeProfile == null || _activeProfile!.serverAddr.isEmpty || _activeProfile!.accessKey.isEmpty) {
         ScaffoldMessenger.of(context).showSnackBar(
-          const SnackBar(content: Text('Please configure Server and Key in Settings')),
+          const SnackBar(content: Text('Please select or add a profile in Settings')),
         );
         return;
       }
-      
+
       setState(() {
         _state = ConnectionStateEnum.connecting;
       });
       _pulseController.repeat(reverse: true);
       _spinController.repeat();
 
-      final dnsServer = widget.prefs.getString('dns_server');
-      final effectiveDnsServer = (dnsServer == null || dnsServer.isEmpty) ? '1.1.1.1' : dnsServer;
-      final exDomains = widget.prefs.getString('ex_domains') ?? '';
-      final exIps = widget.prefs.getString('ex_ips') ?? '';
-      final exProcesses = widget.prefs.getString('ex_processes') ?? '';
-      final debugMode = widget.prefs.getBool('debug_mode') ?? false;
-      final transportMode = widget.prefs.getString('transport_mode') ?? 'udp';
-      final stealthSni = widget.prefs.getString('stealth_sni') ?? 'vk.com';
-      final mtu = widget.prefs.getString('mtu') ?? '1140';
-      final muxEnabled = widget.prefs.getBool('mux_enabled') ?? false;
-      final muxSessions = widget.prefs.getString('mux_sessions') ?? '2';
-      final tunStack = 'ostp';
-
-      final appRoutingMode = widget.prefs.getString('app_routing_mode') ?? 'bypass';
-      final appRoutingPackages = widget.prefs.getStringList('app_routing_packages') ?? [];
-
-      final localBind = widget.prefs.getString('local_bind') ?? '127.0.0.1:1088';
-      final configMap = {
-        "mode": "client",
-        "debug": debugMode,
-        "ostp": {
-          "server_addr": _serverAddr,
-          "local_bind_addr": "0.0.0.0:0",
-          "access_key": _accessKey,
-          "handshake_timeout_ms": 10000,
-          "io_timeout_ms": 5000,
-          "mtu": int.tryParse(mtu) ?? 1140,
-        },
-        "local_proxy": {
-          "bind_addr": localBind,
-          "connect_timeout_ms": 15000,
-        },
-        "transport": {
-          "mode": transportMode,
-          "stealth_sni": stealthSni,
-        },
-        "multiplex": {
-          "enabled": muxEnabled,
-          "sessions": int.tryParse(muxSessions) ?? 2,
-        },
-        "tun": {
-          "enable": true,
-          "stack": tunStack
-        },
-        "exclusions": {
-          "domains": exDomains.split('\n').where((s) => s.trim().isNotEmpty).toList(),
-          "ips": exIps.split('\n').where((s) => s.trim().isNotEmpty).toList(),
-          "processes": exProcesses.split('\n').where((s) => s.trim().isNotEmpty).toList(),
-        },
-        "app_rules": {
-          "mode": appRoutingMode,
-          "packages": appRoutingPackages,
-        },
-        "dns_server": dnsServer,
-        "tun_stack": tunStack
-      };
-      
-      widget.prefs.setString('latest_config_json', jsonEncode(configMap));
-
+      final configMap = _buildConfigMap();
+      final configStr = jsonEncode(configMap);
+      widget.prefs.setString('latest_config_json', configStr);
 
       try {
-        await platform.invokeMethod('saveConfig', {
-          "configJson": jsonEncode(configMap)
-        });
-        await platform.invokeMethod('startTunnel', {
-          "configJson": jsonEncode(configMap)
-        });
-        
+        await platform.invokeMethod('saveConfig', {"configJson": configStr});
+        await platform.invokeMethod('startTunnel', {"configJson": configStr});
+
         bool started = false;
         for (int i = 0; i < 10; i++) {
           await Future.delayed(const Duration(milliseconds: 500));
@@ -240,7 +188,7 @@ class _HomeScreenState extends State<HomeScreen> with TickerProviderStateMixin {
             break;
           }
         }
-        
+
         if (started) {
           _setConnected();
         } else {
@@ -289,30 +237,34 @@ class _HomeScreenState extends State<HomeScreen> with TickerProviderStateMixin {
     }
   }
 
+  /// Cycles transport mode x MTU to find a working combination against the
+  /// active profile's server. WSS/Reality are gone (the core dropped
+  /// TLS-mimicry transports entirely — see §A), so this only has udp/uot x
+  /// MTU left to probe; junk/frag stay at whatever the active profile has set.
   Future<void> _runAutoMode() async {
     final mtus = [1500, 1350, 1280, 1140];
-    final modes = [
-      {'t': 'udp'},
-      {'t': 'uot'},
-    ];
+    final modes = ['udp', 'uot'];
 
-    if (_serverAddr.isEmpty || _accessKey.isEmpty) {
+    final active = _activeProfile;
+    if (active == null || active.serverAddr.isEmpty || active.accessKey.isEmpty) {
       ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(content: Text('Please configure Server and Key first')),
+        const SnackBar(content: Text('Please select a profile with a server and key first')),
       );
       return;
     }
 
-    for (var mode in modes) {
-      for (var mtu in mtus) {
+    final originalMode = active.transportMode;
+    final originalMtu = widget.prefs.getString('mtu') ?? '1140';
+
+    for (final mode in modes) {
+      for (final mtu in mtus) {
         if (!mounted) return;
         ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(content: Text('Testing: ${mode['t']} | MTU: $mtu'), duration: const Duration(seconds: 2)),
+          SnackBar(content: Text('Testing: $mode | MTU: $mtu'), duration: const Duration(seconds: 2)),
         );
 
-        // Update prefs
         await widget.prefs.setString('mtu', mtu.toString());
-        await widget.prefs.setString('transport_mode', mode['t'] as String);
+        active.transportMode = mode;
         _updateLatestConfigJson();
 
         setState(() {
@@ -337,7 +289,6 @@ class _HomeScreenState extends State<HomeScreen> with TickerProviderStateMixin {
 
           if (started) {
             _setConnected();
-            // Wait to see if connection is stable and ping is successful
             await Future.delayed(const Duration(seconds: 3));
             try {
               final metricsJson = await platform.invokeMethod('getMetrics');
@@ -345,34 +296,52 @@ class _HomeScreenState extends State<HomeScreen> with TickerProviderStateMixin {
                 final Map<String, dynamic> parsed = jsonDecode(metricsJson);
                 final rttMs = parsed['rtt_ms'] as int? ?? 0;
                 if (rttMs > 0) {
+                  // Working combo found — persist it onto the profile.
+                  _persistActiveProfile();
                   if (mounted) {
                     ScaffoldMessenger.of(context).showSnackBar(
-                      SnackBar(content: Text('Success! Found working config: ${mode['t']} (MTU $mtu)')),
+                      SnackBar(content: Text('Success! Found working config: $mode (MTU $mtu)')),
                     );
                   }
-                  return; // Stop on first working config
+                  return;
                 }
               }
-            } catch (e) {
-              // Ignore metrics error
+            } catch (_) {
+              // Ignore metrics error, fall through to try next combo.
             }
 
-            // Connection seems unstable or no ping, stop and try next
             await platform.invokeMethod('stopTunnel');
             _setDisconnected();
           } else {
             _setDisconnected();
           }
-        } catch (e) {
+        } catch (_) {
           _setDisconnected();
         }
       }
     }
 
+    // No working combo found — revert the active profile/mtu to what they
+    // were before probing so we don't leave it on a broken guess.
+    active.transportMode = originalMode;
+    await widget.prefs.setString('mtu', originalMtu);
+    _updateLatestConfigJson();
+
     if (mounted) {
       ScaffoldMessenger.of(context).showSnackBar(
         const SnackBar(content: Text('Auto search finished. No working config found.')),
       );
+    }
+  }
+
+  void _persistActiveProfile() {
+    final active = _activeProfile;
+    if (active == null) return;
+    final profiles = decodeProfiles(widget.prefs.getString('profiles_json'));
+    final idx = profiles.indexWhere((p) => p.id == active.id);
+    if (idx >= 0) {
+      profiles[idx] = active;
+      widget.prefs.setString('profiles_json', encodeProfiles(profiles));
     }
   }
 
@@ -382,8 +351,8 @@ class _HomeScreenState extends State<HomeScreen> with TickerProviderStateMixin {
       _state = ConnectionStateEnum.connected;
     });
     _pulseController.stop();
-    _pulseController.value = 1.0; 
-    
+    _pulseController.value = 1.0;
+
     _uptimeSecs = 0;
     _uptimeTimer?.cancel();
     _uptimeTimer = Timer.periodic(const Duration(seconds: 1), (timer) {
@@ -398,7 +367,7 @@ class _HomeScreenState extends State<HomeScreen> with TickerProviderStateMixin {
       if (!mounted) return;
       try {
         final isRunning = await platform.invokeMethod('isRunning');
-        
+
         if (isRunning == true && _state == ConnectionStateEnum.disconnected) {
           _setConnected();
         } else if (isRunning == false && _state == ConnectionStateEnum.connected) {
@@ -413,7 +382,7 @@ class _HomeScreenState extends State<HomeScreen> with TickerProviderStateMixin {
             final bytesRecv = parsed['bytes_recv'] as int? ?? 0;
             final connState = parsed['connection_state'] as int? ?? 2;
             final rttMs = parsed['rtt_ms'] as int? ?? 0;
-            
+
             if (connState == 0) {
               try {
                 await platform.invokeMethod('stopTunnel');
@@ -428,7 +397,7 @@ class _HomeScreenState extends State<HomeScreen> with TickerProviderStateMixin {
               }
               return;
             }
-            
+
             if (mounted) {
               setState(() {
                 _download = _formatBytes(bytesRecv);
@@ -462,15 +431,15 @@ class _HomeScreenState extends State<HomeScreen> with TickerProviderStateMixin {
 
   Future<void> _checkConnectionLatency() async {
     if (_state != ConnectionStateEnum.connected) return;
-    
+
     setState(() {
       _isCheckingPing = true;
       _pingText = 'Updating...';
       _pingColor = Colors.white70;
     });
-    
+
     await Future.delayed(const Duration(milliseconds: 500));
-    
+
     if (mounted) {
       setState(() {
         _isCheckingPing = false;
@@ -506,7 +475,7 @@ class _HomeScreenState extends State<HomeScreen> with TickerProviderStateMixin {
   @override
   Widget build(BuildContext context) {
     final theme = Theme.of(context);
-    
+
     return Scaffold(
       body: Stack(
         children: [
@@ -538,7 +507,7 @@ class _HomeScreenState extends State<HomeScreen> with TickerProviderStateMixin {
               ),
             ),
           ),
-          
+
           SafeArea(
             child: LayoutBuilder(
               builder: (context, constraints) {
@@ -577,13 +546,13 @@ class _HomeScreenState extends State<HomeScreen> with TickerProviderStateMixin {
                 width: 12, height: 12,
                 decoration: BoxDecoration(
                   borderRadius: BorderRadius.circular(4),
-                  color: _state == ConnectionStateEnum.connected 
-                      ? theme.colorScheme.secondary 
+                  color: _state == ConnectionStateEnum.connected
+                      ? theme.colorScheme.secondary
                       : theme.colorScheme.primary,
                   boxShadow: [
                     BoxShadow(
-                      color: _state == ConnectionStateEnum.connected 
-                          ? theme.colorScheme.secondary.withOpacity(0.5) 
+                      color: _state == ConnectionStateEnum.connected
+                          ? theme.colorScheme.secondary.withOpacity(0.5)
                           : theme.colorScheme.primary.withOpacity(0.5),
                       blurRadius: 10,
                     )
@@ -677,7 +646,7 @@ class _HomeScreenState extends State<HomeScreen> with TickerProviderStateMixin {
                     ),
                   ),
                 ),
-              
+
               AnimatedBuilder(
                 animation: _pulseController,
                 builder: (context, child) {
@@ -722,9 +691,9 @@ class _HomeScreenState extends State<HomeScreen> with TickerProviderStateMixin {
             ],
           ),
         ),
-        
+
         const SizedBox(height: 40),
-        
+
         Text(
           _state == ConnectionStateEnum.disconnected ? 'Disconnected' :
           _state == ConnectionStateEnum.connecting ? 'Connecting...' : 'Connected',
@@ -742,104 +711,102 @@ class _HomeScreenState extends State<HomeScreen> with TickerProviderStateMixin {
             color: Colors.white54,
           ),
         ),
-        
+
         const SizedBox(height: 30),
-        
-        AnimatedOpacity(
-          opacity: _state == ConnectionStateEnum.connected ? 1.0 : 0.0,
-          duration: const Duration(milliseconds: 300),
-          child: Column(
+
+        Container(
+          padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 12),
+          decoration: BoxDecoration(
+            color: Colors.white.withOpacity(0.08),
+            borderRadius: BorderRadius.circular(30),
+            border: Border.all(color: Colors.white.withOpacity(0.15)),
+          ),
+          child: Row(
             mainAxisSize: MainAxisSize.min,
             children: [
-              Container(
-                padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 12),
-                decoration: BoxDecoration(
-                  color: Colors.white.withOpacity(0.08),
-                  borderRadius: BorderRadius.circular(30),
-                  border: Border.all(color: Colors.white.withOpacity(0.15)),
-                ),
-                child: Row(
-                  mainAxisSize: MainAxisSize.min,
-                  children: [
-                    const Icon(Icons.dns_rounded, size: 18, color: Colors.white70),
-                    const SizedBox(width: 10),
-                    Text(
-                      _serverAddr,
-                      style: const TextStyle(
-                        fontFamily: 'monospace',
-                        fontSize: 15,
-                        fontWeight: FontWeight.w600,
-                        color: Colors.white70,
-                      ),
-                    ),
-                  ],
-                ),
-              ),
-              const SizedBox(height: 16),
-              Container(
-                margin: const EdgeInsets.symmetric(horizontal: 16),
-                padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
-                decoration: BoxDecoration(
-                  color: Colors.white.withOpacity(0.03),
-                  borderRadius: BorderRadius.circular(20),
-                  border: Border.all(color: Colors.white.withOpacity(0.06)),
-                ),
-                child: Row(
-                  mainAxisAlignment: MainAxisAlignment.spaceBetween,
-                  children: [
-                    Expanded(
-                      child: Column(
-                        crossAxisAlignment: CrossAxisAlignment.start,
-                        children: [
-                          const Text(
-                            'CONNECTION TEST',
-                            style: TextStyle(
-                              fontSize: 10,
-                              fontWeight: FontWeight.bold,
-                              color: Colors.white38,
-                              letterSpacing: 0.8,
-                            ),
-                          ),
-                          const SizedBox(height: 4),
-                          Text(
-                            _pingText,
-                            overflow: TextOverflow.ellipsis,
-                            style: TextStyle(
-                              fontSize: 15,
-                              fontWeight: FontWeight.bold,
-                              color: _pingColor,
-                            ),
-                          ),
-                        ],
-                      ),
-                    ),
-                    const SizedBox(width: 8),
-                    _isCheckingPing
-                        ? const SizedBox(
-                            width: 20, height: 20,
-                            child: CircularProgressIndicator(strokeWidth: 2, color: Colors.white70),
-                          )
-                        : TextButton.icon(
-                            onPressed: _checkConnectionLatency,
-                            icon: Icon(Icons.speed_rounded, size: 16, color: theme.colorScheme.primary),
-                            label: Text(
-                              'Test Ping',
-                              style: TextStyle(
-                                fontWeight: FontWeight.bold,
-                                fontSize: 13,
-                                color: theme.colorScheme.primary,
-                              ),
-                            ),
-                            style: TextButton.styleFrom(
-                              padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
-                              backgroundColor: theme.colorScheme.primary.withOpacity(0.1),
-                              shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
-                            ),
-                          ),
-                  ],
+              const Icon(Icons.dns_rounded, size: 18, color: Colors.white70),
+              const SizedBox(width: 10),
+              Text(
+                _activeProfile?.name ?? 'No profile selected',
+                style: const TextStyle(
+                  fontFamily: 'monospace',
+                  fontSize: 15,
+                  fontWeight: FontWeight.w600,
+                  color: Colors.white70,
                 ),
               ),
             ],
+          ),
+        ),
+
+        AnimatedOpacity(
+          opacity: _state == ConnectionStateEnum.connected ? 1.0 : 0.0,
+          duration: const Duration(milliseconds: 300),
+          child: Padding(
+            padding: const EdgeInsets.only(top: 16),
+            child: Container(
+              margin: const EdgeInsets.symmetric(horizontal: 16),
+              padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
+              decoration: BoxDecoration(
+                color: Colors.white.withOpacity(0.03),
+                borderRadius: BorderRadius.circular(20),
+                border: Border.all(color: Colors.white.withOpacity(0.06)),
+              ),
+              child: Row(
+                mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                children: [
+                  Expanded(
+                    child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        const Text(
+                          'CONNECTION TEST',
+                          style: TextStyle(
+                            fontSize: 10,
+                            fontWeight: FontWeight.bold,
+                            color: Colors.white38,
+                            letterSpacing: 0.8,
+                          ),
+                        ),
+                        const SizedBox(height: 4),
+                        Text(
+                          _pingText,
+                          overflow: TextOverflow.ellipsis,
+                          style: TextStyle(
+                            fontSize: 15,
+                            fontWeight: FontWeight.bold,
+                            color: _pingColor,
+                          ),
+                        ),
+                      ],
+                    ),
+                  ),
+                  const SizedBox(width: 8),
+                  _isCheckingPing
+                      ? const SizedBox(
+                          width: 20, height: 20,
+                          child: CircularProgressIndicator(strokeWidth: 2, color: Colors.white70),
+                        )
+                      : TextButton.icon(
+                          onPressed: _checkConnectionLatency,
+                          icon: Icon(Icons.speed_rounded, size: 16, color: theme.colorScheme.primary),
+                          label: Text(
+                            'Test Ping',
+                            style: TextStyle(
+                              fontWeight: FontWeight.bold,
+                              fontSize: 13,
+                              color: theme.colorScheme.primary,
+                            ),
+                          ),
+                          style: TextButton.styleFrom(
+                            padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
+                            backgroundColor: theme.colorScheme.primary.withOpacity(0.1),
+                            shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
+                          ),
+                        ),
+                ],
+              ),
+            ),
           ),
         )
       ],
@@ -911,4 +878,3 @@ class _HomeScreenState extends State<HomeScreen> with TickerProviderStateMixin {
     );
   }
 }
-
