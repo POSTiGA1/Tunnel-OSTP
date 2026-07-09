@@ -5,6 +5,7 @@
 **/*.rs.bk
 .idea/
 .vscode/
+**/node_modules/
 
 # Binaries & libraries
 *.exe
