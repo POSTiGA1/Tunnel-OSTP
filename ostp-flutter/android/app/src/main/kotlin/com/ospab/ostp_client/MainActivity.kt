@@ -92,6 +92,13 @@ class MainActivity : FlutterActivity() {
                         val metrics = net.ostp.client.OstpClientSdk.getMetrics()
                         result.success(metrics ?: "{}")
                     } catch (e: Throwable) {
+                        // Surfaced into the in-app log viewer (not just logcat) so a
+                        // broken traffic counter is diagnosable from a user's bug
+                        // report without adb access.
+                        android.util.Log.e("MainActivity", "getMetrics failed", e)
+                        try {
+                            net.ostp.client.OstpClientSdk.addLog("getMetrics failed: ${e.javaClass.simpleName}: ${e.message}")
+                        } catch (_: Throwable) {}
                         result.error("ERROR", e.message, null)
                     }
                 }
