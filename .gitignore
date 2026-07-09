@@ -43,3 +43,5 @@ ostp-brain/
 
 # Management panel built assets (built separately; dummy dist created for rust-embed build)
 ostp-control/
+
+.agents/
