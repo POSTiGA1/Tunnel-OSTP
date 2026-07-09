@@ -1,63 +1,79 @@
 <#
 .SYNOPSIS
-  Cuts a new OSTP release and pushes it to the channel that triggers the
-  matching GitHub Actions build (see .github/workflows/release.yml).
+  Cuts a new OSTP release and pushes the tag that triggers the matching
+  GitHub Actions build (see .github/workflows/release.yml, which only
+  triggers on "v*" tag pushes + workflow_dispatch — a bare branch push
+  does NOT start a build).
 
 .DESCRIPTION
-  Three release channels, in increasing order of stability:
-    alpha      -> pushes the `alpha` branch     -> tag "{version}-alpha"
-    pre-release  -> pushes the `pre-release` branch  -> tag "{version}-beta"
-    master       -> pushes an actual "v{version}" tag -> real stable release
+  A release cycle has ONE fixed target version (e.g. "0.4.1") that stays in
+  Cargo.toml/tauri.conf.json/package.json unchanged through every alpha and
+  beta build — only a per-channel ITERATION counter increments, and that
+  counter lives ONLY in the git tag, never in the manifests:
 
-  Promoting to pre-release/master first fast-forwards that branch to
-  `alpha` (--ff-only - this always succeeds cleanly as long as nobody ever
-  commits directly to pre-release/master, per CONTRIBUTING.md's branch
-  strategy), so a release always ships alpha's latest, not a stale branch.
+    v0.4.1-alpha.1  ->  v0.4.1-alpha.2  ->  ...  ->  v0.4.1-alpha.100
+    v0.4.1-beta.1   ->  v0.4.1-beta.2   ->  ...  ->  v0.4.1-beta.100
+    v0.4.1                                                <- master: iteration dropped
 
-  Remembers the last {version, branch, prefix} it used in .release-state.json
-  at the repo root. Running with no arguments repeats last time's branch and
-  prefix, auto-incrementing the patch version. -Switch starts a new version
-  line (e.g. 0.3.x -> 0.4.0) without changing branch/prefix. -Branch/-Prefix
-  override just that one setting for this run (and become the new default).
+  This is deliberately NOT "0.4.1.5-alpha" (a 4th dot-separated component
+  before the hyphen) — that is not valid semver, and Cargo's version parser
+  rejects it outright. "0.4.1-alpha.5" (dot AFTER the hyphen, a semver
+  pre-release identifier) is the only form that keeps Cargo.toml itself
+  parseable, so that's the only place the iteration number is allowed to
+  live: the git tag.
+
+  Promoting to beta/master first fast-forwards that branch to `alpha`
+  (--ff-only — this always succeeds cleanly as long as nobody ever commits
+  directly to pre-release/master, per CONTRIBUTING.md's branch strategy), so
+  a release always ships alpha's latest, not a stale branch. Switching to a
+  channel for the first time in a cycle resets THAT channel's iteration
+  counter to 1 (a fresh promotion starts its own count; it doesn't inherit
+  wherever alpha's counter happened to be).
+
+  Remembers {target_version, branch, alpha_iteration, beta_iteration} in
+  .release-state.json at the repo root. Running with no arguments repeats
+  last time's branch, bumping that channel's iteration by one — manifests
+  are NOT touched (nothing to bump: the target version hasn't changed).
+  -Switch starts a new target version line and resets both iteration
+  counters to 0 — THIS is the one case that bumps every manifest.
 
 .PARAMETER Switch
-  Set an exact version (e.g. "0.4.0") instead of auto-incrementing the patch
-  of the last released version. Becomes the new baseline for future bare runs.
+  Set a new target version (e.g. "0.4.2") instead of continuing the current
+  one. Resets both alpha_iteration and beta_iteration to 0. Defaults the
+  channel back to alpha unless -Branch is also given this run.
 
 .PARAMETER Branch
-  Which branch to release from: master, pre-release, or alpha.
+  Which branch/channel to release from: master, pre-release (beta), or alpha.
   Defaults to whatever was used last time (see .release-state.json).
-
-.PARAMETER Prefix
-  Tag suffix for non-stable channels: beta or alpha. Ignored (forced empty)
-  when -Branch master, since stable releases are bare "vX.Y.Z" tags.
-  Defaults to whatever was used last time.
 
 .EXAMPLE
   .\scripts\gha.ps1
-  Re-releases the same branch/prefix as last time, with the patch version bumped by 1.
+  Bumps the current channel's iteration by one and pushes v{target}-{channel}.{N}.
 
 .EXAMPLE
-  .\scripts\gha.ps1 -Switch 0.4.0
-  Starts releasing the 0.4.x line from now on; this run ships exactly 0.4.0.
+  .\scripts\gha.ps1 -Switch 0.4.2
+  Starts a fresh 0.4.2 cycle: manifests -> 0.4.2, alpha iteration resets to 1,
+  ships v0.4.2-alpha.1.
 
 .EXAMPLE
-  .\scripts\gha.ps1 -Branch pre-release -Prefix beta
-  Promotes alpha -> pre-release and ships "{version}-beta".
+  .\scripts\gha.ps1 -Branch pre-release
+  Promotes alpha -> pre-release (beta channel), resets beta_iteration to 1
+  (or bumps it if already mid-beta), ships v{target}-beta.{N}.
+
+.EXAMPLE
+  .\scripts\gha.ps1 -Branch master
+  Promotes to master and ships the bare v{target} stable tag — no iteration.
 #>
 [CmdletBinding()]
 param(
     [string]$Switch,
-    [ValidateSet('master', 'beta', 'alpha')]
-    [string]$Branch,
-    [ValidateSet('beta', 'alpha')]
-    [string]$Prefix
+    [ValidateSet('master', 'pre-release', 'alpha')]
+    [string]$Branch
 )
 
 $ErrorActionPreference = "Stop"
 
 function Write-Step($msg) { Write-Host "==> $msg" -ForegroundColor Cyan }
-function Write-Warn2($msg) { Write-Host "!! $msg" -ForegroundColor Yellow }
 function Fail($msg) { Write-Host "ERROR: $msg" -ForegroundColor Red; exit 1 }
 
 # -- Locate repo root, regardless of where this script was invoked from ------
@@ -75,38 +91,56 @@ if ($dirty) {
     Fail "Working tree has uncommitted changes. Commit or stash them first."
 }
 
-# -- Load remembered state (branch/prefix/version from the last release) ----
+# -- Load remembered state ----------------------------------------------------
 $State = $null
 if (Test-Path $StateFile) {
     $State = Get-Content $StateFile -Raw | ConvertFrom-Json
 }
 
-$ResolvedBranch = if ($Branch) { $Branch } elseif ($State) { $State.branch } else { "alpha" }
-$ResolvedPrefix = if ($Prefix) { $Prefix } elseif ($State) { $State.prefix } else { "alpha" }
+$PrevBranch = if ($State) { $State.branch } else { $null }
+$IsNewTarget = [bool]$Switch
 
-# Stable releases are always a bare "vX.Y.Z" tag, never suffixed - master
-# never carries a prefix regardless of what was remembered or passed in.
-if ($ResolvedBranch -eq "master") {
-    if ($Prefix) { Write-Warn2 "-Prefix is ignored for -Branch master (stable releases are bare 'vX.Y.Z' tags)." }
-    $ResolvedPrefix = ""
-}
+$ResolvedBranch = if ($Branch) { $Branch } elseif ($PrevBranch) { $PrevBranch } else { "alpha" }
 
-# -- Resolve the version: exact via -Switch, else auto-increment the patch --
-$CurrentVersion = if ($State) { $State.version } else {
-    (Select-String -Path (Join-Path $RepoRoot "Cargo.toml") -Pattern '^version = "([0-9]+\.[0-9]+\.[0-9]+)"').Matches[0].Groups[1].Value
-}
-
-if ($Switch) {
+# -- Resolve the target version + per-channel iteration counters ------------
+if ($IsNewTarget) {
     if ($Switch -notmatch '^[0-9]+\.[0-9]+\.[0-9]+$') { Fail "-Switch must be a bare X.Y.Z version, got '$Switch'." }
-    $NewVersion = $Switch
+    $TargetVersion = $Switch
+    $AlphaIter = 0
+    $BetaIter = 0
+    # A fresh target version starts a fresh cycle at the bottom of the chain,
+    # unless the caller explicitly asked for a different branch this run.
+    if (-not $Branch) { $ResolvedBranch = "alpha" }
 } else {
-    $parts = $CurrentVersion.Split('.')
-    $NewVersion = "{0}.{1}.{2}" -f $parts[0], $parts[1], ([int]$parts[2] + 1)
+    # NOTE: a pre-migration state file (old schema: {version, branch, prefix})
+    # has no target_version property at all — PowerShell silently returns
+    # $null for a missing property on a PSCustomObject rather than erroring,
+    # so this must check for it explicitly or $TargetVersion would end up
+    # $null and corrupt every manifest below.
+    $TargetVersion = if ($State -and $State.target_version) { $State.target_version } else {
+        (Select-String -Path (Join-Path $RepoRoot "Cargo.toml") -Pattern '^version = "([0-9]+\.[0-9]+\.[0-9]+)"').Matches[0].Groups[1].Value
+    }
+    $AlphaIter = if ($State -and $State.alpha_iteration) { [int]$State.alpha_iteration } else { 0 }
+    $BetaIter  = if ($State -and $State.beta_iteration)  { [int]$State.beta_iteration }  else { 0 }
+
+    # Entering a channel that wasn't active last run (a promotion) starts
+    # THAT channel's count fresh — it doesn't inherit alpha's iteration number.
+    $BranchChanged = ($ResolvedBranch -ne $PrevBranch)
+    if ($BranchChanged -and $ResolvedBranch -eq "pre-release") { $BetaIter = 0 }
+    if ($BranchChanged -and $ResolvedBranch -eq "alpha") { $AlphaIter = 0 }
 }
 
-Write-Step "Releasing $NewVersion on '$ResolvedBranch'$(if ($ResolvedPrefix) { " (tag suffix: -$ResolvedPrefix)" } else { " (stable, tag v$NewVersion)" })"
+$Channel = switch ($ResolvedBranch) { "alpha" { "alpha" }; "pre-release" { "beta" }; "master" { "stable" } }
 
-# -- Checkout the target branch, promoting it from alpha first ------------
+if ($Channel -eq "alpha") { $AlphaIter++ }
+elseif ($Channel -eq "beta") { $BetaIter++ }
+$Iteration = if ($Channel -eq "alpha") { $AlphaIter } else { $BetaIter }
+
+$Tag = if ($Channel -eq "stable") { "v$TargetVersion" } else { "v$TargetVersion-$Channel.$Iteration" }
+
+Write-Step "Releasing $Tag on '$ResolvedBranch'"
+
+# -- Checkout the target branch, promoting it from alpha first --------------
 $CurrentBranch = git rev-parse --abbrev-ref HEAD
 if ($CurrentBranch -ne $ResolvedBranch) {
     Write-Step "Checking out $ResolvedBranch"
@@ -124,78 +158,77 @@ if ($ResolvedBranch -ne "alpha") {
     }
 }
 
-# -- Bump the version across every manifest that carries one ----------------
-Write-Step "Bumping version $CurrentVersion -> $NewVersion"
+# -- Bump manifests ONLY when the target version itself changes. A plain -----
+# -- alpha/beta iteration touches nothing but the state file's counter.  -----
+if ($IsNewTarget -or -not $State) {
+    Write-Step "Bumping target version -> $TargetVersion"
 
-function Set-VersionLine($Path, $Pattern, $Replacement) {
-    $full = Join-Path $RepoRoot $Path
-    $text = Get-Content $full -Raw
-    $updated = $text -replace $Pattern, $Replacement
-    if ($updated -eq $text) { Fail "Version pattern not found in $Path - refusing to proceed with a stale file." }
-    [System.IO.File]::WriteAllText($full, $updated)
+    function Set-VersionLine($Path, $Pattern, $Replacement) {
+        $full = Join-Path $RepoRoot $Path
+        $text = Get-Content $full -Raw
+        $updated = $text -replace $Pattern, $Replacement
+        if ($updated -eq $text) { Fail "Version pattern not found in $Path - refusing to proceed with a stale file." }
+        [System.IO.File]::WriteAllText($full, $updated)
+    }
+
+    Set-VersionLine "Cargo.toml" '(?m)^version = "[0-9]+\.[0-9]+\.[0-9]+"' "version = `"$TargetVersion`""
+    Set-VersionLine "ostp-gui/src-tauri/Cargo.toml" '(?m)^version = "[0-9]+\.[0-9]+\.[0-9]+"' "version = `"$TargetVersion`""
+    Set-VersionLine "ostp-gui/src-tauri/tauri.conf.json" '"version": "[0-9]+\.[0-9]+\.[0-9]+"' "`"version`": `"$TargetVersion`""
+    Set-VersionLine "ostp-gui/package.json" '"version": "[0-9]+\.[0-9]+\.[0-9]+"' "`"version`": `"$TargetVersion`""
+
+    # Refresh Cargo.lock's per-package version entries. ostp-gui/src-tauri is
+    # excluded from the main workspace (its own Tauri build graph), so it has
+    # its own separate Cargo.lock that the main `cargo check` never touches.
+    Write-Step "Running cargo check to refresh Cargo.lock (main workspace)"
+    cargo check --workspace --exclude ostp-jni --quiet
+    if ($LASTEXITCODE -ne 0) { Fail "cargo check failed after the version bump - not committing a broken build." }
+
+    Write-Step "Running cargo check to refresh Cargo.lock (ostp-gui/src-tauri)"
+    Push-Location (Join-Path $RepoRoot "ostp-gui/src-tauri")
+    cargo check --quiet
+    $tauriCheckExit = $LASTEXITCODE
+    Pop-Location
+    if ($tauriCheckExit -ne 0) { Fail "cargo check failed in ostp-gui/src-tauri after the version bump." }
 }
 
-Set-VersionLine "Cargo.toml" '(?m)^version = "[0-9]+\.[0-9]+\.[0-9]+"' "version = `"$NewVersion`""
-Set-VersionLine "ostp-gui/src-tauri/Cargo.toml" '(?m)^version = "[0-9]+\.[0-9]+\.[0-9]+"' "version = `"$NewVersion`""
-Set-VersionLine "ostp-gui/src-tauri/tauri.conf.json" '"version": "[0-9]+\.[0-9]+\.[0-9]+"' "`"version`": `"$NewVersion`""
-Set-VersionLine "ostp-gui/package.json" '"version": "[0-9]+\.[0-9]+\.[0-9]+"' "`"version`": `"$NewVersion`""
-
-# Flutter build number must increase monotonically (Android versionCode) -
-# bump it alongside the version string, don't just rewrite the version part.
+# Flutter's build number (Android versionCode) must strictly increase on
+# every single build ever shipped — unlike the semantic version, it does NOT
+# stay fixed across alpha/beta iterations, so this runs every time, not just
+# on a target-version switch.
 $pubspecPath = Join-Path $RepoRoot "ostp-flutter/pubspec.yaml"
 $pubspecText = Get-Content $pubspecPath -Raw
 if ($pubspecText -match 'version: [0-9]+\.[0-9]+\.[0-9]+\+([0-9]+)') {
     $nextBuild = [int]$Matches[1] + 1
-    $pubspecText = $pubspecText -replace 'version: [0-9]+\.[0-9]+\.[0-9]+\+[0-9]+', "version: $NewVersion+$nextBuild"
+    $pubspecText = $pubspecText -replace 'version: [0-9]+\.[0-9]+\.[0-9]+\+[0-9]+', "version: $TargetVersion+$nextBuild"
     [System.IO.File]::WriteAllText($pubspecPath, $pubspecText)
 } else {
     Fail "Version pattern not found in ostp-flutter/pubspec.yaml."
 }
 
-# -- Refresh Cargo.lock's per-package version entries ------------------------
-# ostp-gui/src-tauri is excluded from the main workspace (its own Tauri build
-# graph), so it has its own separate Cargo.lock that the main `cargo check`
-# below never touches - needs its own pass or it'd drift from Cargo.toml.
-Write-Step "Running cargo check to refresh Cargo.lock (main workspace)"
-cargo check --workspace --exclude ostp-jni --quiet
-if ($LASTEXITCODE -ne 0) { Fail "cargo check failed after the version bump - not committing a broken build." }
-
-Write-Step "Running cargo check to refresh Cargo.lock (ostp-gui/src-tauri)"
-Push-Location (Join-Path $RepoRoot "ostp-gui/src-tauri")
-cargo check --quiet
-$tauriCheckExit = $LASTEXITCODE
-Pop-Location
-if ($tauriCheckExit -ne 0) { Fail "cargo check failed in ostp-gui/src-tauri after the version bump." }
-
 # -- Persist the new state ---------------------------------------------------
 [PSCustomObject]@{
-    version = $NewVersion
-    branch  = $ResolvedBranch
-    prefix  = $ResolvedPrefix
+    target_version  = $TargetVersion
+    branch          = $ResolvedBranch
+    alpha_iteration = $AlphaIter
+    beta_iteration  = $BetaIter
 } | ConvertTo-Json | Set-Content $StateFile
 
 # -- Commit -------------------------------------------------------------------
-$suffixLabel = if ($ResolvedPrefix) { "-$ResolvedPrefix" } else { "" }
-$commitMsg = "chore: release $NewVersion$suffixLabel on $ResolvedBranch"
+$commitMsg = "chore: release $Tag on $ResolvedBranch"
 Write-Step "Committing: $commitMsg"
 git add Cargo.toml Cargo.lock ostp-gui/src-tauri/Cargo.toml ostp-gui/src-tauri/Cargo.lock `
     ostp-gui/src-tauri/tauri.conf.json ostp-gui/package.json ostp-flutter/pubspec.yaml `
     .release-state.json
 git commit -m $commitMsg | Out-Null
 
-# -- Push: branch push for alpha/pre-release (CI computes the tag itself), -
-# -- a real "vX.Y.Z" tag for master (the only path that yields a stable      -
-# -- release per release.yml's resolve-channel job).                        -
-if ($ResolvedBranch -eq "master") {
-    $tag = "v$NewVersion"
-    Write-Step "Tagging $tag and pushing master + tag"
-    git tag $tag
-    git push origin master
-    git push origin $tag
-} else {
-    Write-Step "Pushing $ResolvedBranch"
-    git push origin $ResolvedBranch
-}
+# -- Push. release.yml triggers ONLY on "v*" tag pushes (no branch trigger), -
+# -- so the tag push is what actually starts the build; the branch push is   -
+# -- just so the promotion chain (alpha -> pre-release -> master) itself     -
+# -- keeps moving forward for the next --ff-only.                            -
+Write-Step "Tagging $Tag and pushing $ResolvedBranch + tag"
+git tag $Tag
+git push origin $ResolvedBranch
+git push origin $Tag
 
 Write-Host ""
 Write-Host "Done. Watch the build: https://github.com/ospab/ostp/actions" -ForegroundColor Green
