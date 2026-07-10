@@ -1,5 +1,6 @@
 {
-  "version": "0.4.4",
-  "branch": "alpha",
-  "prefix": "alpha"
+  "target_version": "0.4.1",
+  "branch": "master",
+  "alpha_iteration": 0,
+  "beta_iteration": 0
 }
