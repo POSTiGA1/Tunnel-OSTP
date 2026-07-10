@@ -34,13 +34,20 @@
   .release-state.json at the repo root. Running with no arguments repeats
   last time's branch, bumping that channel's iteration by one — manifests
   are NOT touched (nothing to bump: the target version hasn't changed).
-  -Switch starts a new target version line and resets both iteration
+  -NewVersion starts a new target version line and resets both iteration
   counters to 0 — THIS is the one case that bumps every manifest.
 
-.PARAMETER Switch
+.PARAMETER NewVersion
   Set a new target version (e.g. "0.4.2") instead of continuing the current
   one. Resets both alpha_iteration and beta_iteration to 0. Defaults the
   channel back to alpha unless -Branch is also given this run.
+
+  NOTE: this parameter is deliberately NOT named "Switch" — PowerShell's
+  `switch` statement keyword is matched case-insensitively against variable
+  names in scope, and a script parameter named exactly $Switch silently
+  breaks every `switch (...) { ... }` expression later in the same script
+  (it evaluates to nothing, no error). Confirmed by bisection: renaming the
+  parameter is the only thing that fixes it. Do not rename this back.
 
 .PARAMETER Branch
   Which branch/channel to release from: master, pre-release (beta), or alpha.
@@ -51,7 +58,7 @@
   Bumps the current channel's iteration by one and pushes v{target}-{channel}.{N}.
 
 .EXAMPLE
-  .\scripts\gha.ps1 -Switch 0.4.2
+  .\scripts\gha.ps1 -NewVersion 0.4.2
   Starts a fresh 0.4.2 cycle: manifests -> 0.4.2, alpha iteration resets to 1,
   ships v0.4.2-alpha.1.
 
@@ -66,7 +73,7 @@
 #>
 [CmdletBinding()]
 param(
-    [string]$Switch,
+    [string]$NewVersion,
     [ValidateSet('master', 'pre-release', 'alpha')]
     [string]$Branch
 )
@@ -98,14 +105,14 @@ if (Test-Path $StateFile) {
 }
 
 $PrevBranch = if ($State) { $State.branch } else { $null }
-$IsNewTarget = [bool]$Switch
+$IsNewTarget = [bool]$NewVersion
 
 $ResolvedBranch = if ($Branch) { $Branch } elseif ($PrevBranch) { $PrevBranch } else { "alpha" }
 
 # -- Resolve the target version + per-channel iteration counters ------------
 if ($IsNewTarget) {
-    if ($Switch -notmatch '^[0-9]+\.[0-9]+\.[0-9]+$') { Fail "-Switch must be a bare X.Y.Z version, got '$Switch'." }
-    $TargetVersion = $Switch
+    if ($NewVersion -notmatch '^[0-9]+\.[0-9]+\.[0-9]+$') { Fail "-NewVersion must be a bare X.Y.Z version, got '$NewVersion'." }
+    $TargetVersion = $NewVersion
     $AlphaIter = 0
     $BetaIter = 0
     # A fresh target version starts a fresh cycle at the bottom of the chain,
