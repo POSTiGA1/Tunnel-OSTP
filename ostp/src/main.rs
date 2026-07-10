@@ -609,8 +609,8 @@ fn run_setup_wizard(config_path: &std::path::Path) -> Result<()> {
                 &format!("TUN mode:     {}", if tun_enable { "enabled" } else { "disabled" }),
                 "",
                 "To start:  ostp",
-                "To check:  ostp --check",
-                "Proxy env: eval $(ostp --proxy-env)",
+                "To check:  ostp check",
+                "Proxy env: eval $(ostp proxy-env)",
             ]);
         }
 
@@ -682,8 +682,8 @@ fn run_setup_wizard(config_path: &std::path::Path) -> Result<()> {
                 &format!("Keys:    {}", key_count),
                 "",
                 "To start:  ostp",
-                "To check:  ostp --check",
-                "Share links: ostp --links",
+                "To check:  ostp check",
+                "Share links: ostp links",
             ]);
         }
 
@@ -1263,9 +1263,9 @@ async fn run_app() -> Result<()> {
         anyhow::bail!(
             "Configuration file {:?} not found.\n\n\
              To generate a default configuration template, run:\n\
-             \t./ostp --init server\n\
+             \t./ostp init server\n\
              \tor\n\
-             \t./ostp --init client\n\n\
+             \t./ostp init client\n\n\
              Or specify a custom configuration file path using:\n\
              \t./ostp --config /path/to/your_config.json",
             args.config

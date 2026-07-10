@@ -235,7 +235,7 @@ pub fn enable_system_proxy(proxy_addr: &str) {
     println!("OSTP Local Proxy is running at socks5://{}", proxy_addr);
     println!("Since you are in a headless/terminal environment, OSTP cannot automatically");
     println!("configure your system proxy. To route traffic from this terminal, run:");
-    println!("\n    eval $(ostp --proxy-env)\n");
+    println!("\n    eval $(ostp proxy-env)\n");
     println!("Or configure your application (e.g. curl -x socks5://{})", proxy_addr);
     println!("===================================================================\n");
 }
