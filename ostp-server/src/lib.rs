@@ -410,6 +410,15 @@ async fn run_server_loop(
 
                 loop {
                     if let Ok((stream, peer_addr)) = listener.accept().await {
+                        // Disable Nagle's algorithm on the UoT carrier. Without
+                        // this the server→client (download) direction batches
+                        // small writes and interacts with the client's delayed
+                        // ACKs, adding tens-to-hundreds of ms of stall per burst
+                        // — which throttles throughput badly for streaming/video.
+                        // The client already sets nodelay on its end; the server
+                        // must match. (Every TCP-tunnel proxy sets TCP_NODELAY.)
+                        let _ = stream.set_nodelay(true);
+
                         // Rate limit check
                         let peer_ip = peer_addr.ip();
                         let allowed = {
