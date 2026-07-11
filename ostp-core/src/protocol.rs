@@ -1,6 +1,5 @@
 use bytes::Bytes;
 use rand::Rng;
-use sha2::{Digest, Sha256};
 use thiserror::Error;
 use std::collections::{BTreeMap, VecDeque};
 use std::time::{Duration, Instant};
@@ -281,9 +280,12 @@ impl ProtocolMachine {
             NoiseRole::Initiator => None,
         };
 
-        let mut key = [0_u8; 32];
-        self.noise.handshake_hash(&mut key)?;
-        let (send_key, recv_key) = derive_split_keys(&key, self.role);
+        // Transport keys come from Noise's Split() over the final chaining key,
+        // so they depend on the ephemeral `ee` DH secret and give the session
+        // forward secrecy. (Previously these were derived from the handshake
+        // hash, which never absorbs the DH result — see raw_split's SECURITY
+        // note. That is the wire-breaking change gated by PROTOCOL_VERSION.)
+        let (send_key, recv_key) = self.noise.raw_split(self.role)?;
         self.send_cipher = Some(SessionCipher::new(&send_key));
         self.recv_cipher = Some(SessionCipher::new(&recv_key));
         self.state = OstpState::Established;
@@ -730,26 +732,6 @@ fn parse_ack_ranges(payload: &[u8]) -> Result<Vec<(u64, u64)>, ProtocolError> {
 
 fn nonce_in_ranges(nonce: u64, ranges: &[(u64, u64)]) -> bool {
     ranges.iter().any(|(start, end)| nonce >= *start && nonce <= *end)
-}
-
-fn derive_split_keys(base_key: &[u8; 32], role: NoiseRole) -> ([u8; 32], [u8; 32]) {
-    let mut initiator_key = [0u8; 32];
-    let mut responder_key = [0u8; 32];
-
-    let mut h1 = Sha256::new();
-    h1.update(base_key);
-    h1.update(b"ostp-initiator");
-    initiator_key.copy_from_slice(&h1.finalize());
-
-    let mut h2 = Sha256::new();
-    h2.update(base_key);
-    h2.update(b"ostp-responder");
-    responder_key.copy_from_slice(&h2.finalize());
-
-    match role {
-        NoiseRole::Initiator => (initiator_key, responder_key),
-        NoiseRole::Responder => (responder_key, initiator_key),
-    }
 }
 
 #[cfg(test)]

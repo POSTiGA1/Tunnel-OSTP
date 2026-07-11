@@ -74,8 +74,11 @@ pub struct DerivedSecrets {
 /// without a version) produces a different obfuscation key, so a 0.4.0 server
 /// cannot recover its handshake header and rejects it as an unauthorized probe.
 ///
-/// Bump this on any wire-breaking protocol change. 0.4.0 = version 4.
-pub const PROTOCOL_VERSION: u8 = 4;
+/// Bump this on any wire-breaking protocol change. 0.4.0 = version 4;
+/// version 5 (0.4.x hardening) moved transport keys from the handshake hash to
+/// Noise's Split() output — a wire-breaking crypto change, so old peers must not
+/// interop (they would derive different session keys and fail decryption).
+pub const PROTOCOL_VERSION: u8 = 5;
 
 pub fn derive_all_secrets(access_key: &[u8]) -> DerivedSecrets {
     derive_all_secrets_versioned(access_key, PROTOCOL_VERSION)
