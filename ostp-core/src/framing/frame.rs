@@ -13,8 +13,6 @@ pub enum FrameKind {
     KeepAlive = 4,
     Nack = 5,
     Ack = 6,
-    /// 0-RTT session resumption: client sends ticket + early data
-    Resume = 7,
 }
 
 impl TryFrom<u8> for FrameKind {
@@ -28,7 +26,6 @@ impl TryFrom<u8> for FrameKind {
             4 => Ok(Self::KeepAlive),
             5 => Ok(Self::Nack),
             6 => Ok(Self::Ack),
-            7 => Ok(Self::Resume),
             _ => Err(ProtocolError::Framing("unknown frame kind".to_string())),
         }
     }
