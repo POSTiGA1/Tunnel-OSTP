@@ -13,8 +13,6 @@ pub enum FrameKind {
     KeepAlive = 4,
     Nack = 5,
     Ack = 6,
-    /// 0-RTT session resumption: client sends ticket + early data
-    Resume = 7,
 }
 
 impl TryFrom<u8> for FrameKind {
@@ -28,7 +26,6 @@ impl TryFrom<u8> for FrameKind {
             4 => Ok(Self::KeepAlive),
             5 => Ok(Self::Nack),
             6 => Ok(Self::Ack),
-            7 => Ok(Self::Resume),
             _ => Err(ProtocolError::Framing("unknown frame kind".to_string())),
         }
     }
@@ -104,7 +101,15 @@ impl FramedPacket {
         let payload_len = header.payload_len as usize;
         let pad_len = header.pad_len as usize;
 
-        let expected = FRAME_HEADER_LEN + payload_len + pad_len;
+        // Use checked arithmetic: payload_len is a u32 from the (decrypted, but
+        // still to-be-trusted) header, and on 32-bit targets — MIPS/ARMv7
+        // routers are supported build targets — header+payload+pad can overflow
+        // usize and wrap to a small value that spuriously passes the length
+        // check, causing an out-of-range slice below.
+        let expected = FRAME_HEADER_LEN
+            .checked_add(payload_len)
+            .and_then(|v| v.checked_add(pad_len))
+            .ok_or_else(|| ProtocolError::Framing("frame length overflow".to_string()))?;
         if buf.len() < expected {
             return Err(ProtocolError::Framing("frame body truncated".to_string()));
         }

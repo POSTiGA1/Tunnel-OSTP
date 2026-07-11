@@ -633,7 +633,7 @@ async fn handle_create_user(
         return api_error::<String>("failed to save configuration");
     }
 
-    tracing::info!("API: created user key {}", &key[..8.min(key.len())]);
+    tracing::info!("API: created user key (fp={})", crate::dispatcher::key_fp(&key));
     (StatusCode::OK, ApiResponse::success(key))
 }
 

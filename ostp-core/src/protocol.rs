@@ -1,6 +1,5 @@
 use bytes::Bytes;
 use rand::Rng;
-use sha2::{Digest, Sha256};
 use thiserror::Error;
 use std::collections::{BTreeMap, VecDeque};
 use std::time::{Duration, Instant};
@@ -237,7 +236,9 @@ impl ProtocolMachine {
 
         let session_id = u32::from_be_bytes([raw_vec[0], raw_vec[1], raw_vec[2], raw_vec[3]]);
         if session_id != self.session_id {
-            tracing::error!("session id mismatch! expected={:#010x}, got={:#010x}, is_handshake={}, raw_len={}", self.session_id, session_id, is_handshake, raw_vec.len());
+            // Per-packet, attacker-triggerable event: keep at debug and don't
+            // dump internal session ids (log-flood + info-leak surface).
+            tracing::debug!("session id mismatch (is_handshake={})", is_handshake);
             return Err(ProtocolError::State("session id mismatch".to_string()));
         }
 
@@ -263,8 +264,7 @@ impl ProtocolMachine {
                 noise_len, raw_vec.len() - 6
             )));
         }
-        tracing::info!("handle_inbound: raw_vec.len()={}, noise_len={}, raw_vec[0..6]={:?}", raw_vec.len(), noise_len, &raw_vec[0..6]);
-        
+
         let mut read_out = vec![0_u8; 1024];
         let n = self.noise.read_handshake(&raw_vec[6..6 + noise_len], &mut read_out).map_err(|e| {
             ProtocolError::Crypto(format!("noise-read: {:?} (raw_len={}, noise_len={})", e, raw_vec.len(), noise_len))
@@ -281,9 +281,12 @@ impl ProtocolMachine {
             NoiseRole::Initiator => None,
         };
 
-        let mut key = [0_u8; 32];
-        self.noise.handshake_hash(&mut key)?;
-        let (send_key, recv_key) = derive_split_keys(&key, self.role);
+        // Transport keys come from Noise's Split() over the final chaining key,
+        // so they depend on the ephemeral `ee` DH secret and give the session
+        // forward secrecy. (Previously these were derived from the handshake
+        // hash, which never absorbs the DH result — see raw_split's SECURITY
+        // note. That is the wire-breaking change gated by PROTOCOL_VERSION.)
+        let (send_key, recv_key) = self.noise.raw_split(self.role)?;
         self.send_cipher = Some(SessionCipher::new(&send_key));
         self.recv_cipher = Some(SessionCipher::new(&recv_key));
         self.state = OstpState::Established;
@@ -358,13 +361,8 @@ impl ProtocolMachine {
             FrameKind::Data => {
                 ProtocolAction::DeliverApp(packet.header.stream_id, packet.payload)
             }
-            FrameKind::Resume => {
-                // 0-RTT: treat early data as application data
-                tracing::info!("0-RTT Resume frame received, processing early data");
-                ProtocolAction::DeliverApp(packet.header.stream_id, packet.payload)
-            }
             FrameKind::Close => {
-                tracing::info!("Received Close frame, terminating session");
+                tracing::debug!("Received Close frame, terminating session");
                 self.state = OstpState::Closed;
                 ProtocolAction::Noop
             }
@@ -685,24 +683,34 @@ impl ProtocolMachine {
     fn drop_acked_frames(&mut self, ranges: &[(u64, u64)]) {
         let now = Instant::now();
         let mut acked_bytes = 0u64;
-        let mut min_rtt = Duration::from_secs(60);
+        let mut min_rtt: Option<Duration> = None;
 
-        // Compute RTT from the oldest acked frame's send timestamp
         for frame in self.sent_history.iter() {
             if nonce_in_ranges(frame.nonce, ranges) {
                 acked_bytes += frame.bytes.len() as u64;
-                let rtt = now.duration_since(frame.last_sent);
-                if rtt < min_rtt {
-                    min_rtt = rtt;
+                // Karn's algorithm: never take an RTT sample from a frame that
+                // was retransmitted. `last_sent` is bumped on every retransmit,
+                // so an ACK for the ORIGINAL transmission would be measured
+                // against the retransmit time, yielding a spuriously small RTT
+                // that drags SRTT/RTO down and triggers more spurious
+                // retransmits. Only unambiguous (never-retried) frames qualify.
+                if frame.retries == 0 {
+                    let rtt = now.duration_since(frame.last_sent);
+                    min_rtt = Some(min_rtt.map_or(rtt, |m| m.min(rtt)));
                 }
             }
         }
 
         self.sent_history.retain(|frame| !nonce_in_ranges(frame.nonce, ranges));
 
-        // Notify congestion controller
+        // Notify congestion controller. Feed an RTT sample only when we had at
+        // least one unambiguous ACK; otherwise update the window without
+        // polluting the RTT estimator.
         if acked_bytes > 0 {
-            self.cc.on_ack(acked_bytes, min_rtt);
+            match min_rtt {
+                Some(rtt) => self.cc.on_ack(acked_bytes, rtt),
+                None => self.cc.on_ack_no_rtt(acked_bytes),
+            }
         }
     }
 }
@@ -730,26 +738,6 @@ fn parse_ack_ranges(payload: &[u8]) -> Result<Vec<(u64, u64)>, ProtocolError> {
 
 fn nonce_in_ranges(nonce: u64, ranges: &[(u64, u64)]) -> bool {
     ranges.iter().any(|(start, end)| nonce >= *start && nonce <= *end)
-}
-
-fn derive_split_keys(base_key: &[u8; 32], role: NoiseRole) -> ([u8; 32], [u8; 32]) {
-    let mut initiator_key = [0u8; 32];
-    let mut responder_key = [0u8; 32];
-
-    let mut h1 = Sha256::new();
-    h1.update(base_key);
-    h1.update(b"ostp-initiator");
-    initiator_key.copy_from_slice(&h1.finalize());
-
-    let mut h2 = Sha256::new();
-    h2.update(base_key);
-    h2.update(b"ostp-responder");
-    responder_key.copy_from_slice(&h2.finalize());
-
-    match role {
-        NoiseRole::Initiator => (initiator_key, responder_key),
-        NoiseRole::Responder => (responder_key, initiator_key),
-    }
 }
 
 #[cfg(test)]

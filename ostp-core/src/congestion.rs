@@ -144,6 +144,19 @@ impl CongestionController {
         self.bytes_in_flight = self.bytes_in_flight.saturating_add(bytes);
     }
 
+    /// Record that `bytes` were acknowledged but WITHOUT a usable RTT sample
+    /// (e.g. every acked frame was retransmitted, so Karn's algorithm forbids
+    /// measuring RTT from it). The window still advances; only the RTT estimator
+    /// is left untouched.
+    pub fn on_ack_no_rtt(&mut self, bytes: u64) {
+        let now = Instant::now();
+        self.bytes_in_flight = self.bytes_in_flight.saturating_sub(bytes);
+        self.total_acked = self.total_acked.saturating_add(bytes);
+        self.grow_window(bytes);
+        self.update_pacing_rate();
+        self.last_ack_time = now;
+    }
+
     /// Record that `bytes` were acknowledged with the given RTT sample.
     pub fn on_ack(&mut self, bytes: u64, rtt: Duration) {
         let now = Instant::now();
@@ -153,6 +166,13 @@ impl CongestionController {
         // Update RTT measurements
         self.update_rtt(rtt, now);
 
+        self.grow_window(bytes);
+        self.update_pacing_rate();
+        self.last_ack_time = now;
+    }
+
+    /// Congestion-window growth shared by both ACK paths (slow start / probe).
+    fn grow_window(&mut self, bytes: u64) {
         // State machine
         match self.phase {
             Phase::SlowStart => {
@@ -168,9 +188,6 @@ impl CongestionController {
                 self.cwnd = self.cwnd.saturating_add(bytes * self.mtu / self.cwnd.max(1));
             }
         }
-
-        self.update_pacing_rate();
-        self.last_ack_time = now;
     }
 
     /// Record a loss event.
@@ -311,6 +328,23 @@ mod tests {
         assert!(rto >= RTO_MIN);
         assert!(rto <= RTO_MAX);
         assert_eq!(rto, Duration::from_millis(150));
+    }
+
+    #[test]
+    fn test_on_ack_no_rtt_grows_window_without_touching_srtt() {
+        let mut cc = CongestionController::new(1200);
+        // Establish a known SRTT with a real sample.
+        cc.on_send(1200);
+        cc.on_ack(1200, Duration::from_millis(40));
+        let srtt_before = cc.smoothed_rtt();
+        let cwnd_before = cc.cwnd();
+
+        // A Karn's-algorithm ACK (all acked frames were retransmitted): window
+        // must advance, RTT estimate must be untouched.
+        cc.on_send(1200);
+        cc.on_ack_no_rtt(1200);
+        assert!(cc.cwnd() > cwnd_before, "cwnd should still grow on a no-RTT ack");
+        assert_eq!(cc.smoothed_rtt(), srtt_before, "SRTT must not move on a no-RTT ack");
     }
 
     #[test]
