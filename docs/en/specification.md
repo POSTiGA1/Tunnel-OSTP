@@ -90,11 +90,22 @@ Because the `Nonce` is unique per packet, the mask is cryptographically independ
 
 OSTP executes a Noise Protocol Framework exchange utilizing the `Noise_NNpsk0_25519_ChaChaPoly_BLAKE2s` pattern.
 
-1.  The Registration Key (`access_key`) is converted to a 32-octet strong pre-shared key (PSK) via SHA-256.
+1.  The Registration Key (`access_key`) is converted to a 32-octet strong pre-shared key (PSK) via HKDF-SHA-256.
 2.  The PSK is integrated into the state at pattern position zero, authorizing and encrypting the very first handshaking datagram.
-3.  Ephemeral Curve25519 key exchange is evaluated to synthesize autonomous symmetric keys for subsequent read/write channels.
+3.  Ephemeral Curve25519 key exchange (`ee`) is evaluated, and the two directional transport keys are taken from Noise's `Split()` over the final chaining key `ck`.
 
-The initial handshake payload includes a Unix timestamp to mitigate replay attacks. The server enforces a strict ±30-second synchronization window.
+> **Forward secrecy.** The transport keys are derived from the chaining key
+> `ck`, which absorbs the ephemeral `ee` Diffie-Hellman result. They are **not**
+> derived from the Noise handshake hash `h` — `h` only ever absorbs public
+> transcript data (ephemeral public keys and on-wire ciphertexts) and never the
+> DH secret, so keys derived from it would give an access-key holder the ability
+> to decrypt any recorded session. Deriving from `ck` binds each session to its
+> ephemeral private keys, which are discarded after the handshake: an adversary
+> who later compromises the PSK still cannot decrypt past traffic. This is a
+> wire-breaking property gated by the internal protocol version (currently 5);
+> peers on an older version derive different keys and cannot interoperate.
+
+The initial handshake payload includes a Unix timestamp to mitigate replay attacks. The server enforces a ±300-second (5-minute) synchronization window and additionally records accepted handshakes in an anti-replay set for that window.
 
 ---
 
@@ -126,4 +137,5 @@ The server supports seamless network handoffs (e.g., transitioning from Wi-Fi to
 
 *   **Nonce Exhaustion:** The Nonce field is 64 bits. Implementations MUST terminate and re-key a session before the Nonce overflows to prevent AEAD keystream reuse.
 *   **Session Exhaustion (DoS):** Servers MUST enforce a strict cap on concurrent sessions (e.g., 1024) and silently drop handshake attempts exceeding this limit to prevent memory exhaustion attacks.
+*   **Handshake-trial CPU DoS:** Because there is no cleartext key identifier on the wire (a deliberate stealth property), a datagram from an unknown source must be trial-decrypted against every registered key. Servers MUST bound this work: OSTP caches each key's derived secrets and time-windowed junk markers (so a trial is a cheap comparison plus one AEAD attempt per key, not a fresh HKDF/HMAC), and gates the trial path behind a global token bucket (default 100/s) so a spoofed-source flood cannot force unbounded per-packet crypto. The established-session fast path and IP-roaming path are not subject to this bucket.
 *   **Header Authentication:** The header obfuscation mechanism provides privacy, not integrity. Header integrity is mathematically guaranteed by the Poly1305 Authentication Tag, which covers the entire 12-byte header as Additional Authenticated Data (AAD).
