@@ -56,35 +56,42 @@ Download pre-built binaries for your platform from [GitHub Releases](https://git
 ## Architecture
 
 ```mermaid
-graph TD
-    subgraph Client ["Client"]
-        A[Browser / Apps] -->|SOCKS5 / HTTP| B(Bridge Multiplexer)
-        TUN[TUN Interface] -->|IP Packets| B
-        
-        subgraph OSTPCoreClient ["OSTP Core Protocol"]
-            B --> C{Protocol Machine}
-            C -->|Noise Handshake| D[ChaCha20Poly1305 AEAD]
-            D -->|Obfuscated UDP Payload| E((UDP Socket))
-        end
+flowchart LR
+    %% Styles
+    classDef userApp fill:#e1f5fe,stroke:#01579b,stroke-width:2px,color:#01579b
+    classDef ostpCore fill:#e8f5e9,stroke:#2e7d32,stroke-width:2px,color:#2e7d32
+    classDef network fill:#fff3e0,stroke:#e65100,stroke-width:2px,color:#e65100,stroke-dasharray: 5 5
+    classDef external fill:#f3e5f5,stroke:#4a148c,stroke-width:2px,color:#4a148c
+    classDef fallback fill:#ffebee,stroke:#c62828,stroke-width:2px,color:#c62828
+
+    subgraph Local["💻 Client Device"]
+        Apps["Web Browser / Apps"]:::userApp
+        Socks["SOCKS5 / HTTP Proxy"]:::ostpCore
+        Tun["Global TUN (VPN)"]:::ostpCore
+        Client["OSTP Client Protocol Engine\n(Noise + ChaCha20 + ARQ)"]:::ostpCore
+
+        Apps -->|TCP/UDP| Socks
+        Apps -->|IP Packets| Tun
+        Socks --> Client
+        Tun --> Client
     end
 
-    E <==>|Encrypted & Obfuscated UDP Tunnel| F
-
-    subgraph Server ["Server"]
-        F((UDP Socket)) --> G{Dispatcher}
-        
-        subgraph OSTPCoreServer ["OSTP Core Backend"]
-            G -->|Auth & Decrypt| H[Session & State Guard]
-            H -->|TCP Stream| I[Relay Loop]
-        end
-        
-        G -->|Active Probing / Unauth| FB[TCP Fallback Proxy]
-        FB -->|Forward| NGINX[nginx / Caddy]
-        
-        H -->|Stats & Traffic| API[Management API]
-        
-        I -->|Outbound| WWW((Internet))
+    subgraph Internet["🌐 Hostile Network (DPI/Firewall)"]
+        Tunnel{"Fully Obfuscated\nEncrypted UDP\n(Looks like noise)"}:::network
     end
+
+    subgraph Remote["🖥️ Remote VPS (Server)"]
+        Server["OSTP Server Protocol Engine\n(Authentication & Decryption)"]:::ostpCore
+        Relay["Connection Multiplexer"]:::ostpCore
+        Fallback["Fake Website\n(Nginx/Caddy)"]:::fallback
+        Target["Open Internet\n(YouTube, Google, etc)"]:::external
+
+        Server -->|Decrypted Traffic| Relay
+        Server -->|Active Probe / Scanner| Fallback
+        Relay -->|Clear Traffic| Target
+    end
+
+    Client <==> Tunnel <==> Server
 ```
 
 ---

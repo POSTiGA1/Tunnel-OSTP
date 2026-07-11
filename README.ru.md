@@ -35,33 +35,42 @@
 ## Архитектура
 
 ```mermaid
-graph TD
-    subgraph Client ["Клиент"]
-        A[Браузер / Прил.] -->|SOCKS5 / HTTP| B(Bridge Multiplexer)
-        TUN[TUN Интерфейс] -->|IP Пакеты| B
-        
-        subgraph OSTPCoreClient ["OSTP Core Протокол"]
-            B --> C{Protocol Machine}
-            C -->|Noise Handshake| D[ChaCha20Poly1305 AEAD]
-            D -->|Обфусцированный UDP| E((UDP Сокет))
-        end
+flowchart LR
+    %% Styles
+    classDef userApp fill:#e1f5fe,stroke:#01579b,stroke-width:2px,color:#01579b
+    classDef ostpCore fill:#e8f5e9,stroke:#2e7d32,stroke-width:2px,color:#2e7d32
+    classDef network fill:#fff3e0,stroke:#e65100,stroke-width:2px,color:#e65100,stroke-dasharray: 5 5
+    classDef external fill:#f3e5f5,stroke:#4a148c,stroke-width:2px,color:#4a148c
+    classDef fallback fill:#ffebee,stroke:#c62828,stroke-width:2px,color:#c62828
+
+    subgraph Local["💻 Устройство клиента"]
+        Apps["Браузер / Приложения"]:::userApp
+        Socks["SOCKS5 / HTTP Прокси"]:::ostpCore
+        Tun["Global TUN (VPN)"]:::ostpCore
+        Client["OSTP Клиент\n(Noise + ChaCha20 + ARQ)"]:::ostpCore
+
+        Apps -->|TCP/UDP| Socks
+        Apps -->|IP Пакеты| Tun
+        Socks --> Client
+        Tun --> Client
     end
 
-    E <==>|Зашифрованный UDP Туннель| F
-
-    subgraph Server ["Сервер"]
-        F((UDP Сокет)) --> G{Dispatcher}
-        
-        subgraph OSTPCoreServer ["OSTP Core Backend"]
-            G -->|Auth & Decrypt| H[Session & State Guard]
-            H -->|TCP Поток| I[Relay Loop]
-        end
-        
-        G -->|Active Probing / Unauth| FB[TCP Fallback Proxy]
-        FB -->|Перенаправление| NGINX[nginx / Caddy]
-        
-        I -->|Outbound| WWW((Интернет))
+    subgraph Internet["🌐 Сеть с цензурой (DPI)"]
+        Tunnel{"Зашифрованный UDP\n(Выглядит как белый шум)"}:::network
     end
+
+    subgraph Remote["🖥️ Удаленный сервер (VPS)"]
+        Server["OSTP Сервер\n(Аутентификация)"]:::ostpCore
+        Relay["Мультиплексор соединений"]:::ostpCore
+        Fallback["Фейковый сайт\n(Nginx/Caddy)"]:::fallback
+        Target["Свободный интернет\n(YouTube, Google и т.д.)"]:::external
+
+        Server -->|Расшифрованный трафик| Relay
+        Server -->|Сканеры цензоров| Fallback
+        Relay -->|Чистый трафик| Target
+    end
+
+    Client <==> Tunnel <==> Server
 ```
 
 ---
