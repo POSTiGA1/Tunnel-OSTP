@@ -265,39 +265,42 @@ class _SettingsScreenState extends State<SettingsScreen> {
                       if (v != null) setDialogState(() => transportMode = v);
                     },
                   ),
-                  const Divider(height: 32),
-                  // Junk packets + TCP fragmentation moved into their own
-                  // modals (tap to configure) — this dialog was carrying too
-                  // many fields at once; these two are advanced/occasional
-                  // settings, not something every profile edit needs to see.
-                  const Text('DPI OBFUSCATION', style: TextStyle(fontWeight: FontWeight.bold, fontSize: 13, color: Colors.white54, letterSpacing: 1.0)),
-                  const SizedBox(height: 12),
-                  Row(
-                    children: [
-                      Expanded(
-                        child: OutlinedButton.icon(
-                          icon: const Icon(Icons.shuffle_rounded, size: 18),
-                          label: const Text('Junk Packets'),
-                          onPressed: () => _showJunkPacketsModal(
-                            context, junkPcMinCtrl, junkPcMaxCtrl, junkPsMinCtrl, junkPsMaxCtrl,
+                  // Junk packets and TCP fragmentation only take effect on the
+                  // UoT (TCP) transport — the UDP path applies neither — so the
+                  // whole section is hidden under UDP instead of shown with a
+                  // "UoT only" caveat. Reactive: switching Transport above calls
+                  // setDialogState, which rebuilds this and shows/hides it.
+                  if (transportMode == 'uot') ...[
+                    const Divider(height: 32),
+                    const Text('DPI OBFUSCATION', style: TextStyle(fontWeight: FontWeight.bold, fontSize: 13, color: Colors.white54, letterSpacing: 1.0)),
+                    const SizedBox(height: 12),
+                    Row(
+                      children: [
+                        Expanded(
+                          child: OutlinedButton.icon(
+                            icon: const Icon(Icons.shuffle_rounded, size: 18),
+                            label: const Text('Junk Packets'),
+                            onPressed: () => _showJunkPacketsModal(
+                              context, junkPcMinCtrl, junkPcMaxCtrl, junkPsMinCtrl, junkPsMaxCtrl,
+                            ),
                           ),
                         ),
-                      ),
-                      const SizedBox(width: 12),
-                      Expanded(
-                        child: OutlinedButton.icon(
-                          icon: Icon(tcpFragmentation ? Icons.call_split_rounded : Icons.horizontal_rule_rounded, size: 18),
-                          label: Text(tcpFragmentation ? 'TCP Frag: On' : 'TCP Frag: Off'),
-                          onPressed: () => _showTcpFragModal(
-                            context,
-                            tcpFragmentation,
-                            (v) => setDialogState(() => tcpFragmentation = v),
-                            fragChunkCtrl, fragSleepCtrl,
+                        const SizedBox(width: 12),
+                        Expanded(
+                          child: OutlinedButton.icon(
+                            icon: Icon(tcpFragmentation ? Icons.call_split_rounded : Icons.horizontal_rule_rounded, size: 18),
+                            label: Text(tcpFragmentation ? 'TCP Frag: On' : 'TCP Frag: Off'),
+                            onPressed: () => _showTcpFragModal(
+                              context,
+                              tcpFragmentation,
+                              (v) => setDialogState(() => tcpFragmentation = v),
+                              fragChunkCtrl, fragSleepCtrl,
+                            ),
                           ),
                         ),
-                      ),
-                    ],
-                  ),
+                      ],
+                    ),
+                  ],
                 ],
               ),
             ),
