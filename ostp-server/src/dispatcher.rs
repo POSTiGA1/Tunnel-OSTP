@@ -106,6 +106,15 @@ pub struct Dispatcher {
 /// capping flood-driven trial work at TRIAL_RATE × num_keys crypto ops/sec.
 const TRIAL_RATE: f64 = 100.0;
 
+/// Short, non-reversible fingerprint of an access key for logs. The access key
+/// is a shared secret, so it must never be written to logs verbatim; this lets
+/// an operator correlate events without exposing the key itself.
+pub(crate) fn key_fp(access_key: &str) -> String {
+    use sha2::{Digest, Sha256};
+    let h = Sha256::digest(access_key.as_bytes());
+    format!("{:02x}{:02x}{:02x}", h[0], h[1], h[2])
+}
+
 #[allow(dead_code)]
 impl Dispatcher {
     pub fn new(machine_config: ProtocolConfig, access_keys: Arc<RwLock<HashMap<String, crate::api::UserMeta>>>) -> Self {
@@ -289,7 +298,7 @@ impl Dispatcher {
                 let user_stats = self.get_or_create_user_stats(&access_key);
                 if !key_valid || user_stats.is_over_limit() {
                     tracing::info!("Dropping session {} for key {} (valid={}, over_limit={})",
-                        session_id, access_key, key_valid, user_stats.is_over_limit());
+                        session_id, key_fp(&access_key), key_valid, user_stats.is_over_limit());
                     self.drop_session(session_id);
                     return Ok(DispatchOutcome::Unauthorized);
                 }
@@ -467,7 +476,7 @@ impl Dispatcher {
 
                             // Check traffic limit before accepting
                             if user_stats.is_over_limit() {
-                                tracing::warn!("User {} exceeded traffic limit, rejecting handshake from {}", candidate_key, peer);
+                                tracing::warn!("User {} exceeded traffic limit, rejecting handshake from {}", key_fp(&candidate_key), peer);
                                 return Ok(DispatchOutcome::Unauthorized);
                             }
 

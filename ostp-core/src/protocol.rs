@@ -236,7 +236,9 @@ impl ProtocolMachine {
 
         let session_id = u32::from_be_bytes([raw_vec[0], raw_vec[1], raw_vec[2], raw_vec[3]]);
         if session_id != self.session_id {
-            tracing::error!("session id mismatch! expected={:#010x}, got={:#010x}, is_handshake={}, raw_len={}", self.session_id, session_id, is_handshake, raw_vec.len());
+            // Per-packet, attacker-triggerable event: keep at debug and don't
+            // dump internal session ids (log-flood + info-leak surface).
+            tracing::debug!("session id mismatch (is_handshake={})", is_handshake);
             return Err(ProtocolError::State("session id mismatch".to_string()));
         }
 
@@ -262,8 +264,7 @@ impl ProtocolMachine {
                 noise_len, raw_vec.len() - 6
             )));
         }
-        tracing::info!("handle_inbound: raw_vec.len()={}, noise_len={}, raw_vec[0..6]={:?}", raw_vec.len(), noise_len, &raw_vec[0..6]);
-        
+
         let mut read_out = vec![0_u8; 1024];
         let n = self.noise.read_handshake(&raw_vec[6..6 + noise_len], &mut read_out).map_err(|e| {
             ProtocolError::Crypto(format!("noise-read: {:?} (raw_len={}, noise_len={})", e, raw_vec.len(), noise_len))
@@ -362,11 +363,11 @@ impl ProtocolMachine {
             }
             FrameKind::Resume => {
                 // 0-RTT: treat early data as application data
-                tracing::info!("0-RTT Resume frame received, processing early data");
+                tracing::debug!("0-RTT Resume frame received, processing early data");
                 ProtocolAction::DeliverApp(packet.header.stream_id, packet.payload)
             }
             FrameKind::Close => {
-                tracing::info!("Received Close frame, terminating session");
+                tracing::debug!("Received Close frame, terminating session");
                 self.state = OstpState::Closed;
                 ProtocolAction::Noop
             }

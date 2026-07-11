@@ -303,7 +303,8 @@ pub async fn run_server(
                     }
                 }
                 UiEvent::KeyCreated { key } => {
-                    tracing::info!("Access key created: {key}");
+                    // Never log the access key verbatim — it's a shared secret.
+                    tracing::info!("Access key created (fp={})", crate::dispatcher::key_fp(&key));
                 }
                 UiEvent::UnauthorizedProbe { peer, bytes } => {
                     if debug {
