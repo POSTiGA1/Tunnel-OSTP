@@ -24,7 +24,7 @@
 
   Promoting to beta/master first fast-forwards that branch to `alpha`
   (--ff-only — this always succeeds cleanly as long as nobody ever commits
-  directly to pre-release/master, per CONTRIBUTING.md's branch strategy), so
+  directly to beta/master, per CONTRIBUTING.md's branch strategy), so
   a release always ships alpha's latest, not a stale branch. Switching to a
   channel for the first time in a cycle resets THAT channel's iteration
   counter to 1 (a fresh promotion starts its own count; it doesn't inherit
@@ -50,7 +50,7 @@
   parameter is the only thing that fixes it. Do not rename this back.
 
 .PARAMETER Branch
-  Which branch/channel to release from: master, pre-release (beta), or alpha.
+  Which branch/channel to release from: master, beta, or alpha.
   Defaults to whatever was used last time (see .release-state.json).
 
 .EXAMPLE
@@ -63,8 +63,8 @@
   ships v0.4.2-alpha.1.
 
 .EXAMPLE
-  .\scripts\gha.ps1 -Branch pre-release
-  Promotes alpha -> pre-release (beta channel), resets beta_iteration to 1
+  .\scripts\gha.ps1 -Branch beta
+  Promotes alpha -> beta (beta channel), resets beta_iteration to 1
   (or bumps it if already mid-beta), ships v{target}-beta.{N}.
 
 .EXAMPLE
@@ -74,7 +74,7 @@
 [CmdletBinding()]
 param(
     [string]$NewVersion,
-    [ValidateSet('master', 'pre-release', 'alpha')]
+    [ValidateSet('master', 'beta', 'alpha')]
     [string]$Branch
 )
 
@@ -133,11 +133,11 @@ if ($IsNewTarget) {
     # Entering a channel that wasn't active last run (a promotion) starts
     # THAT channel's count fresh — it doesn't inherit alpha's iteration number.
     $BranchChanged = ($ResolvedBranch -ne $PrevBranch)
-    if ($BranchChanged -and $ResolvedBranch -eq "pre-release") { $BetaIter = 0 }
+    if ($BranchChanged -and $ResolvedBranch -eq "beta") { $BetaIter = 0 }
     if ($BranchChanged -and $ResolvedBranch -eq "alpha") { $AlphaIter = 0 }
 }
 
-$Channel = switch ($ResolvedBranch) { "alpha" { "alpha" }; "pre-release" { "beta" }; "master" { "stable" } }
+$Channel = switch ($ResolvedBranch) { "alpha" { "alpha" }; "beta" { "beta" }; "master" { "stable" } }
 
 if ($Channel -eq "alpha") { $AlphaIter++ }
 elseif ($Channel -eq "beta") { $BetaIter++ }
@@ -230,7 +230,7 @@ git commit -m $commitMsg | Out-Null
 
 # -- Push. release.yml triggers ONLY on "v*" tag pushes (no branch trigger), -
 # -- so the tag push is what actually starts the build; the branch push is   -
-# -- just so the promotion chain (alpha -> pre-release -> master) itself     -
+# -- just so the promotion chain (alpha -> beta -> master) itself     -
 # -- keeps moving forward for the next --ff-only.                            -
 Write-Step "Tagging $Tag and pushing $ResolvedBranch + tag"
 git tag $Tag

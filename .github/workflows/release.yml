@@ -4,7 +4,7 @@ name: CI/CD
 # `run-name` is evaluated at workflow-start, BEFORE any job runs - it cannot
 # see resolve-channel's computed tag_name (e.g. "0.4.3-alpha"), only the
 # `github.*` context. The old "release version ${{ github.ref_name }}" showed
-# the bare branch name ("alpha"/"pre-release") for every run, which reads
+# the bare branch name ("alpha"/"beta") for every run, which reads
 # exactly like a literal release tag and caused real confusion - the actual
 # release tag has been correct (versioned) all along; only this label lied
 # about it. Spell out "channel" so nobody mistakes one for the other again.
@@ -53,7 +53,7 @@ jobs:
   # Tag shape:
   #   - real "vX.Y.Z" / "vX.Y.Z-beta.N" tag push -> tag used as-is (stable promotion)
   #   - push to `alpha`                        -> "{version}-alpha" (rolling, same tag every push)
-  #   - push to `pre-release`                     -> "{version}-beta"    (rolling, same tag every push)
+  #   - push to `beta`                            -> "{version}-beta"    (rolling, same tag every push)
   #   - workflow_dispatch                         -> forced by the `channel` input (alpha|beta only)
   resolve-channel:
     name: Resolve release channel
@@ -89,7 +89,7 @@ jobs:
             # channel, then synthesize the rolling tag from Cargo.toml's version.
             if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
               CHANNEL="${{ github.event.inputs.channel }}"
-            elif [ "${{ github.ref_name }}" = "pre-release" ]; then
+            elif [ "${{ github.ref_name }}" = "beta" ]; then
               CHANNEL="beta"
             else
               CHANNEL="alpha"

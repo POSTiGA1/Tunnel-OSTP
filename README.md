@@ -192,7 +192,7 @@ Commands:
   links                  Print client share links from the server config
   import <URL>           Import a share link into the config file
   update                 Update OSTP to the latest release
-    -b, --branch <NAME>    Release channel: stable, pre-release, alpha (default: stable)
+    -b, --branch <NAME>    Release channel: stable, beta, alpha (default: stable)
     -v, --version <VER>    Update to an exact version instead of the channel's latest
   migrate                Force-migrate the configuration file to the current format
   proxy-env              Print shell export commands for the local SOCKS proxy

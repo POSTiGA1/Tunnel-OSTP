@@ -118,9 +118,9 @@ else
     if [ "$TARGET_BRANCH" == "alpha" ]; then
         echo "Fetching alpha release..."
         LATEST_RELEASE="alpha"
-    elif [ "$TARGET_BRANCH" == "pre-release" ]; then
-        echo "Fetching pre-release..."
-        LATEST_RELEASE="pre-release"
+    elif [ "$TARGET_BRANCH" == "beta" ]; then
+        echo "Fetching beta release..."
+        LATEST_RELEASE="beta"
     else
         echo "Fetching latest stable release..."
         LATEST_RELEASE=$(curl -s "https://api.github.com/repos/${GITHUB_REPO}/releases/latest" | grep '"tag_name":' | sed -E 's/.*"([^"]+)".*/\1/')

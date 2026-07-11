@@ -74,10 +74,10 @@ The repository runs three long-lived branches, in increasing order of stability:
 | Branch | Role |
 |---|---|
 | `alpha` | Active development. All feature work and fixes land here first. |
-| `pre-release` | Periodically fast-forwarded from `alpha` once it's had some soak time. Ships as the `{version}-beta` release channel. |
-| `master` | Fast-forwarded from `pre-release` when it's proven stable. Real, tagged releases (`vX.Y.Z`) are cut from here. |
+| `beta` | Periodically fast-forwarded from `alpha` once it's had some soak time. Ships as the `{version}-beta` release channel. |
+| `master` | Fast-forwarded from `beta` when it's proven stable. Real, tagged releases (`vX.Y.Z`) are cut from here. |
 
-`pre-release` and `master` are **never** committed to directly - they only ever move forward by fast-forwarding from the branch below them. This means promotion is always a plain `git merge` with zero conflicts by construction: don't `git merge`/rebase feature work directly onto `pre-release` or `master`.
+`beta` and `master` are **never** committed to directly - they only ever move forward by fast-forwarding from the branch below them. This means promotion is always a plain `git merge` with zero conflicts by construction: don't `git merge`/rebase feature work directly onto `beta` or `master`.
 
 **Contributor PRs target `alpha`**, not `master`.
 
@@ -148,7 +148,7 @@ Multiple unrelated changes belong in separate commits, not one bundled commit - 
     ```bash
     git push origin feat/your-feature-name
     ```
-2.  Open a Pull Request (PR) targeting the `alpha` branch (see [Branch Strategy](#branch-strategy) - `master` only receives fast-forwards from `pre-release`, never direct PRs).
+2.  Open a Pull Request (PR) targeting the `alpha` branch (see [Branch Strategy](#branch-strategy) - `master` only receives fast-forwards from `beta`, never direct PRs).
 3.  In your PR description, explain the rationale behind your changes, what was fixed/added, and how it was tested.
 4.  Verify that GitHub Actions CI runs successfully on your PR.
 

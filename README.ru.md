@@ -181,7 +181,7 @@ ostp [--config <PATH>] [КОМАНДА]
   links                  Вывести client-share-ссылки из серверного конфига
   import <URL>           Импортировать share-ссылку в конфиг
   update                 Обновить OSTP до актуального релиза
-    -b, --branch <NAME>    Канал релиза: stable, pre-release, alpha (по умолчанию stable)
+    -b, --branch <NAME>    Канал релиза: stable, beta, alpha (по умолчанию stable)
     -v, --version <VER>    Обновиться на точную версию вместо последней в канале
   migrate                Принудительно мигрировать конфиг к текущему формату
   proxy-env              Вывести shell-команды для локального SOCKS-прокси

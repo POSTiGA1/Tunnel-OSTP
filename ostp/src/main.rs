@@ -54,7 +54,7 @@ enum Commands {
     Uninstall,
     /// Update OSTP: re-run the install script to fetch and install the latest version
     Update {
-        /// Release branch to update from (stable, pre-release, alpha)
+        /// Release branch to update from (stable, beta, alpha)
         #[arg(short = 'b', long, default_value = "stable")]
         branch: String,
         /// Exact release version to update to (e.g. 0.4.1 or 0.4.1-beta.3),
