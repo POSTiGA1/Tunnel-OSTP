@@ -54,6 +54,7 @@ fn hkdf_expand(prk: &[u8; 32], info: &[u8], len: usize) -> Vec<u8> {
 /// The derivation uses the access key as both IKM and salt material,
 /// split into two halves. No fixed strings are used — the access key
 /// alone determines all derived values.
+#[derive(Clone)]
 pub struct DerivedSecrets {
     pub obfuscation_key: [u8; 8],
     pub psk: [u8; 32],

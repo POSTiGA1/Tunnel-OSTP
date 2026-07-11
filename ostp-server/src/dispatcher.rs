@@ -83,7 +83,28 @@ pub struct Dispatcher {
     replay_cache: std::collections::HashMap<Vec<u8>, u64>,
     roaming_tokens: f64,
     last_token_regen: std::time::Instant,
+    /// Cache of per-key derived secrets (obf key / psk / padding). These are a
+    /// pure function of the access key + PROTOCOL_VERSION, so they never change
+    /// for a given key — computing the HKDF on every unknown datagram, for every
+    /// registered key, was pure waste and an attacker-amplified CPU sink.
+    secrets_cache: HashMap<String, ostp_core::crypto::DerivedSecrets>,
+    /// Cache of each key's junk markers for the current time window. The marker
+    /// rotates every window, so the cached `(window, m_now, m_prev)` is refreshed
+    /// when the window rolls; within a window it's an HMAC we compute once, not
+    /// twice per key per packet.
+    junk_cache: HashMap<String, (u64, [u8; 4], [u8; 4])>,
+    /// Token bucket bounding how many expensive new-handshake key-trials we run
+    /// per second. The existing-session fast path and roaming path are NOT gated
+    /// by this; only the O(N_keys) trial over unknown datagrams is, so a garbage
+    /// flood from spoofed sources can't force unbounded per-packet crypto work.
+    trial_tokens: f64,
+    last_trial_regen: std::time::Instant,
 }
+
+/// Sustained rate (and burst ceiling) of new-handshake trials per second. Legit
+/// first-connect packets are rare, so this is generous for real use while still
+/// capping flood-driven trial work at TRIAL_RATE × num_keys crypto ops/sec.
+const TRIAL_RATE: f64 = 100.0;
 
 #[allow(dead_code)]
 impl Dispatcher {
@@ -101,7 +122,36 @@ impl Dispatcher {
             replay_cache: std::collections::HashMap::new(),
             roaming_tokens: 50.0,
             last_token_regen: std::time::Instant::now(),
+            secrets_cache: HashMap::new(),
+            junk_cache: HashMap::new(),
+            trial_tokens: TRIAL_RATE,
+            last_trial_regen: std::time::Instant::now(),
         }
+    }
+
+    /// Fetch this key's derived secrets from cache, computing (and caching) them
+    /// on first sight. Pure function of the key, so the entry never goes stale.
+    fn cached_secrets(&mut self, key: &str) -> ostp_core::crypto::DerivedSecrets {
+        if let Some(s) = self.secrets_cache.get(key) {
+            return s.clone();
+        }
+        let s = ostp_core::crypto::derive_all_secrets(key.as_bytes());
+        self.secrets_cache.insert(key.to_string(), s.clone());
+        s
+    }
+
+    /// Fetch this key's `(m_now, m_prev)` junk markers for `window`, recomputing
+    /// only when the cached window has rolled.
+    fn cached_junk_markers(&mut self, key: &str, window: u64) -> ([u8; 4], [u8; 4]) {
+        if let Some(&(w, m_now, m_prev)) = self.junk_cache.get(key) {
+            if w == window {
+                return (m_now, m_prev);
+            }
+        }
+        let m_now = ostp_core::crypto::derive_junk_marker(key.as_bytes(), window);
+        let m_prev = ostp_core::crypto::derive_junk_marker(key.as_bytes(), window.wrapping_sub(1));
+        self.junk_cache.insert(key.to_string(), (window, m_now, m_prev));
+        (m_now, m_prev)
     }
 
     /// Returns a shared reference to user stats for the Management API.
@@ -302,7 +352,22 @@ impl Dispatcher {
             }
         }
 
-        // Not an existing session — try each registered access key's derived obfuscation key
+        // Not an existing session — this is the expensive O(N_keys) trial path.
+        // Gate it behind a token bucket so a garbage/spoofed-source flood cannot
+        // force unbounded per-packet crypto work. Existing sessions (fast path
+        // above) and roaming are unaffected. Regenerate at TRIAL_RATE/sec.
+        {
+            let now = std::time::Instant::now();
+            let elapsed = now.duration_since(self.last_trial_regen).as_secs_f64();
+            self.last_trial_regen = now;
+            self.trial_tokens = (self.trial_tokens + elapsed * TRIAL_RATE).min(TRIAL_RATE);
+            if self.trial_tokens < 1.0 {
+                // Out of budget: drop silently (no response, no state, no log spam).
+                return Ok(DispatchOutcome::Unauthorized);
+            }
+            self.trial_tokens -= 1.0;
+        }
+
         let keys_snapshot: Vec<String> = self.access_keys.read().unwrap_or_else(|e| e.into_inner()).keys().cloned().collect();
 
         // Junk marker rotates per time window; check the current and previous
@@ -311,13 +376,12 @@ impl Dispatcher {
         let junk_window = ostp_core::crypto::current_junk_window();
 
         for candidate_key in keys_snapshot {
-            let secrets = ostp_core::crypto::derive_all_secrets(candidate_key.as_bytes());
+            let secrets = self.cached_secrets(&candidate_key);
 
             // Junk frames carry this key's time-rotating marker (no global
             // constant, no static per-user signature). Drop silently.
             if packet.len() >= 4 {
-                let m_now = ostp_core::crypto::derive_junk_marker(candidate_key.as_bytes(), junk_window);
-                let m_prev = ostp_core::crypto::derive_junk_marker(candidate_key.as_bytes(), junk_window.wrapping_sub(1));
+                let (m_now, m_prev) = self.cached_junk_markers(&candidate_key, junk_window);
                 if packet[0..4] == m_now || packet[0..4] == m_prev {
                     return Ok(DispatchOutcome::Junk);
                 }
@@ -460,6 +524,14 @@ impl Dispatcher {
             .unwrap_or_default()
             .as_secs();
         self.replay_cache.retain(|_, &mut ts| (current_sys_time as i64 - ts as i64).abs() <= 300);
+
+        // Drop cached secrets/junk-markers for keys that have been deleted, so the
+        // caches can't grow without bound as keys churn.
+        {
+            let keys = self.access_keys.read().unwrap_or_else(|e| e.into_inner());
+            self.secrets_cache.retain(|k, _| keys.contains_key(k));
+            self.junk_cache.retain(|k, _| keys.contains_key(k));
+        }
 
         let mut frames = Vec::new();
         let mut expired = Vec::new();
