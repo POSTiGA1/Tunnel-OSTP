@@ -47,3 +47,5 @@ ostp-control/
 
 .agents/
 netstack-smoltcp/
+dnstt/
+ostp-web/
