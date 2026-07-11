@@ -683,24 +683,34 @@ impl ProtocolMachine {
     fn drop_acked_frames(&mut self, ranges: &[(u64, u64)]) {
         let now = Instant::now();
         let mut acked_bytes = 0u64;
-        let mut min_rtt = Duration::from_secs(60);
+        let mut min_rtt: Option<Duration> = None;
 
-        // Compute RTT from the oldest acked frame's send timestamp
         for frame in self.sent_history.iter() {
             if nonce_in_ranges(frame.nonce, ranges) {
                 acked_bytes += frame.bytes.len() as u64;
-                let rtt = now.duration_since(frame.last_sent);
-                if rtt < min_rtt {
-                    min_rtt = rtt;
+                // Karn's algorithm: never take an RTT sample from a frame that
+                // was retransmitted. `last_sent` is bumped on every retransmit,
+                // so an ACK for the ORIGINAL transmission would be measured
+                // against the retransmit time, yielding a spuriously small RTT
+                // that drags SRTT/RTO down and triggers more spurious
+                // retransmits. Only unambiguous (never-retried) frames qualify.
+                if frame.retries == 0 {
+                    let rtt = now.duration_since(frame.last_sent);
+                    min_rtt = Some(min_rtt.map_or(rtt, |m| m.min(rtt)));
                 }
             }
         }
 
         self.sent_history.retain(|frame| !nonce_in_ranges(frame.nonce, ranges));
 
-        // Notify congestion controller
+        // Notify congestion controller. Feed an RTT sample only when we had at
+        // least one unambiguous ACK; otherwise update the window without
+        // polluting the RTT estimator.
         if acked_bytes > 0 {
-            self.cc.on_ack(acked_bytes, min_rtt);
+            match min_rtt {
+                Some(rtt) => self.cc.on_ack(acked_bytes, rtt),
+                None => self.cc.on_ack_no_rtt(acked_bytes),
+            }
         }
     }
 }

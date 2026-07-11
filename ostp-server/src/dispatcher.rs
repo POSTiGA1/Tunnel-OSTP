@@ -11,6 +11,11 @@ use portable_atomic::AtomicU64;
 /// Excess handshake attempts are silently dropped -- no response, no state allocated.
 const MAX_SESSIONS: usize = 1024;
 
+/// Cap on the anti-replay handshake cache. When reached, expired entries are
+/// reclaimed (and if needed the oldest is evicted) rather than rejecting new
+/// handshakes globally — see the eviction logic in on_datagram.
+const REPLAY_CACHE_MAX: usize = 50_000;
+
 pub enum DispatchOutcome {
     Unauthorized,
     /// Packet matched a registered key's per-key junk marker — drop silently.
@@ -457,9 +462,30 @@ impl Dispatcher {
                         }
 
                         if !self.replay_cache.contains_key(&payload.to_vec()) {
-                            if self.replay_cache.len() >= 50_000 {
-                                tracing::warn!("Replay cache full (100000 entries), rejecting handshake from {}", peer);
-                                return Ok(DispatchOutcome::Unauthorized);
+                            if self.replay_cache.len() >= REPLAY_CACHE_MAX {
+                                // Don't globally reject new handshakes when full —
+                                // that would let one flooding key-holder deny
+                                // service to everyone. Reclaim space instead:
+                                // first drop entries already past the drift
+                                // window, then, if still full, evict the single
+                                // oldest. A replay is still caught because it can
+                                // only be accepted while within the 300s drift
+                                // window, and an entry that young is never the
+                                // one evicted before the cache genuinely holds
+                                // 50k sub-300s handshakes.
+                                self.replay_cache.retain(|_, &mut cached_ts| {
+                                    (now as i64 - cached_ts as i64).abs() <= 300
+                                });
+                                if self.replay_cache.len() >= REPLAY_CACHE_MAX {
+                                    if let Some(oldest) = self.replay_cache
+                                        .iter()
+                                        .min_by_key(|(_, &ts)| ts)
+                                        .map(|(k, _)| k.clone())
+                                    {
+                                        self.replay_cache.remove(&oldest);
+                                    }
+                                    tracing::warn!("Replay cache full ({} entries), evicting oldest", REPLAY_CACHE_MAX);
+                                }
                             }
                             if self.peer_machines.len() >= MAX_SESSIONS {
                                 tracing::warn!("Max sessions reached ({}), rejecting handshake from {}", MAX_SESSIONS, peer);
