@@ -46,6 +46,56 @@ async fn send_datagram(socket: &crate::transport::Transport, frame: &Bytes, _web
 struct SessionState {
     socket: crate::transport::Transport,
     machine: ProtocolMachine,
+    /// Handle to this session's spawned receiver task. Held so the task is
+    /// aborted when the session is dropped (e.g. replaced on reconnect).
+    /// Otherwise, on a dead connection the task blocks forever in recv() while
+    /// keeping the old socket alive — leaking a task + socket on every
+    /// reconnect, which piles up across sleep/resume cycles.
+    rx_task: tokio::task::AbortHandle,
+}
+
+impl Drop for SessionState {
+    fn drop(&mut self) {
+        self.rx_task.abort();
+    }
+}
+
+/// Spawn the per-session receiver loop that reads inbound datagrams from the
+/// transport and forwards them to the bridge, returning an AbortHandle so the
+/// task is torn down when its `SessionState` is dropped. Consolidates the three
+/// previously-duplicated inline copies (initial connect, network-change, and
+/// keepalive reconnect).
+fn spawn_session_receiver(
+    socket: crate::transport::Transport,
+    session_index: usize,
+    udp_tx: mpsc::Sender<(usize, Bytes)>,
+) -> tokio::task::AbortHandle {
+    tokio::spawn(async move {
+        let mut buf = vec![0_u8; 65535];
+        let is_uot = matches!(socket, crate::transport::Transport::Uot { .. });
+        loop {
+            match socket.recv(&mut buf).await {
+                Ok(n) => {
+                    let inbound = Bytes::copy_from_slice(&buf[..n]);
+                    if udp_tx.send((session_index, inbound)).await.is_err() {
+                        break;
+                    }
+                }
+                Err(e) => {
+                    if is_uot {
+                        // TCP transport is dead; exit so the bridge sees the
+                        // channel close and reconnects.
+                        tracing::debug!("UoT session {} disconnected: {}", session_index, e);
+                        break;
+                    } else {
+                        tracing::warn!("UDP socket recv error (session {}): {}", session_index, e);
+                        tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+                    }
+                }
+            }
+        }
+    })
+    .abort_handle()
 }
 
 pub struct Bridge {
@@ -360,35 +410,9 @@ impl Bridge {
                         match self.perform_handshake_with_id(&tx, session_id).await {
                             Ok((sock, mach, rtt)) => {
                                 let session_index = sessions.len();
-                                let socket_clone = sock.clone();
-                                let udp_tx_clone = udp_tx.clone();
+                                let rx_task = spawn_session_receiver(sock.clone(), session_index, udp_tx.clone());
 
-                                tokio::spawn(async move {
-                                    let mut buf = vec![0_u8; 65535];
-                                    let is_uot = matches!(socket_clone, crate::transport::Transport::Uot { .. });
-                                    loop {
-                                        match socket_clone.recv(&mut buf).await {
-                                            Ok(n) => {
-                                                let inbound = Bytes::copy_from_slice(&buf[..n]);
-                                                if udp_tx_clone.send((session_index, inbound)).await.is_err() {
-                                                    break;
-                                                }
-                                            }
-                                            Err(e) => {
-                                                if is_uot {
-                                                    // TCP is dead — drop sender to signal bridge via channel close
-                                                    tracing::debug!("UoT session {} disconnected: {}", session_index, e);
-                                                    break;
-                                                } else {
-                                                    tracing::warn!("UDP socket recv error (session {}): {}", session_index, e);
-                                                    tokio::time::sleep(std::time::Duration::from_millis(50)).await;
-                                                }
-                                            }
-                                        }
-                                    }
-                                });
-
-                                sessions.push(SessionState { socket: sock, machine: mach });
+                                sessions.push(SessionState { socket: sock, machine: mach, rx_task });
                                 rtt_sum += rtt;
                                 successful_sessions += 1;
                             }
@@ -457,31 +481,8 @@ impl Bridge {
                         match self.perform_handshake_with_id(&tx, session_id).await {
                             Ok((sock, mach, rtt)) => {
                                 let session_index = new_sessions.len();
-                                let socket_clone = sock.clone();
-                                let udp_tx_clone = udp_tx.clone();
-
-                                tokio::spawn(async move {
-                                    let mut buf = vec![0_u8; 65535];
-                                    let is_uot = matches!(socket_clone, crate::transport::Transport::Uot { .. });
-                                    loop {
-                                        match socket_clone.recv(&mut buf).await {
-                                            Ok(n) => {
-                                                let inbound = Bytes::copy_from_slice(&buf[..n]);
-                                                if udp_tx_clone.send((session_index, inbound)).await.is_err() { break; }
-                                            }
-                                            Err(e) => {
-                                                if is_uot {
-                                                    tracing::debug!("UoT network-change session {} disconnected: {}", session_index, e);
-                                                    break;
-                                                } else {
-                                                    tracing::warn!("UDP recv error (network-change session {}): {}", session_index, e);
-                                                    tokio::time::sleep(std::time::Duration::from_millis(50)).await;
-                                                }
-                                            }
-                                        }
-                                    }
-                                });
-                                new_sessions.push(SessionState { socket: sock, machine: mach });
+                                let rx_task = spawn_session_receiver(sock.clone(), session_index, udp_tx.clone());
+                                new_sessions.push(SessionState { socket: sock, machine: mach, rx_task });
                                 rtt_sum += rtt;
                                 successful_sessions += 1;
                             }
@@ -597,34 +598,9 @@ impl Bridge {
                 match self.perform_handshake_with_id(&tx, session_id).await {
                     Ok((sock, mach, rtt)) => {
                         let session_index = new_sessions.len();
-                        let socket_clone = sock.clone();
-                        let udp_tx_clone = udp_tx.clone();
+                        let rx_task = spawn_session_receiver(sock.clone(), session_index, udp_tx.clone());
 
-                        tokio::spawn(async move {
-                            let mut buf = vec![0_u8; 65535];
-                            let is_uot = matches!(socket_clone, crate::transport::Transport::Uot { .. });
-                            loop {
-                                match socket_clone.recv(&mut buf).await {
-                                    Ok(n) => {
-                                        let inbound = Bytes::copy_from_slice(&buf[..n]);
-                                        if udp_tx_clone.send((session_index, inbound)).await.is_err() {
-                                            break;
-                                        }
-                                    }
-                                    Err(e) => {
-                                        if is_uot {
-                                            tracing::debug!("UoT reconnect session {} disconnected: {}", session_index, e);
-                                            break;
-                                        } else {
-                                            tracing::warn!("UDP socket recv error (reconnect session {}): {}", session_index, e);
-                                            tokio::time::sleep(std::time::Duration::from_millis(50)).await;
-                                        }
-                                    }
-                                }
-                            }
-                        });
-
-                        new_sessions.push(SessionState { socket: sock, machine: mach });
+                        new_sessions.push(SessionState { socket: sock, machine: mach, rx_task });
                         rtt_sum += rtt;
                         successful_sessions += 1;
                     }
