@@ -10,7 +10,7 @@ use ostp_core::{NoiseRole, OstpEvent, PaddingStrategy, ProtocolAction, ProtocolC
 use rand::Rng;
 use tokio::net::UdpSocket;
 use tokio::sync::{mpsc, watch};
-use tokio::time::{interval, timeout, Instant};
+use tokio::time::{interval, timeout, Instant, MissedTickBehavior};
 
 use crate::app::{BridgeCommand, ConnectionStatus, UiEvent};
 use crate::config::ClientConfig;
@@ -131,6 +131,21 @@ impl Bridge {
         let mut metrics_tick = interval(Duration::from_millis(500));
         let mut keepalive_tick = tokio::time::interval(Duration::from_secs(self.keepalive_interval_sec.max(1)));
         let mut retransmit_tick = tokio::time::interval(Duration::from_millis(10));
+        // CRITICAL for suspend/resume: the default MissedTickBehavior is `Burst`,
+        // which after a laptop sleep or a phone backgrounding the app fires ALL
+        // the ticks that "should" have happened during the gap back-to-back. For
+        // the 10ms retransmit tick that is tens of thousands of instant ticks on
+        // resume — a CPU storm that hangs the bridge and manifests as the app
+        // freezing or getting stuck "Connecting". Skip missed ticks instead.
+        metrics_tick.set_missed_tick_behavior(MissedTickBehavior::Skip);
+        keepalive_tick.set_missed_tick_behavior(MissedTickBehavior::Skip);
+        retransmit_tick.set_missed_tick_behavior(MissedTickBehavior::Skip);
+
+        // Wall-clock anchor for suspend/resume detection. tokio's timers run on a
+        // monotonic clock; comparing it against wall-clock lets us notice that
+        // the machine slept (or the app was frozen in the background) and force
+        // one clean reconnect instead of trying to resume a long-dead session.
+        let mut last_wall_check = SystemTime::now();
         let init_msg = if self.mode == "tun" {
             "Bridge initialized (TUN mode)".to_string()
         } else {
@@ -171,13 +186,27 @@ impl Bridge {
                     }
                 }
                 _ = metrics_tick.tick() => {
+                    // Suspend/resume detection: the wall clock jumps forward on
+                    // wake even when the monotonic timer clock does not, so a
+                    // large gap here means the machine slept / the app was frozen.
+                    // The session is almost certainly dead (the server evicts
+                    // idle sessions after 10 min), so force one clean reconnect
+                    // rather than waiting on stale-session heuristics.
+                    let wall_gap = last_wall_check.elapsed().unwrap_or_default();
+                    last_wall_check = SystemTime::now();
+                    if self.running && wall_gap > Duration::from_secs(15) {
+                        let _ = tx.send(UiEvent::Log(format!(
+                            "Resumed after ~{}s suspend — forcing clean reconnect", wall_gap.as_secs()
+                        ))).await;
+                        self.handle_keepalive(true, &mut sessions_opt, &mut udp_rx_opt, &mut proxy_guard, &mut stream_map, &tx, &proxy_tx, &mut proxy_rx).await;
+                    }
                     if self.running {
                         self.emit_metrics(&tx).await;
                     }
                 }
                 _ = keepalive_tick.tick() => {
                     if self.running {
-                        self.handle_keepalive(&mut sessions_opt, &mut udp_rx_opt, &mut proxy_guard, &mut stream_map, &tx, &proxy_tx, &mut proxy_rx).await;
+                        self.handle_keepalive(false, &mut sessions_opt, &mut udp_rx_opt, &mut proxy_guard, &mut stream_map, &tx, &proxy_tx, &mut proxy_rx).await;
                     }
                 }
                 _ = retransmit_tick.tick() => {
@@ -523,6 +552,7 @@ impl Bridge {
 
     async fn handle_keepalive(
         &mut self,
+        force: bool,
         sessions_opt: &mut Option<Vec<SessionState>>,
         udp_rx_opt: &mut Option<mpsc::Receiver<(usize, Bytes)>>,
         proxy_guard: &mut Option<crate::sysproxy::SystemProxyGuard>,
@@ -531,9 +561,12 @@ impl Bridge {
         proxy_tx: &mpsc::UnboundedSender<(u16, ProxyToClientMsg)>,
         proxy_rx: &mut mpsc::Receiver<ProxyEvent>,
     ) {
-        if self.last_valid_recv.elapsed().as_secs() > 25 {
+        if force || self.last_valid_recv.elapsed().as_secs() > 25 {
             let elapsed = self.last_valid_recv.elapsed().as_secs();
-            if elapsed > 180 {
+            // On a forced (post-resume) reconnect the monotonic clock may not
+            // have advanced, so `elapsed` can be small — never treat a forced
+            // reconnect as a hard timeout; we specifically want to re-establish.
+            if !force && elapsed > 180 {
                 if self.kill_switch {
                     let _ = tx.send(UiEvent::Log(format!("Connection stall ({}s). Kill Switch is ON, retrying reconnect indefinitely...", elapsed))).await;
                 } else {
