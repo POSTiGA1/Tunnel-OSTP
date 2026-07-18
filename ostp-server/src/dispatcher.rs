@@ -246,6 +246,30 @@ impl Dispatcher {
         self.peer_machines.len()
     }
 
+    /// Per-session download-direction congestion headroom, in packets:
+    /// `(session_id, available)` where `available = clamped cwnd - in_flight`.
+    ///
+    /// Consumed by the relay's per-target-connection reader tasks (see
+    /// `relay::handle_relay_message`'s Connect handler) to throttle how fast
+    /// they pull bytes from the upstream target and forward them to the
+    /// client's OSTP session. Without this, a fast target (e.g. a CDN) gets
+    /// read and forwarded as fast as the target can serve, completely
+    /// ignoring the client-facing session's real congestion window - on a
+    /// lossy/jittery client path that self-inflicts a loss burst, which
+    /// wrecks the RTT/RTO estimate and can stall the session hard enough to
+    /// trip the client's keepalive reconnect. Same clamp(16, 16384) the
+    /// client uses for its own analogous uplink gate, for symmetry.
+    pub fn snapshot_backpressure(&self) -> Vec<(u32, i64)> {
+        self.peer_machines
+            .iter()
+            .map(|(&sid, ps)| {
+                let cwnd = (ps.machine.cwnd_packets() as i64).clamp(16, 16384);
+                let in_flight = ps.machine.in_flight_count() as i64;
+                (sid, cwnd - in_flight)
+            })
+            .collect()
+    }
+
     pub fn on_datagram(&mut self, peer: SocketAddr, packet: Bytes) -> Result<DispatchOutcome> {
         if packet.len() < 4 {
             return Ok(DispatchOutcome::Unauthorized);

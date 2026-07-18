@@ -1,7 +1,9 @@
 use anyhow::Result;
 use bytes::Bytes;
+use portable_atomic::AtomicI64;
 use std::collections::HashMap;
 use std::net::IpAddr;
+use std::sync::{Arc, RwLock};
 
 use dispatcher::{DispatchOutcome, Dispatcher};
 use ostp_core::relay::RelayMessage;
@@ -9,6 +11,12 @@ use signal::wait_for_shutdown_signal;
 use tokio::net::UdpSocket;
 use tokio::sync::mpsc;
 use tokio::time::{interval, Duration, Instant};
+
+/// Shared per-session download-direction congestion headroom (packets),
+/// published by `handle_tick` from `Dispatcher::snapshot_backpressure` and
+/// read lock-free by relay reader tasks. See that method's doc comment for
+/// why this exists.
+pub(crate) type SessionBackpressure = Arc<RwLock<HashMap<u32, Arc<AtomicI64>>>>;
 
 mod dispatcher;
 pub mod outbound;
@@ -467,6 +475,7 @@ async fn run_server_loop(
     let mut last_empty_app_log = Instant::now() - Duration::from_secs(10);
     let mut peer_last_seen: HashMap<IpAddr, Instant> = HashMap::new();
     let mut peer_available: HashMap<IpAddr, bool> = HashMap::new();
+    let session_backpressure: SessionBackpressure = Arc::new(RwLock::new(HashMap::new()));
 
     loop {
         tokio::select! {
@@ -489,7 +498,8 @@ async fn run_server_loop(
                         packet, peer, &mut dispatcher, &tcp_map, &socket, &mut remotes, &ui_event_tx,
                         stream_tx.clone(), udp_reply_tx.clone(), connect_tx.clone(),
                         router.clone(),
-                        &mut peer_last_seen, &mut peer_available, &mut last_empty_app_log
+                        &mut peer_last_seen, &mut peer_available, &mut last_empty_app_log,
+                        &session_backpressure
                     ).await {
                         tracing::error!("handle_udp_packet error: {}", e);
                     }
@@ -533,7 +543,7 @@ async fn run_server_loop(
             _ = retransmit_tick.tick() => {
                 if let Err(e) = handle_tick(
                     &mut dispatcher, &tcp_map, &socket, &mut remotes, &ui_event_tx,
-                    &mut peer_last_seen, &mut peer_available
+                    &mut peer_last_seen, &mut peer_available, &session_backpressure
                 ).await {
                     tracing::error!("handle_tick error: {}", e);
                 }
@@ -559,6 +569,7 @@ async fn handle_udp_packet(
     peer_last_seen: &mut HashMap<IpAddr, Instant>,
     peer_available: &mut HashMap<IpAddr, bool>,
     last_empty_app_log: &mut Instant,
+    session_backpressure: &SessionBackpressure,
 ) -> Result<()> {
     let size = packet.len();
     match dispatcher.on_datagram(peer, packet.clone()) {
@@ -621,6 +632,7 @@ async fn handle_udp_packet(
                     connect_tx.clone(),
                     router.clone(),
                     tcp_map,
+                    session_backpressure,
                 ).await?;
             }
         }
@@ -639,6 +651,7 @@ async fn handle_tick(
     ui_event_tx: &mpsc::UnboundedSender<UiEvent>,
     peer_last_seen: &mut HashMap<IpAddr, Instant>,
     peer_available: &mut HashMap<IpAddr, bool>,
+    session_backpressure: &SessionBackpressure,
 ) -> Result<()> {
     let now = Instant::now();
     let peer_timeout = Duration::from_secs(45);
@@ -649,6 +662,22 @@ async fn handle_tick(
             let _ = ui_event_tx.send(UiEvent::Log(format!("Client {peer_ip} disconnected (timeout)")));
         }
     }
+    // Publish each active session's current download-direction headroom so
+    // relay reader tasks (running on other tasks, no access to `dispatcher`)
+    // can throttle without touching a lock on every read. New sessions get an
+    // entry created here on their first tick after the handshake; entries for
+    // sessions that no longer exist are pruned below alongside dropped_sessions.
+    {
+        let snapshot = dispatcher.snapshot_backpressure();
+        let mut map = session_backpressure.write().unwrap_or_else(|e| e.into_inner());
+        for (sid, available) in snapshot {
+            match map.get(&sid) {
+                Some(slot) => slot.store(available, std::sync::atomic::Ordering::Relaxed),
+                None => { map.insert(sid, Arc::new(AtomicI64::new(available))); }
+            }
+        }
+    }
+
     let (frames, dropped_sessions) = dispatcher.on_tick();
     for (frame, peer_addr) in frames {
         let mut sent_tcp = false;
@@ -661,6 +690,12 @@ async fn handle_tick(
         }
         if !sent_tcp {
             let _ = socket.send_to(&frame, peer_addr).await?;
+        }
+    }
+    if !dropped_sessions.is_empty() {
+        let mut map = session_backpressure.write().unwrap_or_else(|e| e.into_inner());
+        for sid in &dropped_sessions {
+            map.remove(sid);
         }
     }
     for sid in dropped_sessions {
