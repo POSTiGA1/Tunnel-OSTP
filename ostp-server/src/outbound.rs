@@ -51,19 +51,63 @@ pub async fn connect_target(
                 return match outbound.protocol.as_str() {
                     "socks5" => connect_via_socks5(&proxy_addr, target).await,
                     "http" => connect_via_http(&proxy_addr, target).await,
-                    _ => tokio::time::timeout(connect_timeout, TcpStream::connect(target))
-                        .await
-                        .map_err(|_| anyhow::anyhow!("connect timeout ({}s): {}", connect_timeout.as_secs(), target))?
-                        .map_err(Into::into),
+                    _ => connect_direct(target, connect_timeout).await,
                 };
             }
         }
     }
 
-    tokio::time::timeout(connect_timeout, TcpStream::connect(target))
-        .await
-        .map_err(|_| anyhow::anyhow!("connect timeout ({}s): {}", connect_timeout.as_secs(), target))?
-        .map_err(Into::into)
+    connect_direct(target, connect_timeout).await
+}
+
+/// Per-candidate-address connect attempt, tried in turn (see `connect_direct`
+/// below). Short enough that a single dead-end address can't eat the whole
+/// outer `connect_timeout` budget.
+const PER_ADDR_CONNECT_TIMEOUT: Duration = Duration::from_secs(3);
+
+/// Resolve `target` ("host:port") and connect to it, trying candidate
+/// addresses in turn rather than handing the raw string straight to
+/// `TcpStream::connect` (which resolves and tries addresses internally but
+/// shares ONE timeout across the whole attempt).
+///
+/// IPv4 candidates are tried first. Some VPS hosts (observed on a
+/// DigitalOcean droplet) assign the machine an IPv6 address that the OS
+/// prefers by RFC 6724 ordering but that has no actually-working outbound
+/// route - the connect attempt doesn't get refused, it just hangs. With a
+/// single shared timeout across all candidates, that one dead IPv6 address
+/// eats the entire budget and the working IPv4 candidate is never even
+/// attempted: every dual-stack destination (i.e. most popular sites) never
+/// loads, while IPv4-only destinations work fine - exactly the "traffic
+/// counter moves but sites don't open" symptom this fixes.
+async fn connect_direct(target: &str, connect_timeout: Duration) -> Result<TcpStream> {
+    tokio::time::timeout(connect_timeout, async {
+        let mut addrs: Vec<std::net::SocketAddr> = tokio::net::lookup_host(target)
+            .await
+            .map_err(|e| anyhow::anyhow!("dns resolution failed for {}: {}", target, e))?
+            .collect();
+        if addrs.is_empty() {
+            return Err(anyhow::anyhow!("no addresses resolved for {}", target));
+        }
+        prefer_ipv4_first(&mut addrs);
+
+        let mut last_err = None;
+        for addr in addrs {
+            match tokio::time::timeout(PER_ADDR_CONNECT_TIMEOUT, TcpStream::connect(addr)).await {
+                Ok(Ok(stream)) => return Ok(stream),
+                Ok(Err(e)) => last_err = Some(anyhow::anyhow!("{}: {}", addr, e)),
+                Err(_) => last_err = Some(anyhow::anyhow!("{}: connect timeout ({}s)", addr, PER_ADDR_CONNECT_TIMEOUT.as_secs())),
+            }
+        }
+        Err(last_err.unwrap_or_else(|| anyhow::anyhow!("all candidates failed for {}", target)))
+    })
+    .await
+    .map_err(|_| anyhow::anyhow!("connect timeout ({}s): {}", connect_timeout.as_secs(), target))?
+}
+
+/// Stable-sort so IPv4 candidates come before IPv6 ones, without otherwise
+/// disturbing the resolver's original ordering within each family.
+fn prefer_ipv4_first(addrs: &mut [std::net::SocketAddr]) {
+    addrs.sort_by_key(|a| a.is_ipv6());
 }
 
 // ── Rule matching ────────────────────────────────────────────────────────────
@@ -539,5 +583,50 @@ mod tests {
     #[test]
     fn test_match_domain_rule_empty() {
         assert!(!match_domain_rule("example.com", &[]));
+    }
+
+    #[test]
+    fn test_prefer_ipv4_first_reorders_mixed_list() {
+        let v6: std::net::SocketAddr = "[2001:db8::1]:443".parse().unwrap();
+        let v4: std::net::SocketAddr = "192.0.2.1:443".parse().unwrap();
+        let mut addrs = vec![v6, v4];
+        prefer_ipv4_first(&mut addrs);
+        assert_eq!(addrs, vec![v4, v6], "IPv4 candidate must sort before IPv6");
+    }
+
+    #[test]
+    fn test_prefer_ipv4_first_preserves_order_within_family() {
+        // Two IPv4 addresses: relative order should be untouched (stable sort).
+        let a: std::net::SocketAddr = "192.0.2.1:443".parse().unwrap();
+        let b: std::net::SocketAddr = "192.0.2.2:443".parse().unwrap();
+        let mut addrs = vec![a, b];
+        prefer_ipv4_first(&mut addrs);
+        assert_eq!(addrs, vec![a, b]);
+    }
+
+    #[tokio::test]
+    async fn test_connect_direct_succeeds_against_live_listener() {
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let addr = listener.local_addr().unwrap();
+        tokio::spawn(async move {
+            let _ = listener.accept().await;
+        });
+
+        let result = connect_direct(&addr.to_string(), Duration::from_secs(2)).await;
+        assert!(result.is_ok(), "expected connect_direct to reach a live local listener: {:?}", result.err());
+    }
+
+    #[tokio::test]
+    async fn test_connect_direct_fails_fast_on_refused_port() {
+        // Bind and immediately drop to get a port nothing is listening on,
+        // so the OS sends RST and the attempt fails well under the timeout.
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let addr = listener.local_addr().unwrap();
+        drop(listener);
+
+        let start = std::time::Instant::now();
+        let result = connect_direct(&addr.to_string(), Duration::from_secs(5)).await;
+        assert!(result.is_err(), "connecting to a closed port should fail");
+        assert!(start.elapsed() < Duration::from_secs(4), "a refused connection must not wait out the full timeout");
     }
 }
