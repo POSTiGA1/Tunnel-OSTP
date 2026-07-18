@@ -284,7 +284,15 @@ jobs:
 
       - name: Install cross (if not cached)
         if: ${{ matrix.use_cross && steps.cross-cache.outputs.cache-hit != 'true' }}
-        run: cargo install cross --git https://github.com/cross-rs/cross.git --locked
+        # cross-rs's own source (not ours, not a dependency of ours) uses a
+        # macro-at-end-of-block pattern that trips rustc's
+        # semicolon_in_expressions_from_macros lint on current toolchains -
+        # harmless in cross's actual behavior, but `cargo install` compiles
+        # the installed package as the "local" crate, so dependency lint
+        # capping doesn't shield it. --cap-lints=warn is the standard escape
+        # hatch for building a third-party tool against a newer compiler than
+        # its own lint config assumed; it doesn't touch our own build.
+        run: RUSTFLAGS="--cap-lints=warn" cargo install cross --git https://github.com/cross-rs/cross.git --locked
 
       - name: Build (cross)
         if: ${{ matrix.use_cross }}
