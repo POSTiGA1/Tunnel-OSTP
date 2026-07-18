@@ -402,55 +402,6 @@
           </select>
         </div>
 
-        <!-- Advanced TCP/UoT Settings (visible only if uot is selected) -->
-        <div id="pm-tcp-settings" style="display:none; padding: 10px; background: rgba(0,0,0,0.2); border-radius: 8px; margin-bottom: 15px;">
-          <div class="toggle-row" style="padding:0; border:none; margin-bottom:10px;">
-            <div class="toggle-text">
-              <span class="toggle-name">TCP Fragmentation</span>
-              <span class="toggle-hint">Split handshake to bypass DPI</span>
-            </div>
-            <label class="toggle">
-              <input type="checkbox" id="pm-tcp-frag" />
-              <span class="toggle-track"><span class="toggle-thumb"></span></span>
-            </label>
-          </div>
-          
-          <div id="pm-frag-details" style="display:none;">
-            <div style="display:flex; gap:10px; margin-bottom:10px;">
-              <div class="inline-field" style="padding:0; border:none; flex:1;">
-                <span class="field-label">Chunk Size</span>
-                <input id="pm-frag-chunk" class="field-input compact" type="number" placeholder="2" min="1" />
-              </div>
-              <div class="inline-field" style="padding:0; border:none; flex:1;">
-                <span class="field-label">Sleep (ms)</span>
-                <input id="pm-frag-sleep" class="field-input compact" type="number" placeholder="2" min="0" />
-              </div>
-            </div>
-          </div>
-
-          <div class="section-divider-mini" style="margin-top:0;"><span>Junk Packets</span></div>
-          <div style="display:flex; gap:10px; margin-bottom:10px;">
-            <div class="inline-field" style="padding:0; border:none; flex:1;">
-              <span class="field-label">Count (Min)</span>
-              <input id="pm-junk-pc-min" class="field-input compact" type="number" placeholder="2" min="0" />
-            </div>
-            <div class="inline-field" style="padding:0; border:none; flex:1;">
-              <span class="field-label">Count (Max)</span>
-              <input id="pm-junk-pc-max" class="field-input compact" type="number" placeholder="5" min="0" />
-            </div>
-          </div>
-          <div style="display:flex; gap:10px;">
-            <div class="inline-field" style="padding:0; border:none; flex:1;">
-              <span class="field-label">Size (Min)</span>
-              <input id="pm-junk-ps-min" class="field-input compact" type="number" placeholder="100" min="0" />
-            </div>
-            <div class="inline-field" style="padding:0; border:none; flex:1;">
-              <span class="field-label">Size (Max)</span>
-              <input id="pm-junk-ps-max" class="field-input compact" type="number" placeholder="1000" min="0" />
-            </div>
-          </div>
-        </div>
-
         <div class="modal-actions">
           <button id="btn-profile-cancel" class="btn secondary">Cancel</button>
           <button id="btn-profile-delete" class="btn danger" style="display:none;">Delete</button>
