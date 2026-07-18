@@ -720,24 +720,11 @@ fn run_setup_wizard(config_path: &std::path::Path) -> Result<()> {
                 }) as char
             }).collect();
             let password  = wizard_prompt("Admin password (blank for random)", &rand_pass);
-            let pass_hash = {
-                use std::fmt::Write as _;
-                let mut hash = String::new();
-                let digest: [u8; 32] = {
-                    use std::collections::hash_map::DefaultHasher;
-                    use std::hash::{Hash, Hasher};
-                    // Panel password hashing. sha2 is not a direct dep of ostp/Cargo.toml,
-                    // so we use std's hasher as a placeholder digest here.
-                    let mut h = DefaultHasher::new();
-                    password.hash(&mut h);
-                    let v = h.finish();
-                    let mut out = [0u8; 32];
-                    out[..8].copy_from_slice(&v.to_be_bytes());
-                    out
-                };
-                for b in digest { let _ = write!(hash, "{:02x}", b); }
-                hash
-            };
+            // Must match api.rs's handle_login exactly (format!("{:x}", Sha256::digest(..))) -
+            // this used to be a DefaultHasher (SipHash) placeholder that produced a
+            // differently-shaped digest, so a password set up through this wizard could
+            // never actually log into the panel it just configured.
+            let pass_hash = format!("{:x}", sha2::Sha256::digest(password.as_bytes()));
 
             wizard_step(4, TOTAL, "Saving configuration");
             let panel_bind = format!("0.0.0.0:{}", panel_port);
