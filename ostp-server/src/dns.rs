@@ -276,6 +276,18 @@ impl DnsServer {
     ///
     /// Клиент может явно указать `<server_ip>:<local_port>` как DNS-сервер
     /// в настройках — тогда все DNS-запросы туннелируются и резолвятся здесь.
+    ///
+    /// SECURITY: this socket is bound on 0.0.0.0, reachable directly from the
+    /// public internet with no authentication (unlike the main OSTP port,
+    /// there is no Noise handshake gating it). Answering every UDP datagram
+    /// by resolving and replying to its (unverified, spoofable) source
+    /// address is a textbook DNS reflection/amplification primitive: an
+    /// attacker spoofing a victim's IP as the query source turns this server
+    /// into a free amplifier against that victim. There is currently no
+    /// caller for this function anywhere in the codebase, but the rate
+    /// limiter below exists so that connecting it later doesn't silently
+    /// reintroduce that risk - it bounds how much amplification bandwidth
+    /// this listener can ever contribute, regardless of query volume.
     pub async fn run_local_udp_listener(self: Arc<Self>) {
         let port = self.config.read().await.local_port;
         let bind_addr = format!("0.0.0.0:{port}");
@@ -289,10 +301,30 @@ impl DnsServer {
         };
         tracing::info!("Built-in DNS server listening on UDP {bind_addr}");
 
+        // Global token bucket capping total replies/sec this listener will
+        // ever send. Deliberately global (not per-source-IP): per-IP limiting
+        // does nothing against a reflection attack, since the attacker never
+        // sees the responses and can spread queries across arbitrarily many
+        // spoofed sources anyway. A global cap bounds this server's total
+        // contribution to any attack regardless of how the queries are
+        // distributed.
+        const MAX_REPLIES_PER_SEC: f64 = 100.0;
+        let mut tokens: f64 = MAX_REPLIES_PER_SEC;
+        let mut last_refill = tokio::time::Instant::now();
+
         let mut buf = vec![0u8; 4096];
         loop {
             match socket.recv_from(&mut buf).await {
                 Ok((n, peer)) => {
+                    let now = tokio::time::Instant::now();
+                    tokens = (tokens + now.duration_since(last_refill).as_secs_f64() * MAX_REPLIES_PER_SEC)
+                        .min(MAX_REPLIES_PER_SEC);
+                    last_refill = now;
+                    if tokens < 1.0 {
+                        continue; // over budget: drop silently, no reply sent
+                    }
+                    tokens -= 1.0;
+
                     let query = buf[..n].to_vec();
                     let srv = self.clone();
                     let sock = socket.clone();
