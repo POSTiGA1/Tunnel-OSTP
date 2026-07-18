@@ -138,5 +138,5 @@ Write-Host "No configuration found. Launching setup wizard..."
 Write-Host ""
 
 Push-Location $InstallDir
-& .\ostp.exe --setup
+& .\ostp.exe setup
 Pop-Location
