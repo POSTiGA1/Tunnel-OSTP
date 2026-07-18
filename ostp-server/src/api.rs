@@ -318,6 +318,18 @@ pub async fn start_api_server(
 
 // ── Middleware: token check ──────────────────────────────────────────────────
 
+/// Constant-time string equality for secrets (tokens, password hashes).
+/// Plain `==` short-circuits on the first differing byte, which leaks how
+/// many leading bytes an attacker's guess got right through response
+/// timing - a classic remote timing side-channel against exactly the kind
+/// of long-lived bearer/session secrets compared here. `subtle` is already
+/// pulled in transitively (chacha20poly1305 etc.); pinning it as a direct
+/// dependency here makes that guarantee explicit for this call site.
+fn secure_eq(a: &str, b: &str) -> bool {
+    use subtle::ConstantTimeEq;
+    a.as_bytes().ct_eq(b.as_bytes()).into()
+}
+
 fn check_token(state: &ApiState, headers: &axum::http::HeaderMap) -> bool {
     // Both session token (for web UI) and static API token (for relays) are checked
     let mut allowed = false;
@@ -332,19 +344,19 @@ fn check_token(state: &ApiState, headers: &axum::http::HeaderMap) -> bool {
             if let Some(token) = val.strip_prefix("Bearer ") {
                 let current_session = state.session_token.read().unwrap_or_else(|e| e.into_inner()).clone();
                 if let Some(session) = current_session {
-                    if token == session {
+                    if secure_eq(token, &session) {
                         allowed = true;
                     }
                 }
-                
+
                 if let Some(ref api_tok) = state.api_token {
-                    if token == api_tok {
+                    if secure_eq(token, api_tok) {
                         allowed = true;
                     }
                 }
             } else {
                 if let Some(ref api_tok) = state.api_token {
-                    if val == api_tok {
+                    if secure_eq(val, api_tok) {
                         allowed = true;
                     }
                 }
@@ -371,7 +383,7 @@ async fn handle_login(
     let hash = sha2::Sha256::digest(password.as_bytes());
     let hash_hex = format!("{:x}", hash);
 
-    if hash_hex == state.password_hash {
+    if secure_eq(&hash_hex, &state.password_hash) {
         let token = uuid::Uuid::new_v4().to_string();
         *state.session_token.write().unwrap_or_else(|e| e.into_inner()) = Some(token.clone());
         (StatusCode::OK, ApiResponse::success(LoginResponse { token }))
@@ -880,6 +892,14 @@ mod tests {
     fn test_router_creation_empty_webpath() {
         let state = make_test_state("");
         let _router = create_api_router(state);
+    }
+
+    #[test]
+    fn test_secure_eq_matches_and_rejects() {
+        assert!(secure_eq("same-secret", "same-secret"));
+        assert!(!secure_eq("same-secret", "different"));
+        assert!(!secure_eq("short", "much-longer-value"));
+        assert!(secure_eq("", ""));
     }
 
     fn headers_with_bearer(token: &str) -> axum::http::HeaderMap {
