@@ -138,27 +138,34 @@ async fn start_udp_bypass_session(
         let _ = crate::tunnel::proxy::bind_socket_to_interface(&socket, name);
     }
 
-    let socket = Arc::new(socket);
-    let socket_rx = socket.clone();
-
-    // Spawn a task to read from physical socket and send back to smoltcp
-    let tx_clone = smoltcp_tx.clone();
-    tokio::spawn(async move {
-        use futures::SinkExt;
-        let mut buf = [0u8; 65536];
-        loop {
-            match socket_rx.recv_from(&mut buf).await {
-                Ok((n, peer)) => {
-                    let mut lock = tx_clone.lock().await;
-                    let _ = lock.send((buf[..n].to_vec(), peer, client_src)).await;
+    // A single select! loop over both directions, rather than spawning a
+    // separate task for the read side, so the whole session - physical
+    // socket included - is torn down the moment this function returns
+    // (e.g. when session_rx closes). The previous spawned-task version left
+    // that task (and its Arc<UdpSocket> clone, keeping the OS socket fd
+    // alive) running forever after this function returned: nothing ever
+    // cancelled it, so every bypassed UDP flow (any excluded app/IP in TUN
+    // mode) leaked one socket + one task for the lifetime of the process.
+    use futures::SinkExt;
+    let mut buf = [0u8; 65536];
+    loop {
+        tokio::select! {
+            outbound = session_rx.recv() => {
+                match outbound {
+                    Some((payload, dst)) => { socket.send_to(&payload, dst).await?; }
+                    None => break,
                 }
-                Err(_) => break,
+            }
+            inbound = socket.recv_from(&mut buf) => {
+                match inbound {
+                    Ok((n, peer)) => {
+                        let mut lock = smoltcp_tx.lock().await;
+                        let _ = lock.send((buf[..n].to_vec(), peer, client_src)).await;
+                    }
+                    Err(_) => break,
+                }
             }
         }
-    });
-
-    while let Some((payload, dst)) = session_rx.recv().await {
-        socket.send_to(&payload, dst).await?;
     }
 
     Ok(())
