@@ -238,4 +238,4 @@ echo "No configuration found. Launching setup wizard..."
 echo ""
 
 cd "$INSTALL_DIR"
-exec ./ostp --setup --config "$CONFIG_FILE"
+exec ./ostp setup --config "$CONFIG_FILE"
