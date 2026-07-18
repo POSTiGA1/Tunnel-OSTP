@@ -881,15 +881,83 @@ mod tests {
         let state = make_test_state("");
         let _router = create_api_router(state);
     }
+
+    fn headers_with_bearer(token: &str) -> axum::http::HeaderMap {
+        let mut h = axum::http::HeaderMap::new();
+        h.insert("authorization", format!("Bearer {token}").parse().unwrap());
+        h
+    }
+
+    // These pin down check_token's behavior directly: it's the single gate
+    // every mutating/sensitive handler (including the audit-log ones - see
+    // the missing-auth fix) relies on, so its logic must be independently
+    // verified rather than only exercised incidentally through handlers.
+    #[test]
+    fn test_check_token_rejects_missing_header_when_configured() {
+        let state = make_test_state("panel");
+        assert!(!check_token(&state, &axum::http::HeaderMap::new()));
+    }
+
+    #[test]
+    fn test_check_token_accepts_matching_api_token_as_bearer() {
+        let state = make_test_state("panel");
+        assert!(check_token(&state, &headers_with_bearer("test-token")));
+    }
+
+    #[test]
+    fn test_check_token_accepts_matching_api_token_raw() {
+        let state = make_test_state("panel");
+        let mut h = axum::http::HeaderMap::new();
+        h.insert("authorization", "test-token".parse().unwrap());
+        assert!(check_token(&state, &h));
+    }
+
+    #[test]
+    fn test_check_token_rejects_wrong_token() {
+        let state = make_test_state("panel");
+        assert!(!check_token(&state, &headers_with_bearer("wrong-token")));
+    }
+
+    #[test]
+    fn test_check_token_accepts_matching_session_token() {
+        let state = make_test_state("panel");
+        *state.session_token.write().unwrap() = Some("live-session".to_string());
+        assert!(check_token(&state, &headers_with_bearer("live-session")));
+    }
+
+    #[test]
+    fn test_check_token_open_when_no_credentials_configured() {
+        let mut state = make_test_state("panel");
+        state.api_token = None;
+        state.username.clear();
+        state.password_hash.clear();
+        // Documented "unsafe but possible" open-panel mode: no credentials
+        // configured at all means every request passes, including with no
+        // Authorization header.
+        assert!(check_token(&state, &axum::http::HeaderMap::new()));
+    }
 }
 
-async fn handle_get_audit(State(state): State<ApiState>) -> impl IntoResponse {
-    let logs = state.audit_logs.read().unwrap();
-    ApiResponse::success(logs.clone())
+async fn handle_get_audit(
+    State(state): State<ApiState>,
+    headers: axum::http::HeaderMap,
+) -> impl IntoResponse {
+    if !check_token(&state, &headers) {
+        return api_unauthorized::<Vec<AuditLogEntry>>();
+    }
+    let logs = state.audit_logs.read().unwrap_or_else(|e| e.into_inner());
+    (StatusCode::OK, ApiResponse::success(logs.clone()))
 }
 
-async fn handle_create_audit(State(state): State<ApiState>, Json(req): Json<CreateAuditLogRequest>) -> impl IntoResponse {
-    let mut logs = state.audit_logs.write().unwrap();
+async fn handle_create_audit(
+    State(state): State<ApiState>,
+    headers: axum::http::HeaderMap,
+    Json(req): Json<CreateAuditLogRequest>,
+) -> impl IntoResponse {
+    if !check_token(&state, &headers) {
+        return api_unauthorized::<bool>();
+    }
+    let mut logs = state.audit_logs.write().unwrap_or_else(|e| e.into_inner());
     let id = format!("{:x}", rand::random::<u64>());
     let now = chrono::Local::now();
     let entry = AuditLogEntry {
@@ -904,7 +972,7 @@ async fn handle_create_audit(State(state): State<ApiState>, Json(req): Json<Crea
         logs.truncate(100);
     }
 
-    ApiResponse::success(true)
+    (StatusCode::OK, ApiResponse::success(true))
 }
 
 // ── Bulk keys & Router Rules ─────────────────────────────────────────────────
@@ -1006,10 +1074,16 @@ async fn handle_put_rules(
     (StatusCode::OK, ApiResponse::success(true))
 }
 
-async fn handle_clear_audit(State(state): State<ApiState>) -> impl IntoResponse {
-    let mut logs = state.audit_logs.write().unwrap();
+async fn handle_clear_audit(
+    State(state): State<ApiState>,
+    headers: axum::http::HeaderMap,
+) -> impl IntoResponse {
+    if !check_token(&state, &headers) {
+        return api_unauthorized::<()>();
+    }
+    let mut logs = state.audit_logs.write().unwrap_or_else(|e| e.into_inner());
     logs.clear();
-    ApiResponse::success(())
+    (StatusCode::OK, ApiResponse::success(()))
 }
 
 
