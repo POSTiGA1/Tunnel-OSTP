@@ -115,12 +115,18 @@ if [ -n "$TARGET_VERSION" ]; then
     fi
     echo "Fetching requested release $LATEST_RELEASE..."
 else
-    if [ "$TARGET_BRANCH" == "alpha" ]; then
-        echo "Fetching alpha release..."
-        LATEST_RELEASE="alpha"
-    elif [ "$TARGET_BRANCH" == "beta" ]; then
-        echo "Fetching beta release..."
-        LATEST_RELEASE="beta"
+    if [ "$TARGET_BRANCH" == "alpha" ] || [ "$TARGET_BRANCH" == "beta" ]; then
+        # There is no floating "alpha"/"beta" GitHub Release - gha.ps1 cuts a
+        # fresh versioned tag every time (v0.4.2-beta.4, v0.4.2-alpha.7, ...).
+        # /releases/latest only ever returns the newest NON-prerelease
+        # (stable) tag, so it can't find these. Query the full releases list
+        # (newest first) and take the first tag_name containing "-$TARGET_BRANCH".
+        echo "Fetching latest ${TARGET_BRANCH} release..."
+        LATEST_RELEASE=$(curl -s "https://api.github.com/repos/${GITHUB_REPO}/releases" \
+            | grep '"tag_name":' \
+            | grep -- "-${TARGET_BRANCH}" \
+            | head -1 \
+            | sed -E 's/.*"tag_name": *"([^"]+)".*/\1/')
     else
         echo "Fetching latest stable release..."
         LATEST_RELEASE=$(curl -s "https://api.github.com/repos/${GITHUB_REPO}/releases/latest" | grep '"tag_name":' | sed -E 's/.*"([^"]+)".*/\1/')
