@@ -43,6 +43,11 @@ pub struct CongestionController {
     mtu: u64,
     /// Min RTT expiry: re-probe after 10 seconds
     min_rtt_stamp: Instant,
+    /// Loss events counted toward SLOW_START_LOSS_TOLERANCE within the
+    /// current SLOW_START_LOSS_WINDOW (see on_loss's SlowStart arm).
+    slow_start_losses: u32,
+    /// Start of the current loss-tolerance window.
+    slow_start_loss_window_start: Instant,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -67,6 +72,24 @@ const RTO_MAX: Duration = Duration::from_secs(16);
 /// Will be replaced by first real measurement within milliseconds.
 const INITIAL_RTT: Duration = Duration::from_millis(30);
 
+/// Isolated packet loss during slow start (a single dropped frame from
+/// wireless noise, a brief LTE handover blip, etc.) is normal on real
+/// mobile/Wi-Fi links and does NOT mean the link is congested. The previous
+/// behavior exited slow start and halved cwnd on the very FIRST loss, which
+/// on any link with a non-zero background loss rate permanently downgrades
+/// the session from exponential growth to linear (+1 MTU/RTT) ProbeBandwidth
+/// growth within the first few RTTs - turning what should be a sub-second
+/// ramp-up into tens of seconds to minutes before throughput opens up
+/// (observed as: a trickle of KB/s, then a sudden jump once cwnd finally
+/// claws back up). Only treat loss as a real congestion signal - and pay
+/// the full slow-start-exit + halving cost - once this many losses land
+/// within SLOW_START_LOSS_WINDOW.
+const SLOW_START_LOSS_TOLERANCE: u32 = 3;
+/// Window within which SLOW_START_LOSS_TOLERANCE losses must land to count
+/// as sustained (rather than isolated) loss. Roughly a few RTTs on a
+/// well-connected link, generous on a slow one.
+const SLOW_START_LOSS_WINDOW: Duration = Duration::from_millis(500);
+
 impl CongestionController {
     pub fn new(mtu: u64) -> Self {
         let now = Instant::now();
@@ -88,6 +111,8 @@ impl CongestionController {
             pacing_rate: initial_pacing,
             mtu,
             min_rtt_stamp: now,
+            slow_start_losses: 0,
+            slow_start_loss_window_start: now,
         }
     }
 
@@ -197,11 +222,28 @@ impl CongestionController {
 
         match self.phase {
             Phase::SlowStart => {
-                // Exit slow start, set ssthresh to half of cwnd
-                self.ssthresh = self.cwnd / 2;
-                self.cwnd = self.ssthresh.max(MIN_CWND_PACKETS * self.mtu);
-                self.phase = Phase::ProbeBandwidth;
-                tracing::debug!(cwnd = self.cwnd, ssthresh = self.ssthresh, "congestion: loss during slow start");
+                let now = Instant::now();
+                if now.duration_since(self.slow_start_loss_window_start) > SLOW_START_LOSS_WINDOW {
+                    // Previous window's losses have aged out - this loss starts a fresh count.
+                    self.slow_start_losses = 0;
+                    self.slow_start_loss_window_start = now;
+                }
+                self.slow_start_losses += 1;
+
+                if self.slow_start_losses >= SLOW_START_LOSS_TOLERANCE {
+                    // Sustained loss within the window: treat as real congestion.
+                    // Exit slow start, set ssthresh to half of cwnd.
+                    self.ssthresh = self.cwnd / 2;
+                    self.cwnd = self.ssthresh.max(MIN_CWND_PACKETS * self.mtu);
+                    self.phase = Phase::ProbeBandwidth;
+                    tracing::debug!(cwnd = self.cwnd, ssthresh = self.ssthresh, "congestion: sustained loss during slow start, exiting");
+                } else {
+                    // Isolated loss: likely non-congestive noise. Take a mild,
+                    // temporary haircut but keep exponential growth going -
+                    // don't throw away slow start over a single dropped frame.
+                    self.cwnd = (self.cwnd * 8 / 10).max(MIN_CWND_PACKETS * self.mtu);
+                    tracing::debug!(cwnd = self.cwnd, count = self.slow_start_losses, "congestion: isolated loss during slow start, staying in slow start");
+                }
             }
             Phase::ProbeBandwidth => {
                 // Multiplicative decrease: cwnd *= 0.7 (BBR-style, less aggressive than Cubic's 0.5)
@@ -288,6 +330,50 @@ mod tests {
         let initial = cc.cwnd();
         cc.on_loss(1200);
         assert!(cc.cwnd() < initial);
+    }
+
+    #[test]
+    fn test_isolated_slow_start_loss_does_not_exit_slow_start() {
+        // A single dropped packet (wireless noise, a brief handover blip) is
+        // normal on real links and must not permanently downgrade the
+        // session from exponential to linear growth.
+        let mut cc = CongestionController::new(1200);
+        cc.on_loss(1200);
+        assert_eq!(cc.phase, Phase::SlowStart, "one isolated loss must not exit slow start");
+
+        // It should still shrink the window somewhat (not ignored entirely),
+        // just far less punishing than the sustained-congestion case.
+        let after_one = cc.cwnd();
+        assert!(after_one < INITIAL_CWND_PACKETS * 1200);
+    }
+
+    #[test]
+    fn test_sustained_slow_start_loss_exits_slow_start() {
+        // Losses landing close together (within SLOW_START_LOSS_WINDOW) are
+        // a real congestion signal and must still trigger the harsher
+        // exit-slow-start + halve response.
+        let mut cc = CongestionController::new(1200);
+        for _ in 0..SLOW_START_LOSS_TOLERANCE {
+            cc.on_loss(1200);
+        }
+        assert_eq!(cc.phase, Phase::ProbeBandwidth, "sustained loss must exit slow start");
+    }
+
+    #[test]
+    fn test_slow_start_loss_window_resets_after_expiry() {
+        // Two losses far enough apart (window expired between them) must
+        // each be treated as isolated, not accumulated toward the sustained-
+        // loss threshold.
+        let mut cc = CongestionController::new(1200);
+        cc.on_loss(1200);
+        assert_eq!(cc.phase, Phase::SlowStart);
+
+        // Simulate the window having expired by resetting its start
+        // directly (std::thread::sleep in a unit test would be flaky/slow).
+        cc.slow_start_loss_window_start = Instant::now() - SLOW_START_LOSS_WINDOW - Duration::from_millis(1);
+        cc.on_loss(1200);
+        assert_eq!(cc.phase, Phase::SlowStart, "a loss after the window expired must restart the count, not accumulate");
+        assert_eq!(cc.slow_start_losses, 1);
     }
 
     #[test]
