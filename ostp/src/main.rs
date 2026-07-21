@@ -3,6 +3,7 @@ use clap::Parser;
 use std::fs;
 use std::path::PathBuf;
 use colored::Colorize;
+use sha2::Digest;
 
 #[derive(Parser, Debug)]
 #[command(author, version, about = "OSTP Core - Ospab Stealth Transport Protocol", long_about = None)]
