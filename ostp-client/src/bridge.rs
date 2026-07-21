@@ -231,7 +231,7 @@ impl Bridge {
                     self.handle_inbound_udp(udp_msg, &mut sessions_opt, &mut udp_rx_opt, &mut proxy_guard, &mut stream_map, &tx, &proxy_tx).await;
                 }
                 cmd = bridge_rx.recv() => {
-                    if !self.handle_bridge_cmd(cmd, &mut sessions_opt, &mut udp_rx_opt, &mut proxy_guard, &mut stream_map, &tx, &proxy_tx).await {
+                    if !self.handle_bridge_cmd(cmd, &mut bridge_rx, &mut sessions_opt, &mut udp_rx_opt, &mut proxy_guard, &mut stream_map, &tx, &proxy_tx).await {
                         break;
                     }
                 }
@@ -374,6 +374,7 @@ impl Bridge {
     async fn handle_bridge_cmd(
         &mut self,
         cmd: Option<BridgeCommand>,
+        bridge_rx: &mut mpsc::Receiver<BridgeCommand>,
         sessions_opt: &mut Option<Vec<SessionState>>,
         udp_rx_opt: &mut Option<mpsc::Receiver<(usize, Bytes)>>,
         proxy_guard: &mut Option<crate::sysproxy::SystemProxyGuard>,
@@ -465,6 +466,32 @@ impl Bridge {
                 tx.send(UiEvent::Log(format!("Obfuscation profile switched to {:?}", self.profile))).await.ok();
             }
             Some(BridgeCommand::NetworkChanged) => {
+                // A real network handoff (Wi-Fi <-> cellular) commonly fires
+                // onLost + onAvailable within milliseconds of each other on
+                // Android, queuing several NetworkChanged commands back to
+                // back. Each reconnect below is a full sequential handshake
+                // (up to ~1.2s x 4 attempts x mux_sessions) run synchronously
+                // in this select-loop iteration, so without coalescing, the
+                // first attempt often races the OS's own network switch and
+                // fails on the now-dead interface, then the SECOND queued
+                // NetworkChanged only starts its own full reconnect after
+                // that first one finishes - multiplying a sub-second handoff
+                // into many seconds of extra outage. Drain same-kind repeats
+                // so a burst collapses into one reconnect on the freshest
+                // signal; a different command found while draining is
+                // handled immediately rather than dropped.
+                while let Ok(next) = bridge_rx.try_recv() {
+                    if !matches!(next, BridgeCommand::NetworkChanged) {
+                        let more = Box::pin(self.handle_bridge_cmd(
+                            Some(next), bridge_rx, sessions_opt, udp_rx_opt, proxy_guard, stream_map, tx, proxy_tx,
+                        )).await;
+                        if !more {
+                            return false;
+                        }
+                        break;
+                    }
+                }
+
                 if self.running {
                     let _ = tx.send(UiEvent::Log("Network changed — starting immediate reconnect".to_string())).await;
                     self.metrics.connection_state.store(1, Ordering::Relaxed);
