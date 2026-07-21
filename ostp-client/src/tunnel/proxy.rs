@@ -361,6 +361,10 @@ async fn handle_udp_associate(
 
     let mut direct_udp_v4: Option<Arc<UdpSocket>> = None;
     let mut direct_udp_v6: Option<Arc<UdpSocket>> = None;
+    // Held only to keep the direct-UDP readers' cancellation senders alive;
+    // dropping this (on every return path from this function) is what tells
+    // spawn_direct_udp_reader's tasks to stop. See its doc comment.
+    let mut direct_udp_cancel_txs: Vec<tokio::sync::oneshot::Sender<()>> = Vec::new();
 
     let mut tcp_buf = [0u8; 1];
     loop {
@@ -432,7 +436,9 @@ async fn handle_udp_associate(
                                     match create_udp_socket_bypassing_tun(true, matcher.physical_if_index, &matcher.physical_if_name).await {
                                         Ok(s) => {
                                             let s_arc = Arc::new(s);
-                                            spawn_direct_udp_reader(s_arc.clone(), sock_tx.clone(), client_udp_addr.clone(), debug);
+                                            let (cancel_tx, cancel_rx) = tokio::sync::oneshot::channel();
+                                            spawn_direct_udp_reader(s_arc.clone(), sock_tx.clone(), client_udp_addr.clone(), debug, cancel_rx);
+                                            direct_udp_cancel_txs.push(cancel_tx);
                                             direct_udp_v6 = Some(s_arc);
                                         }
                                         Err(e) => {
@@ -446,7 +452,9 @@ async fn handle_udp_associate(
                                     match create_udp_socket_bypassing_tun(false, matcher.physical_if_index, &matcher.physical_if_name).await {
                                         Ok(s) => {
                                             let s_arc = Arc::new(s);
-                                            spawn_direct_udp_reader(s_arc.clone(), sock_tx.clone(), client_udp_addr.clone(), debug);
+                                            let (cancel_tx, cancel_rx) = tokio::sync::oneshot::channel();
+                                            spawn_direct_udp_reader(s_arc.clone(), sock_tx.clone(), client_udp_addr.clone(), debug, cancel_rx);
+                                            direct_udp_cancel_txs.push(cancel_tx);
                                             direct_udp_v4 = Some(s_arc);
                                         }
                                         Err(e) => {
@@ -520,11 +528,24 @@ fn spawn_direct_udp_reader(
     sock_tx: Arc<UdpSocket>,
     client_udp_addr: Arc<std::sync::Mutex<Option<std::net::SocketAddr>>>,
     _debug: bool,
+    mut cancel_rx: tokio::sync::oneshot::Receiver<()>,
 ) {
     tokio::spawn(async move {
         let mut buf = vec![0u8; 65536];
         loop {
-            match direct_socket.recv_from(&mut buf).await {
+            let recv_result = tokio::select! {
+                // Fires as soon as the sender half (held by handle_udp_associate
+                // for exactly this reason) is dropped - which happens the
+                // instant that function returns, on every exit path, with no
+                // explicit signaling needed. Without this, a UDP-associate
+                // session that ever bypassed traffic direct (excluded IP/
+                // domain) leaked this socket + task for the rest of the
+                // process's life once the session ended: nothing else ever
+                // stopped this loop.
+                _ = &mut cancel_rx => break,
+                res = direct_socket.recv_from(&mut buf) => res,
+            };
+            match recv_result {
                 Ok((len, target_addr)) => {
                     let client_addr = {
                         let guard = client_udp_addr.lock().unwrap();
