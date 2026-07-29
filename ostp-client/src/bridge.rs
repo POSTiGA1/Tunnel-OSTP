@@ -16,6 +16,13 @@ use crate::app::{BridgeCommand, ConnectionStatus, UiEvent};
 use crate::config::ClientConfig;
 use crate::tunnel::{ProxyEvent, ProxyToClientMsg};
 
+/// Per-address ceiling on the UoT/TCP connect attempt. Long enough that a
+/// genuinely slow mobile path still completes its handshake, short enough that
+/// a blackholed address (typically IPv6 advertised without a working route)
+/// costs seconds instead of the kernel's full SYN-retry budget before the next
+/// candidate address is tried.
+const UOT_CONNECT_TIMEOUT: Duration = Duration::from_secs(4);
+
 static SOCKET_PROTECTOR: std::sync::OnceLock<Box<dyn Fn(i32) -> bool + Send + Sync>> = std::sync::OnceLock::new();
 
 pub fn set_socket_protector<F>(f: F)
@@ -1084,7 +1091,27 @@ impl Bridge {
     ) -> Result<crate::transport::Transport> {
         let mode = self.transport_mode.to_lowercase();
         if mode == "uot" || mode == "tcp" {
-            let stream = tokio::net::TcpStream::connect((target_ip, port)).await?;
+            // Bound the TCP connect. Without this it inherits the kernel's SYN
+            // retry budget, which is tens of seconds (and can reach ~2 minutes).
+            // That is exactly what made UoT appear to hang on mobile: callers
+            // resolve every address for the server and try IPv6 first (see the
+            // sort in perform_handshake_with_id), and a mobile network that
+            // advertises IPv6 without a working route blackholes the SYN rather
+            // than rejecting it — so the client sat through the full retry
+            // budget before it ever reached the IPv4 address that would have
+            // connected immediately. UDP never showed this because connect() on
+            // a UDP socket only sets the default peer and returns at once.
+            let stream = tokio::time::timeout(
+                UOT_CONNECT_TIMEOUT,
+                tokio::net::TcpStream::connect((target_ip, port)),
+            )
+            .await
+            .map_err(|_| {
+                anyhow::anyhow!(
+                    "TCP connect to {target_ip}:{port} timed out after {:?}",
+                    UOT_CONNECT_TIMEOUT
+                )
+            })??;
             let _ = stream.set_nodelay(true);
             let (mut read_half, mut write_half) = stream.into_split();
 

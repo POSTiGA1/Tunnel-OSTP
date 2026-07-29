@@ -8,6 +8,13 @@ import '../models/connection_state_enum.dart';
 import '../models/ostp_profile.dart';
 import 'settings_screen.dart';
 
+/// Success green for the "connected" state — the button aura/border/icon and
+/// the top-bar status dot. The theme's `secondary` (#AAAAAA) reads as plain
+/// white here, which gave no visual confirmation that the tunnel actually came
+/// up. Reuses the same green already used for a healthy ping value, so
+/// "green = good" stays consistent across the UI.
+const Color kConnectedGreen = Color(0xFF22D3A5);
+
 class HomeScreen extends StatefulWidget {
   final SharedPreferences prefs;
   const HomeScreen({super.key, required this.prefs});
@@ -45,8 +52,7 @@ class _HomeScreenState extends State<HomeScreen> with TickerProviderStateMixin {
   late AnimationController _pulseController;
   late AnimationController _spinController;
 
-  bool _isCheckingPing = false;
-  String _pingText = 'Target Ping: -- ms';
+  String _pingText = '-- ms';
   Color _pingColor = Colors.white54;
 
   @override
@@ -420,8 +426,8 @@ class _HomeScreenState extends State<HomeScreen> with TickerProviderStateMixin {
                 _prevBytesSent = bytesSent;
                 _downSpeed = '${_formatBytes(dRecv)}/s';
                 _upSpeed = '${_formatBytes(dSent)}/s';
-                if (rttMs > 0 && !_isCheckingPing) {
-                  _pingText = 'Server Ping: $rttMs ms';
+                if (rttMs > 0) {
+                  _pingText = '$rttMs ms';
                   if (rttMs < 100) {
                     _pingColor = const Color(0xFF22D3A5);
                   } else if (rttMs < 250) {
@@ -447,47 +453,6 @@ class _HomeScreenState extends State<HomeScreen> with TickerProviderStateMixin {
     return '${(bytes / (1024 * 1024 * 1024)).toStringAsFixed(1)} GB';
   }
 
-  Future<void> _checkConnectionLatency() async {
-    if (_state != ConnectionStateEnum.connected) return;
-
-    setState(() {
-      _isCheckingPing = true;
-      _pingText = 'Updating...';
-      _pingColor = Colors.white70;
-    });
-
-    try {
-      final metricsJson = await platform.invokeMethod('getMetrics');
-      if (metricsJson != null && metricsJson.isNotEmpty) {
-        final Map<String, dynamic> parsed = jsonDecode(metricsJson);
-        final rttMs = parsed['rtt_ms'] as int? ?? 0;
-        if (mounted) {
-          setState(() {
-            if (rttMs > 0) {
-              _pingText = 'Server Ping: $rttMs ms';
-              _pingColor = rttMs < 100
-                  ? const Color(0xFF22D3A5)
-                  : rttMs < 250
-                      ? Colors.amberAccent
-                      : Colors.redAccent;
-            } else {
-              _pingText = 'Server Ping: -- ms';
-              _pingColor = Colors.white54;
-            }
-          });
-        }
-      }
-    } catch (e) {
-      debugPrint("Failed to check latency: $e");
-    }
-
-    if (mounted) {
-      setState(() {
-        _isCheckingPing = false;
-      });
-    }
-  }
-
   void _setDisconnected() {
     if (!mounted) return;
     setState(() {
@@ -498,9 +463,8 @@ class _HomeScreenState extends State<HomeScreen> with TickerProviderStateMixin {
       _upSpeed = '0 B/s';
       _prevBytesRecv = 0;
       _prevBytesSent = 0;
-      _pingText = 'Target Ping: -- ms';
+      _pingText = '-- ms';
       _pingColor = Colors.white54;
-      _isCheckingPing = false;
     });
     _pulseController.stop();
     _pulseController.value = 0.0;
@@ -578,12 +542,12 @@ class _HomeScreenState extends State<HomeScreen> with TickerProviderStateMixin {
                 decoration: BoxDecoration(
                   borderRadius: BorderRadius.circular(4),
                   color: _state == ConnectionStateEnum.connected
-                      ? theme.colorScheme.secondary
+                      ? kConnectedGreen
                       : theme.colorScheme.primary,
                   boxShadow: [
                     BoxShadow(
                       color: _state == ConnectionStateEnum.connected
-                          ? theme.colorScheme.secondary.withOpacity(0.5)
+                          ? kConnectedGreen.withOpacity(0.5)
                           : theme.colorScheme.primary.withOpacity(0.5),
                       blurRadius: 10,
                     )
@@ -637,7 +601,7 @@ class _HomeScreenState extends State<HomeScreen> with TickerProviderStateMixin {
 
   Widget _buildStage(ThemeData theme) {
     Color getAccentColor() {
-      if (_state == ConnectionStateEnum.connected) return theme.colorScheme.secondary;
+      if (_state == ConnectionStateEnum.connected) return kConnectedGreen;
       return theme.colorScheme.primary;
     }
 
@@ -775,67 +739,27 @@ class _HomeScreenState extends State<HomeScreen> with TickerProviderStateMixin {
           opacity: _state == ConnectionStateEnum.connected ? 1.0 : 0.0,
           duration: const Duration(milliseconds: 300),
           child: Padding(
-            padding: const EdgeInsets.only(top: 16),
+            padding: const EdgeInsets.only(top: 10),
             child: Container(
-              margin: const EdgeInsets.symmetric(horizontal: 16),
-              padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
+              padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
               decoration: BoxDecoration(
                 color: Colors.white.withOpacity(0.03),
-                borderRadius: BorderRadius.circular(20),
+                borderRadius: BorderRadius.circular(12),
                 border: Border.all(color: Colors.white.withOpacity(0.06)),
               ),
               child: Row(
-                mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                mainAxisSize: MainAxisSize.min,
                 children: [
-                  Expanded(
-                    child: Column(
-                      crossAxisAlignment: CrossAxisAlignment.start,
-                      children: [
-                        const Text(
-                          'CONNECTION TEST',
-                          style: TextStyle(
-                            fontSize: 10,
-                            fontWeight: FontWeight.bold,
-                            color: Colors.white38,
-                            letterSpacing: 0.8,
-                          ),
-                        ),
-                        const SizedBox(height: 4),
-                        Text(
-                          _pingText,
-                          overflow: TextOverflow.ellipsis,
-                          style: TextStyle(
-                            fontSize: 15,
-                            fontWeight: FontWeight.bold,
-                            color: _pingColor,
-                          ),
-                        ),
-                      ],
+                  Icon(Icons.speed_rounded, size: 13, color: _pingColor),
+                  const SizedBox(width: 6),
+                  Text(
+                    _pingText,
+                    style: TextStyle(
+                      fontSize: 13,
+                      fontWeight: FontWeight.bold,
+                      color: _pingColor,
                     ),
                   ),
-                  const SizedBox(width: 8),
-                  _isCheckingPing
-                      ? const SizedBox(
-                          width: 20, height: 20,
-                          child: CircularProgressIndicator(strokeWidth: 2, color: Colors.white70),
-                        )
-                      : TextButton.icon(
-                          onPressed: _checkConnectionLatency,
-                          icon: Icon(Icons.speed_rounded, size: 16, color: theme.colorScheme.primary),
-                          label: Text(
-                            'Test Ping',
-                            style: TextStyle(
-                              fontWeight: FontWeight.bold,
-                              fontSize: 13,
-                              color: theme.colorScheme.primary,
-                            ),
-                          ),
-                          style: TextButton.styleFrom(
-                            padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
-                            backgroundColor: theme.colorScheme.primary.withOpacity(0.1),
-                            shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
-                          ),
-                        ),
                 ],
               ),
             ),
