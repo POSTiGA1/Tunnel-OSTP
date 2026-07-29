@@ -166,6 +166,19 @@ impl ProtocolMachine {
         self.sent_history.iter().filter(|f| f.is_retransmittable).count()
     }
 
+    /// Sum of retry counters across in-flight frames. Test-only: lets a test
+    /// assert the core retransmit invariant (a retry is only ever charged to a
+    /// frame that was actually put on the wire) without needing to advance the
+    /// clock through several seconds of exponential backoff.
+    #[cfg(test)]
+    fn total_retries(&self) -> usize {
+        self.sent_history
+            .iter()
+            .filter(|f| f.is_retransmittable)
+            .map(|f| f.retries as usize)
+            .sum()
+    }
+
     pub fn cwnd_packets(&self) -> usize {
         self.cc.cwnd_packets() as usize
     }
@@ -654,18 +667,32 @@ impl ProtocolMachine {
             if !frame.is_retransmittable {
                 continue;
             }
+            // Out of budget for this tick — stop scanning rather than walking the
+            // rest of the queue. sent_history is in send order, so everything we
+            // skip is strictly newer than what we already handled; deferring it to
+            // the next tick preserves oldest-first retransmit priority.
+            if retransmit_budget == 0 {
+                break;
+            }
 
             let backoff_factor = 1u64 << (frame.retries as u64).min(6);
             let effective_rto = Duration::from_millis(base_rto_ms.saturating_mul(backoff_factor));
 
             if now.duration_since(frame.last_sent) >= effective_rto {
+                // Only burn the retry counter and reset the RTO timer when the
+                // frame is ACTUALLY put on the wire. Doing it unconditionally
+                // meant that whenever the per-tick budget ran out — which is
+                // exactly when loss is heavy and retransmits matter most —
+                // frames accumulated "phantom retries" they never actually got,
+                // and the zombie eviction above then silently dropped them after
+                // `grace` such rounds. The peer never received that data and
+                // never would: that stream stalls forever while the session
+                // itself stays healthy, which is precisely the reported "tunnel
+                // frozen at 0 b/s but the session still up" symptom.
                 frame.last_sent = now;
                 frame.retries = frame.retries.saturating_add(1);
-                
-                if retransmit_budget > 0 {
-                    actions.push(ProtocolAction::SendDatagram(frame.bytes.clone()));
-                    retransmit_budget -= 1;
-                }
+                actions.push(ProtocolAction::SendDatagram(frame.bytes.clone()));
+                retransmit_budget -= 1;
             }
         }
 
@@ -1081,6 +1108,64 @@ mod tests {
         // Tick should not crash on either side
         let _ = client.on_event(OstpEvent::Tick).unwrap();
         let _ = server.on_event(OstpEvent::Tick).unwrap();
+    }
+
+    /// A retry may only be charged to a frame that was actually retransmitted.
+    ///
+    /// The retransmit loop is budget-limited per tick. It used to bump
+    /// `retries` and reset `last_sent` for every due frame regardless of
+    /// whether the budget allowed it to actually send — so under heavy loss
+    /// (exactly when the budget runs out) frames racked up retries they never
+    /// received, and the zombie eviction dropped them after `max_retries + 2`
+    /// such rounds. That data was never delivered and never would be: the
+    /// stream stalls permanently while the session itself stays up.
+    #[test]
+    fn test_retransmit_budget_charges_retries_only_for_frames_actually_sent() {
+        let (mut client, _server) = do_handshake();
+
+        // Queue far more in-flight frames than a single tick's budget allows.
+        const FRAMES: usize = 40;
+        for i in 0..FRAMES {
+            let payload = Bytes::from(vec![i as u8; 200]);
+            client.on_event(OstpEvent::Outbound(1, payload)).unwrap();
+        }
+        assert_eq!(client.in_flight_count(), FRAMES);
+        assert_eq!(client.total_retries(), 0, "nothing retransmitted yet");
+
+        // Let every frame's RTO lapse so that on the next tick all FRAMES frames
+        // are due at once and the per-tick budget is guaranteed to run out. The
+        // effective RTO here is max(cc.rto(), config rto_ms) = 100ms at retries=0.
+        std::thread::sleep(Duration::from_millis(150));
+
+        let sent = count_datagrams(&client.on_event(OstpEvent::Tick).unwrap());
+
+        assert!(sent > 0, "expected some retransmits after the RTO lapsed");
+        assert!(
+            sent < FRAMES,
+            "budget should have capped this tick below the {FRAMES} due frames, got {sent}"
+        );
+        assert_eq!(
+            client.total_retries(),
+            sent,
+            "charged {} retries but only put {} frames on the wire — the \
+             difference is phantom retries that will silently evict live data",
+            client.total_retries(),
+            sent
+        );
+        assert_eq!(
+            client.in_flight_count(),
+            FRAMES,
+            "nothing was acked, so no frame may be evicted yet"
+        );
+    }
+
+    /// Count how many datagrams an action tree actually puts on the wire.
+    fn count_datagrams(action: &ProtocolAction) -> usize {
+        match action {
+            ProtocolAction::SendDatagram(_) => 1,
+            ProtocolAction::Multiple(list) => list.iter().map(count_datagrams).sum(),
+            _ => 0,
+        }
     }
 
     /// Count how many application payloads an action tree actually delivers.

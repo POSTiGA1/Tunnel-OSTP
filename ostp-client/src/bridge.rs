@@ -295,8 +295,8 @@ impl Bridge {
     ) {
         match udp_msg {
             Some((session_index, inbound)) => {
+                // Raw byte counter — every datagram that reached the socket counts.
                 self.metrics.bytes_recv.fetch_add(inbound.len() as u64, Ordering::Relaxed);
-                self.last_valid_recv = Instant::now();
                 if let Some(sessions) = sessions_opt.as_mut() {
                     if session_index < sessions.len() {
                         let session = &mut sessions[session_index];
@@ -308,6 +308,22 @@ impl Bridge {
                                 return;
                             }
                         };
+
+                        // Only NOW, after the datagram actually authenticated and
+                        // decrypted, does it count as a sign of life. This used to
+                        // be set above, before any validation — so a datagram that
+                        // failed to decrypt still reset the stall detector on its
+                        // way to the `return` above. Anything arriving at this port
+                        // (frames from a session the server already evicted, stale
+                        // retransmits, or plain garbage from an off-path source that
+                        // knows the ip:port) kept the client convinced the tunnel
+                        // was healthy: the 25s background reconnect in
+                        // handle_keepalive never fired and the tunnel sat dead at
+                        // 0 b/s until the user reconnected by hand. It also made
+                        // `is_healthy` (see emit_metrics) lie in the UI, and handed
+                        // any off-path sender a trivial way to pin a client in a
+                        // dead session indefinitely.
+                        self.last_valid_recv = Instant::now();
 
                         let mut actions_queue = std::collections::VecDeque::new();
                         actions_queue.push_back(initial_action);
