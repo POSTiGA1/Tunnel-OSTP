@@ -102,6 +102,17 @@ pub struct ProtocolMachine {
     _mtu: usize,
 }
 
+// ── Gap recovery (see `ProtocolMachine::recover_stalled_gap`) ────────────────
+// How long the receive sequence may sit stuck behind a missing frame, with
+// later frames already buffered, before that frame is declared unrecoverable
+// and skipped. Derived from the live RTO so it scales with the path instead of
+// guessing, then clamped: the floor keeps a fast link from discarding a frame
+// that is merely late, the ceiling bounds how long a stall can be visible to
+// the user before the tunnel unblocks itself.
+const GAP_RECOVERY_RTO_MULTIPLIER: u32 = 8;
+const GAP_RECOVERY_MIN: Duration = Duration::from_secs(2);
+const GAP_RECOVERY_MAX: Duration = Duration::from_secs(10);
+
 #[derive(Debug, Clone)]
 struct SentFrame {
     nonce: u64,
@@ -296,7 +307,107 @@ impl ProtocolMachine {
         Ok(ProtocolAction::HandshakePayload(Bytes::from(extracted_payload), response))
     }
 
+    /// Restores liveness when the receive sequence is stuck behind a frame that
+    /// can never arrive.
+    ///
+    /// Delivery is gated on `expected_recv_nonce`, so a single missing frame
+    /// holds back every later frame. That is correct *while the sender can still
+    /// retransmit* — but the sender drops a frame from `sent_history` once it
+    /// exceeds `max_retries + 2` attempts (see the zombie eviction in
+    /// `handle_tick`). After that the frame is gone for good and the two sides
+    /// deadlock: the receiver buffers forever and NACKs a nonce nobody can
+    /// resend.
+    ///
+    /// That deadlock is invisible to the keepalive watchdog, which is why it
+    /// presented as a hard freeze rather than a reconnect: retransmits, ACKs and
+    /// NACKs keep flowing, so the client's `last_valid_recv` keeps refreshing and
+    /// its stall detector never fires. The RTT readout freezes at its last value
+    /// for the same reason — Pong rides in a Data frame stuck behind the gap.
+    ///
+    /// So: once we have been stuck long enough that retransmission has provably
+    /// given up, skip to the lowest buffered nonce and drain. This drops the
+    /// missing frame's payload (one RelayMessage — a chunk of one stream), which
+    /// is a real cost, but the alternative is a permanently dead tunnel.
+    fn recover_stalled_gap(&mut self) -> Vec<ProtocolAction> {
+        let mut recovered = Vec::new();
+        if self.reorder_buffer.is_empty() {
+            return recovered;
+        }
+
+        // Wait out the sender's full retransmit budget before giving up, so a
+        // frame that is merely late is never discarded. The sender backs off
+        // exponentially, so key this off the live RTO estimate rather than a
+        // flat constant, with a floor that keeps low-RTT links from skipping
+        // too eagerly and a ceiling that bounds the visible freeze.
+        let timeout = self
+            .cc
+            .rto()
+            .saturating_mul(GAP_RECOVERY_RTO_MULTIPLIER)
+            .clamp(GAP_RECOVERY_MIN, GAP_RECOVERY_MAX);
+        if self.last_recv_advance.elapsed() < timeout {
+            return recovered;
+        }
+
+        let Some(&resume_at) = self.reorder_buffer.keys().next() else {
+            return recovered;
+        };
+        let skipped = resume_at.saturating_sub(self.expected_recv_nonce);
+        tracing::warn!(
+            "Gap recovery: no progress for {:?}; skipping {} unrecoverable frame(s) \
+             (nonce {} -> {}) to unblock the session",
+            self.last_recv_advance.elapsed(),
+            skipped,
+            self.expected_recv_nonce,
+            resume_at
+        );
+
+        self.expected_recv_nonce = resume_at;
+        while let Some(buffered) = self.reorder_buffer.remove(&self.expected_recv_nonce) {
+            recovered.push(buffered);
+            match self.expected_recv_nonce.checked_add(1) {
+                Some(next) => self.expected_recv_nonce = next,
+                // u64 nonce space exhausted: stop draining rather than wrap.
+                // The session is finished either way; the caller's next decrypt
+                // will fail and tear it down.
+                None => break,
+            }
+        }
+        self.last_recv_advance = Instant::now();
+        // The peer must learn the sequence moved on, or it will keep
+        // retransmitting into the void.
+        self.ack_pending = true;
+
+        recovered
+    }
+
     fn handle_data_inbound(&mut self, raw_vec: &[u8]) -> Result<ProtocolAction, ProtocolError> {
+        // Check for a stalled gap before classifying this frame, so the rest of
+        // the function sees an already-advanced `expected_recv_nonce`. Runs here
+        // rather than on Tick because both tick handlers discard DeliverApp
+        // actions, and because inbound frames keep arriving throughout the stall
+        // (retransmits/ACKs/NACKs/keepalives) — so this path is reliably reached.
+        let recovered = self.recover_stalled_gap();
+        let result = self.handle_data_inbound_frame(raw_vec)?;
+        if recovered.is_empty() {
+            return Ok(result);
+        }
+
+        // Recovered payloads are older than anything this frame produces, so
+        // they go first to preserve delivery order.
+        let mut all = recovered;
+        match result {
+            ProtocolAction::Noop => {}
+            ProtocolAction::Multiple(list) => all.extend(list),
+            single => all.push(single),
+        }
+        Ok(if all.len() == 1 {
+            all.pop().unwrap()
+        } else {
+            ProtocolAction::Multiple(all)
+        })
+    }
+
+    fn handle_data_inbound_frame(&mut self, raw_vec: &[u8]) -> Result<ProtocolAction, ProtocolError> {
         if raw_vec.len() < 12 {
             return Err(ProtocolError::Framing("data datagram too short".to_string()));
         }
@@ -970,5 +1081,97 @@ mod tests {
         // Tick should not crash on either side
         let _ = client.on_event(OstpEvent::Tick).unwrap();
         let _ = server.on_event(OstpEvent::Tick).unwrap();
+    }
+
+    /// Count how many application payloads an action tree actually delivers.
+    fn delivered_payloads(action: &ProtocolAction) -> Vec<Bytes> {
+        match action {
+            ProtocolAction::DeliverApp(_, data) => vec![data.clone()],
+            ProtocolAction::Multiple(list) => list.iter().flat_map(delivered_payloads).collect(),
+            _ => Vec::new(),
+        }
+    }
+
+    /// Build `count` data frames on `client`, returning them without delivering
+    /// any — lets a test choose which ones to "lose" in transit.
+    fn make_data_frames(client: &mut ProtocolMachine, count: u8) -> Vec<Bytes> {
+        (0..count)
+            .map(|i| {
+                let payload = Bytes::from(vec![i; 32]);
+                match client.on_event(OstpEvent::Outbound(1, payload)).unwrap() {
+                    ProtocolAction::SendDatagram(d) => d,
+                    _ => panic!("expected SendDatagram for frame {i}"),
+                }
+            })
+            .collect()
+    }
+
+    /// The freeze this fixes: a frame is lost, the sender eventually stops
+    /// retransmitting it, and the receiver — which gates delivery on
+    /// `expected_recv_nonce` — waits for it forever. Every later frame piles up
+    /// undelivered while the transport itself stays healthy, so nothing upstream
+    /// notices. Recovery must eventually skip the hole and release the backlog.
+    #[test]
+    fn test_gap_recovery_releases_permanently_stalled_frames() {
+        let (mut client, mut server) = do_handshake();
+        let frames = make_data_frames(&mut client, 4);
+
+        // Frame 0 arrives in order and is delivered straight through.
+        let action = server.on_event(OstpEvent::Inbound(frames[0].clone())).unwrap();
+        assert_eq!(delivered_payloads(&action).len(), 1, "in-order frame should deliver");
+
+        // Frame 1 is lost. 2 and 3 arrive but must be held back — delivering them
+        // now would reorder the stream.
+        for idx in [2usize, 3] {
+            let action = server.on_event(OstpEvent::Inbound(frames[idx].clone())).unwrap();
+            assert!(
+                delivered_payloads(&action).is_empty(),
+                "frame {idx} must stay buffered behind the missing frame"
+            );
+        }
+
+        // Stand in for "the sender exhausted its retries and dropped frame 1":
+        // the sequence has not advanced for longer than the recovery timeout.
+        server.last_recv_advance = Instant::now() - GAP_RECOVERY_MAX - Duration::from_secs(1);
+
+        // The next inbound frame (a retransmitted duplicate, which is exactly what
+        // a real stalled session keeps receiving) must unblock the backlog.
+        let action = server.on_event(OstpEvent::Inbound(frames[0].clone())).unwrap();
+        let delivered = delivered_payloads(&action);
+        assert_eq!(
+            delivered.len(),
+            2,
+            "both buffered frames must be released once the gap is declared unrecoverable"
+        );
+        // ...and in order: frame 2 before frame 3.
+        assert_eq!(delivered[0][0], 2);
+        assert_eq!(delivered[1][0], 3);
+    }
+
+    /// Recovery must not be trigger-happy: a frame that is merely late still has
+    /// to be waited for, or we would discard data the sender is about to resend.
+    #[test]
+    fn test_gap_recovery_does_not_fire_before_timeout() {
+        let (mut client, mut server) = do_handshake();
+        let frames = make_data_frames(&mut client, 3);
+
+        server.on_event(OstpEvent::Inbound(frames[0].clone())).unwrap();
+        let action = server.on_event(OstpEvent::Inbound(frames[2].clone())).unwrap();
+        assert!(delivered_payloads(&action).is_empty());
+
+        // Well inside the timeout — the gap must still be respected.
+        let action = server.on_event(OstpEvent::Inbound(frames[0].clone())).unwrap();
+        assert!(
+            delivered_payloads(&action).is_empty(),
+            "must keep waiting while retransmission is still plausible"
+        );
+
+        // And once the genuinely-late frame shows up, normal in-order delivery
+        // resumes with nothing dropped.
+        let action = server.on_event(OstpEvent::Inbound(frames[1].clone())).unwrap();
+        let delivered = delivered_payloads(&action);
+        assert_eq!(delivered.len(), 2, "late frame plus the buffered one");
+        assert_eq!(delivered[0][0], 1);
+        assert_eq!(delivered[1][0], 2);
     }
 }
