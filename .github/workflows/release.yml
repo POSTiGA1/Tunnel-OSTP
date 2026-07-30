@@ -378,7 +378,15 @@ jobs:
             ~/.cargo/registry/cache/
             ~/.cargo/git/db/
             target/
+            ostp-gui/src-tauri/target/
           key: cargo-windows-gui-${{ matrix.target }}-${{ hashFiles('**/Cargo.lock') }}
+          # Without a prefix fallback this cache NEVER restored on a release:
+          # cutting a release rewrites every Cargo.lock (version bump), which
+          # changes hashFiles(), which misses the exact key — so each release
+          # rebuilt every dependency from scratch. That is why the GUI jobs ran
+          # 2-4x longer than the plain release targets, which had this all along.
+          restore-keys: |
+            cargo-windows-gui-${{ matrix.target }}-
 
       - name: Download wintun
         shell: pwsh
@@ -460,7 +468,10 @@ jobs:
             ~/.cargo/registry/cache/
             ~/.cargo/git/db/
             target/
+            ostp-gui/src-tauri/target/
           key: cargo-linux-gui-${{ matrix.target }}-${{ hashFiles('**/Cargo.lock') }}
+          restore-keys: |
+            cargo-linux-gui-${{ matrix.target }}-
 
       - name: Build Tauri App
         working-directory: ostp-gui
@@ -522,7 +533,10 @@ jobs:
             ~/.cargo/registry/cache/
             ~/.cargo/git/db/
             target/
+            ostp-gui/src-tauri/target/
           key: cargo-macos-gui-${{ matrix.target }}-${{ hashFiles('**/Cargo.lock') }}
+          restore-keys: |
+            cargo-macos-gui-${{ matrix.target }}-
 
       - name: Build Tauri App
         working-directory: ostp-gui
@@ -587,8 +601,33 @@ jobs:
         with:
           ndk-version: r26b
 
-      - name: Install cargo-ndk
-        run: cargo install cargo-ndk
+      # The Android jobs had no Rust caching at all, so every release recompiled
+      # the whole ostp-jni dependency graph from scratch — the main reason these
+      # were among the slowest jobs in the matrix.
+      - name: Cache cargo
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry/index/
+            ~/.cargo/registry/cache/
+            ~/.cargo/git/db/
+            target/
+          key: cargo-android-${{ matrix.arch }}-${{ hashFiles('**/Cargo.lock') }}
+          restore-keys: |
+            cargo-android-${{ matrix.arch }}-
+
+      # cargo-ndk was built from source on every run. Cache the binary the same
+      # way the cross-compilation jobs already cache `cross`.
+      - name: Restore cargo-ndk binary cache
+        id: cargo-ndk-cache
+        uses: actions/cache@v4
+        with:
+          path: ~/.cargo/bin/cargo-ndk
+          key: cargo-ndk-bin-${{ runner.os }}-v1
+
+      - name: Install cargo-ndk (if not cached)
+        if: steps.cargo-ndk-cache.outputs.cache-hit != 'true'
+        run: cargo install cargo-ndk --locked
 
       - name: Build Android APK
         shell: bash
@@ -614,7 +653,33 @@ jobs:
             exit 1
           fi
           export OSTP_KEYSTORE_PATH="$RUNNER_TEMP/ostp-upload.jks"
-          echo "$OSTP_KEYSTORE_B64" | base64 -d > "$OSTP_KEYSTORE_PATH"
+          # Strip any stray CR/LF before decoding: the secret is pasted from a
+          # shell whose line endings we don't control, and a single trailing \r
+          # is enough to corrupt the decode.
+          printf '%s' "$OSTP_KEYSTORE_B64" | tr -d '\r\n' | base64 -d > "$OSTP_KEYSTORE_PATH"
+
+          # Verify the keystore opens BEFORE spending four minutes on Gradle only
+          # to fail at the packaging step. The size/SHA-256 are safe to print (a
+          # hash reveals nothing) and let the operator compare against the local
+          # file to tell a transport problem apart from a wrong password.
+          echo "keystore: $(stat -c%s "$OSTP_KEYSTORE_PATH") bytes, sha256 $(sha256sum "$OSTP_KEYSTORE_PATH" | cut -d' ' -f1)"
+          if ! keytool -list -keystore "$OSTP_KEYSTORE_PATH" \
+                 -storepass "$OSTP_KEYSTORE_PASSWORD" >/dev/null 2>&1; then
+            echo "::error::The keystore did not open with ANDROID_KEYSTORE_PASSWORD."
+            echo "::error::If the SHA-256 above matches your local ostp-upload.jks, the file"
+            echo "::error::arrived intact and the password secret itself is wrong - note that"
+            echo "::error::PowerShell expands \$ inside double quotes, so a password containing"
+            echo "::error::one gets mangled unless it was set with single quotes."
+            exit 1
+          fi
+          if ! keytool -list -keystore "$OSTP_KEYSTORE_PATH" \
+                 -storepass "$OSTP_KEYSTORE_PASSWORD" -alias "$OSTP_KEY_ALIAS" >/dev/null 2>&1; then
+            echo "::error::Keystore opened, but it has no key under ANDROID_KEY_ALIAS."
+            echo "::error::Aliases present in the keystore:"
+            keytool -list -keystore "$OSTP_KEYSTORE_PATH" -storepass "$OSTP_KEYSTORE_PASSWORD" \
+              | grep -i "PrivateKeyEntry" || true
+            exit 1
+          fi
 
           # 2. Compile JNI
           mkdir -p android/app/src/main/jniLibs/${{ matrix.arch }}
