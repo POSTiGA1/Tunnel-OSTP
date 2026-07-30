@@ -593,21 +593,50 @@ jobs:
       - name: Build Android APK
         shell: bash
         working-directory: ostp-flutter
+        env:
+          OSTP_KEYSTORE_B64: ${{ secrets.ANDROID_KEYSTORE_BASE64 }}
+          OSTP_KEYSTORE_PASSWORD: ${{ secrets.ANDROID_KEYSTORE_PASSWORD }}
+          OSTP_KEY_ALIAS: ${{ secrets.ANDROID_KEY_ALIAS }}
+          OSTP_KEY_PASSWORD: ${{ secrets.ANDROID_KEY_PASSWORD }}
         run: |
-          # 1. Compile JNI
+          set -euo pipefail
+
+          # 1. Materialise the upload keystore from secrets. Android keys an app
+          #    by applicationId + signing key and refuses to update across a key
+          #    change, so every published build MUST use this one key. Releases
+          #    used to fall through to the per-machine debug keystore, which on
+          #    ephemeral CI runners meant a different random key every build -
+          #    hence "App not installed" on upgrade.
+          if [ -z "${OSTP_KEYSTORE_B64:-}" ]; then
+            echo "::error::ANDROID_KEYSTORE_BASE64 secret is not set. Refusing to publish a"
+            echo "::error::debug-signed APK: users could not update over it and the key is"
+            echo "::error::not reproducible. See docs for the one-time keystore setup."
+            exit 1
+          fi
+          export OSTP_KEYSTORE_PATH="$RUNNER_TEMP/ostp-upload.jks"
+          echo "$OSTP_KEYSTORE_B64" | base64 -d > "$OSTP_KEYSTORE_PATH"
+
+          # 2. Compile JNI
           mkdir -p android/app/src/main/jniLibs/${{ matrix.arch }}
-          
+
           cd ../ostp-jni
           cargo ndk -t ${{ matrix.arch }} -o "../ostp-flutter/android/app/src/main/jniLibs" build --release
           cd ../ostp-flutter
-          
 
-          
           # 3. Build Flutter APK
           flutter build apk --release --target-platform ${{ matrix.flutter_target }}
-          
-          # 4. Copy to output
-          cp build/app/outputs/flutter-apk/app-release.apk ostp-android-${{ matrix.arch }}.apk
+
+          # 4. Fail loudly if the APK somehow still came out debug-signed, rather
+          #    than shipping another un-updatable build.
+          APK=build/app/outputs/flutter-apk/app-release.apk
+          if "$ANDROID_HOME"/build-tools/*/apksigner verify --print-certs "$APK" 2>/dev/null \
+               | grep -qi "CN=Android Debug"; then
+            echo "::error::APK is signed with the Android debug certificate - aborting."
+            exit 1
+          fi
+
+          # 5. Copy to output
+          cp "$APK" ostp-android-${{ matrix.arch }}.apk
 
       - name: Upload to GitHub Release
         uses: softprops/action-gh-release@v2

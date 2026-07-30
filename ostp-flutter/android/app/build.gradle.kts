@@ -1,9 +1,36 @@
+import java.io.FileInputStream
+import java.util.Properties
+
 plugins {
     id("com.android.application")
     id("kotlin-android")
     // The Flutter Gradle Plugin must be applied after the Android and Kotlin Gradle plugins.
     id("dev.flutter.flutter-gradle-plugin")
 }
+
+// ── Release signing material ────────────────────────────────────────────────
+// Supplied out-of-band and never committed: either an `android/key.properties`
+// file (local release builds) or OSTP_KEYSTORE_* environment variables (CI).
+//
+// This exists because the release build used to be signed with the DEBUG
+// keystore (the stock Flutter template TODO). Android identifies an app by
+// applicationId + signing key, and refuses to update across a key change. The
+// debug keystore is auto-generated per machine, and CI runners are ephemeral,
+// so every published build carried a different random key — which is why
+// updating on top of a previous install failed with "App not installed" /
+// "unable to parse the package" and only a full uninstall+reinstall worked.
+val keystoreProperties = Properties().apply {
+    val propsFile = rootProject.file("key.properties")
+    if (propsFile.exists()) {
+        FileInputStream(propsFile).use { load(it) }
+    }
+}
+
+fun signingSetting(propKey: String, envKey: String): String? =
+    keystoreProperties.getProperty(propKey) ?: System.getenv(envKey)
+
+val releaseStorePath: String? = signingSetting("storeFile", "OSTP_KEYSTORE_PATH")
+val hasReleaseSigning: Boolean = !releaseStorePath.isNullOrBlank()
 
 android {
     namespace = "com.ospab.ostp_client"
@@ -34,11 +61,35 @@ android {
         }
     }
 
+    signingConfigs {
+        create("release") {
+            if (hasReleaseSigning) {
+                storeFile = file(releaseStorePath!!)
+                storePassword = signingSetting("storePassword", "OSTP_KEYSTORE_PASSWORD")
+                keyAlias = signingSetting("keyAlias", "OSTP_KEY_ALIAS")
+                keyPassword = signingSetting("keyPassword", "OSTP_KEY_PASSWORD")
+            }
+        }
+    }
+
     buildTypes {
         release {
-            // TODO: Add your own signing config for the release build.
-            // Signing with the debug keys for now, so `flutter run --release` works.
-            signingConfig = signingConfigs.getByName("debug")
+            // Use the real upload key when one was supplied; otherwise fall back to
+            // the debug keystore so a plain local `flutter build apk --release`
+            // still works for development. Anything PUBLISHED must take the first
+            // branch — a debug-signed build cannot be updated over, and its key is
+            // machine-local, so it also can't be reproduced later.
+            if (hasReleaseSigning) {
+                signingConfig = signingConfigs.getByName("release")
+            } else {
+                logger.warn(
+                    "OSTP: no release keystore configured (android/key.properties or " +
+                    "OSTP_KEYSTORE_PATH) - falling back to the DEBUG keystore. This APK " +
+                    "is for local use only: users cannot update over it, and the key is " +
+                    "not reproducible on another machine."
+                )
+                signingConfig = signingConfigs.getByName("debug")
+            }
             proguardFiles(getDefaultProguardFile("proguard-android-optimize.txt"), "proguard-rules.pro")
         }
     }
