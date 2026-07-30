@@ -26,8 +26,15 @@ val keystoreProperties = Properties().apply {
     }
 }
 
+// Blank counts as absent. GitHub Actions substitutes an EMPTY STRING (not an
+// unset variable) for a secret that doesn't exist, so `getenv(...) ?: fallback`
+// silently kept the empty value — the elvis operator only catches null. That is
+// how an unset ANDROID_KEY_PASSWORD ended up being used as the literal key
+// password instead of falling back to the store password, producing Gradle's
+// "Get Key failed: Given final block not properly padded".
 fun signingSetting(propKey: String, envKey: String): String? =
-    keystoreProperties.getProperty(propKey) ?: System.getenv(envKey)
+    (keystoreProperties.getProperty(propKey) ?: System.getenv(envKey))
+        ?.takeIf { it.isNotBlank() }
 
 val releaseStorePath: String? = signingSetting("storeFile", "OSTP_KEYSTORE_PATH")
 val hasReleaseSigning: Boolean = !releaseStorePath.isNullOrBlank()
