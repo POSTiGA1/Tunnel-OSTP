@@ -26,6 +26,13 @@ test_route.ps1
 config.json
 wintun.dll
 
+# Android signing keys. The upload keystore is the ONE key every published APK
+# must be signed with (Android refuses to update an app across a key change),
+# so losing or leaking it is unrecoverable — it can never be committed.
+*.jks
+*.keystore
+key.properties
+
 # Server runtime cache (public IP autodetect) — must never be committed,
 # it's regenerated locally and leaks whatever host it ran on last.
 .ostp_public_ip
@@ -39,6 +46,7 @@ turn-harvesting-idea.md
 
 # Private tooling (closed-source)
 ostp-prober/
+ostp-lab/
 
 ostp-brain/
 
