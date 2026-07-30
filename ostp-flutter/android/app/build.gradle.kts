@@ -64,10 +64,18 @@ android {
     signingConfigs {
         create("release") {
             if (hasReleaseSigning) {
+                val store = signingSetting("storePassword", "OSTP_KEYSTORE_PASSWORD")
                 storeFile = file(releaseStorePath!!)
-                storePassword = signingSetting("storePassword", "OSTP_KEYSTORE_PASSWORD")
+                storePassword = store
                 keyAlias = signingSetting("keyAlias", "OSTP_KEY_ALIAS")
-                keyPassword = signingSetting("keyPassword", "OSTP_KEY_PASSWORD")
+                // PKCS12 (the keytool default since Java 9, and what our upload
+                // keystore is) cannot hold a key password that differs from the
+                // store password — the format simply has no place to put one. So
+                // treat a missing key password as "same as the store password"
+                // instead of demanding a secret that, for this keystore, can only
+                // ever be a duplicate. An explicit value still wins, for the older
+                // JKS format where the two genuinely can differ.
+                keyPassword = signingSetting("keyPassword", "OSTP_KEY_PASSWORD") ?: store
             }
         }
     }
