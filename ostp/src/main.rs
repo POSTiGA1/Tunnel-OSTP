@@ -3,7 +3,6 @@ use clap::Parser;
 use std::fs;
 use std::path::PathBuf;
 use colored::Colorize;
-use sha2::Digest;
 
 #[derive(Parser, Debug)]
 #[command(author, version, about = "OSTP Core - Ospab Stealth Transport Protocol", long_about = None)]
@@ -725,7 +724,14 @@ fn run_setup_wizard(config_path: &std::path::Path) -> Result<()> {
             // this used to be a DefaultHasher (SipHash) placeholder that produced a
             // differently-shaped digest, so a password set up through this wizard could
             // never actually log into the panel it just configured.
-            let pass_hash = format!("{:x}", sha2::Sha256::digest(password.as_bytes()));
+            // Trait-qualified so this compiles whether or not `sha2::Digest` happens
+            // to be in scope: `digest` is a trait method, and relying on the import
+            // alone broke the CI build once (v0.4.2-beta.3) while resolving fine
+            // locally.
+            let pass_hash = format!(
+                "{:x}",
+                <sha2::Sha256 as sha2::Digest>::digest(password.as_bytes())
+            );
 
             wizard_step(4, TOTAL, "Saving configuration");
             let panel_bind = format!("0.0.0.0:{}", panel_port);
