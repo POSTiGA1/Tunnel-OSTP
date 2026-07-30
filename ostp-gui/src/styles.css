@@ -17,10 +17,12 @@
   --c-accent-dim:  rgba(var(--c-fg-rgb),0.08);
   --c-accent-glow: rgba(var(--c-fg-rgb),0.18);
 
-  /* Green only for "connected" state */
-  --c-green:       #e8e8e8;
-  --c-green-glow:  rgba(232,232,232,0.25);
-  --c-green-dim:   rgba(232,232,232,0.07);
+  /* Green only for "connected" state — the one deliberate break from the
+     monochrome palette, so a successful connection reads at a glance. */
+  --c-green-rgb:   46, 230, 109;
+  --c-green:       #2ee66d;
+  --c-green-glow:  rgba(var(--c-green-rgb),0.28);
+  --c-green-dim:   rgba(var(--c-green-rgb),0.09);
 
   --c-red:         #ff5f5f;
   --c-amber:       #f0b840;
@@ -55,9 +57,11 @@
   --c-accent:      #18181b;
   --c-accent-dim:  rgba(0,0,0,0.08);
   --c-accent-glow: rgba(0,0,0,0.14);
-  --c-green:       #18181b;
-  --c-green-glow:  rgba(0,0,0,0.16);
-  --c-green-dim:   rgba(0,0,0,0.05);
+  /* Deeper green so it stays legible against the light background. */
+  --c-green-rgb:   22, 163, 74;
+  --c-green:       #16a34a;
+  --c-green-glow:  rgba(var(--c-green-rgb),0.22);
+  --c-green-dim:   rgba(var(--c-green-rgb),0.08);
   --c-red:         #dc2626;
   --c-amber:       #d97706;
   --c-txt-1:       #18181b;
@@ -155,7 +159,7 @@ a { text-decoration: none; }
   transition: background var(--t-med), box-shadow var(--t-med);
 }
 .brand-dot.connecting { animation: dot-blink 1.4s infinite ease-in-out; background: var(--c-accent); }
-.brand-dot.connected  { background: var(--c-accent); box-shadow: 0 0 10px var(--c-accent-glow); }
+.brand-dot.connected  { background: var(--c-green); box-shadow: 0 0 10px var(--c-green-glow); }
 
 @keyframes dot-blink {
   0%,100% { opacity: 1; }
@@ -233,11 +237,11 @@ a { text-decoration: none; }
 
 .orbit-wrap.connected .orbit {
   animation: orbit-spin 4s linear infinite;
-  border-color: rgba(var(--c-fg-rgb),0.14);
+  border-color: rgba(var(--c-green-rgb),0.30);
   opacity: 1;
 }
-.orbit-wrap.connected .orbit-2 { animation-duration: 6s; animation-direction: reverse; border-color: rgba(var(--c-fg-rgb),0.08); }
-.orbit-wrap.connected .orbit-3 { animation-duration: 9s; border-color: rgba(var(--c-fg-rgb),0.04); }
+.orbit-wrap.connected .orbit-2 { animation-duration: 6s; animation-direction: reverse; border-color: rgba(var(--c-green-rgb),0.18); }
+.orbit-wrap.connected .orbit-3 { animation-duration: 9s; border-color: rgba(var(--c-green-rgb),0.10); }
 
 @keyframes orbit-spin {
   from { transform: rotate(0deg); }
@@ -270,9 +274,9 @@ a { text-decoration: none; }
   animation: btn-breathe 2s infinite ease-in-out;
 }
 .power-btn.connected {
-  border-color: rgba(var(--c-fg-rgb),0.8);
-  color: var(--c-txt-1);
-  box-shadow: 0 0 0 8px rgba(var(--c-fg-rgb),0.04), 0 0 50px rgba(var(--c-fg-rgb),0.12), 0 8px 32px rgba(0,0,0,0.5);
+  border-color: var(--c-green);
+  color: var(--c-green);
+  box-shadow: 0 0 0 8px var(--c-green-dim), 0 0 50px var(--c-green-glow), 0 8px 32px rgba(0,0,0,0.5);
 }
 .power-btn.error {
   border-color: var(--c-red);
