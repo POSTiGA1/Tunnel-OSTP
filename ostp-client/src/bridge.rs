@@ -971,7 +971,21 @@ impl Bridge {
             Ok(addrs) => addrs.collect(),
             Err(e) => return Err(anyhow::anyhow!("failed to resolve server address {}: {}", self.server_addr, e)),
         };
-        resolved_addrs.sort_by_key(|addr| if addr.is_ipv6() { 0 } else { 1 });
+        // IPv4 first. Addresses are tried strictly in order, each burning its
+        // full retry budget before the next is touched, so this ordering decides
+        // how long a bad family stalls the whole connect. Mobile carriers
+        // routinely hand out IPv6 with no working route and BLACKHOLE it rather
+        // than rejecting, so every IPv6 candidate costs the full timeout budget
+        // — with several AAAA records the working IPv4 address was not reached
+        // for tens of seconds. (The same ordering bug was already fixed on the
+        // server's outbound path and in the UoT connect.)
+        resolved_addrs.sort_by_key(|addr| if addr.is_ipv6() { 1 } else { 0 });
+
+        // NAT64 is a fallback for IPv6-only networks. Retrying it per failing
+        // address multiplied an already-long connect: each attempt re-runs a DNS
+        // lookup and another full round of handshake retries, for a path that
+        // either works for the whole network or for none of it.
+        let mut nat64_attempted = false;
 
         let mut last_err = anyhow::anyhow!("no IP addresses resolved for {}", self.server_addr);
 
@@ -984,7 +998,8 @@ impl Bridge {
             let socket = match self.try_connect_transport(target_ip, port).await {
                 Ok(sock) => sock,
                 Err(e) => {
-                    if let std::net::IpAddr::V4(ipv4) = target_ip {
+                    if let (std::net::IpAddr::V4(ipv4), false) = (target_ip, nat64_attempted) {
+                        nat64_attempted = true;
                         tx.send(UiEvent::Log(format!("Direct IPv4 connection failed: {}. Trying NAT64 fallback...", e))).await.ok();
                         let nat64_ipv6 = synthesize_nat64(ipv4).await;
                         match self.try_connect_transport(std::net::IpAddr::V6(nat64_ipv6), port).await {
@@ -1065,7 +1080,8 @@ impl Bridge {
             let (final_socket, size) = if success {
                 (socket, size)
             } else {
-                if let std::net::IpAddr::V4(ipv4) = target_ip {
+                if let (std::net::IpAddr::V4(ipv4), false) = (target_ip, nat64_attempted) {
+                    nat64_attempted = true;
                     tx.send(UiEvent::Log("Direct IPv4 handshake timed out. Trying NAT64 fallback...".to_string())).await.ok();
                     let nat64_ipv6 = synthesize_nat64(ipv4).await;
                     match self.try_connect_transport(std::net::IpAddr::V6(nat64_ipv6), port).await {
@@ -1309,8 +1325,19 @@ fn next_profile(current: TrafficProfile) -> TrafficProfile {
 }
 
 async fn synthesize_nat64(ip: std::net::Ipv4Addr) -> std::net::Ipv6Addr {
+    // Well-known prefix (RFC 6052), used if discovery doesn't answer in time.
     let mut prefix = [0x00, 0x64, 0xff, 0x9b, 0, 0, 0, 0, 0, 0, 0, 0];
-    if let Ok(addrs) = tokio::net::lookup_host("ipv4only.arpa:80").await {
+    // Bound the discovery lookup. This runs on exactly the networks that are
+    // already misbehaving, where the resolver can hang for tens of seconds
+    // before giving up — unbounded, it was a large part of why connecting over
+    // a broken mobile network took minutes. Falling back to the well-known
+    // prefix is strictly better than waiting.
+    let discovery = tokio::time::timeout(
+        Duration::from_secs(2),
+        tokio::net::lookup_host("ipv4only.arpa:80"),
+    )
+    .await;
+    if let Ok(Ok(addrs)) = discovery {
         for addr in addrs {
             if let std::net::SocketAddr::V6(v6) = addr {
                 let octets = v6.ip().octets();
