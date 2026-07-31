@@ -188,6 +188,16 @@ impl ProtocolMachine {
         self.cc.cwnd_packets() as usize
     }
 
+    /// Whether the pacing bucket currently allows releasing another packet.
+    ///
+    /// The congestion window bounds how much may be UNACKNOWLEDGED; it says
+    /// nothing about how fast that window is emptied onto the wire. Sending a
+    /// whole window back-to-back is what drives a deep buffer into standing
+    /// queue, so admission is gated on both.
+    pub fn can_pace_packet(&self) -> bool {
+        self.cc.can_pace_packet()
+    }
+
     pub fn on_send(&mut self, bytes: u64) {
         self.cc.on_send(bytes);
     }

@@ -309,7 +309,15 @@ impl Bridge {
                     // which on a mobile uplink is minutes of buffered queue rather
                     // than throughput — the app kept handing over data long after
                     // the path had stopped draining it.
-                    s.iter().any(|ses| ses.machine.in_flight_count() < ses.machine.cwnd_packets().clamp(16, 1024))
+                    // Two independent gates. cwnd bounds how much may be in
+                    // flight; pacing bounds how FAST it is released. Without the
+                    // second, a full window goes out back-to-back and lands in
+                    // the bottleneck's buffer as standing queue rather than
+                    // throughput — the thing that produced multi-second RTT.
+                    s.iter().any(|ses| {
+                        ses.machine.in_flight_count() < ses.machine.cwnd_packets().clamp(16, 1024)
+                            && ses.machine.can_pace_packet()
+                    })
                 }).unwrap_or(true) => {
                     self.handle_proxy_event(proxy_ev, &mut sessions_opt, &mut stream_map, &tx, &proxy_tx).await;
                 }

@@ -39,6 +39,9 @@ pub struct CongestionController {
     loss_count: u32,
     /// Pacing rate: bytes per second
     pacing_rate: u64,
+    /// Token-bucket allowance for pacing, in bytes.
+    pacing_tokens: f64,
+    pacing_last_refill: Instant,
     /// MTU estimate (used for cwnd → packet count conversion)
     mtu: u64,
     /// Min RTT expiry: re-probe after 10 seconds
@@ -77,6 +80,8 @@ const MAX_CWND_PACKETS: u64 = 1024;
 const RTT_INFLATION_EXIT_SLOW_START: f64 = 2.0;
 /// SRTT/min_rtt ratio treated as a standing queue that must be actively drained.
 const RTT_INFLATION_BACKOFF: f64 = 4.0;
+/// How much pacing allowance may accumulate, expressed as time-at-rate.
+const PACING_BURST: Duration = Duration::from_millis(10);
 const RTO_MIN: Duration = Duration::from_millis(50);
 /// Maximum RTO
 const RTO_MAX: Duration = Duration::from_secs(16);
@@ -125,7 +130,48 @@ impl CongestionController {
             min_rtt_stamp: now,
             slow_start_losses: 0,
             slow_start_loss_window_start: now,
+            pacing_tokens: (INITIAL_CWND_PACKETS * mtu) as f64,
+            pacing_last_refill: now,
         }
+    }
+
+    /// Bytes of pacing allowance available right now, without consuming any.
+    ///
+    /// Read-only so the send path can use it as an admission check before it
+    /// commits to building a datagram.
+    pub fn pacing_available(&self) -> f64 {
+        let elapsed = self.pacing_last_refill.elapsed().as_secs_f64();
+        (self.pacing_tokens + elapsed * self.pacing_rate as f64).min(self.pacing_burst())
+    }
+
+    /// Whether at least one full-size packet may be released right now.
+    pub fn can_pace_packet(&self) -> bool {
+        self.pacing_available() >= self.mtu as f64
+    }
+
+    /// Ceiling on accumulated allowance.
+    ///
+    /// Pacing intervals here are fractions of a millisecond, so releasing
+    /// strictly one packet at a time would need a sub-millisecond timer per
+    /// packet. Instead we allow a short burst — the same trade every real
+    /// pacing implementation makes — sized so the loop's existing ~10ms wakeups
+    /// can still saturate the configured rate, with a small floor so a
+    /// cold/low estimate can never wedge sending entirely.
+    fn pacing_burst(&self) -> f64 {
+        let by_rate = self.pacing_rate as f64 * PACING_BURST.as_secs_f64();
+        by_rate.max((self.mtu * 4) as f64)
+    }
+
+    /// Refill from elapsed time and deduct `bytes`. Called on the real send
+    /// path; allowance is permitted to go negative so an oversized packet still
+    /// pays for itself rather than being released for free.
+    fn consume_pacing(&mut self, bytes: u64) {
+        let now = Instant::now();
+        let elapsed = now.duration_since(self.pacing_last_refill).as_secs_f64();
+        self.pacing_last_refill = now;
+        self.pacing_tokens =
+            (self.pacing_tokens + elapsed * self.pacing_rate as f64).min(self.pacing_burst())
+                - bytes as f64;
     }
 
     /// Returns the current congestion window in bytes.
@@ -179,6 +225,11 @@ impl CongestionController {
     /// Record that we sent `bytes` of data.
     pub fn on_send(&mut self, bytes: u64) {
         self.bytes_in_flight = self.bytes_in_flight.saturating_add(bytes);
+        // Charge the pacing bucket here rather than at the admission check, so
+        // every byte that actually reaches the wire is paid for exactly once —
+        // including retransmits, which are precisely what must not be allowed
+        // to bypass the rate limit and pile into an already-full queue.
+        self.consume_pacing(bytes);
     }
 
     /// Record that `bytes` were acknowledged but WITHOUT a usable RTT sample
@@ -422,6 +473,47 @@ mod tests {
             "cwnd kept growing while the queue was inflating RTT ({} -> {})",
             cwnd_before,
             cc.cwnd()
+        );
+    }
+
+    /// Pacing must actually bound the release rate: draining the bucket has to
+    /// deny the next packet. Without this the congestion window alone decides,
+    /// and a whole window leaves back-to-back.
+    #[test]
+    fn test_pacing_bucket_denies_once_drained() {
+        let mut cc = CongestionController::new(1200);
+        assert!(cc.can_pace_packet(), "a fresh controller must allow sending");
+
+        // Spend well beyond one burst allowance.
+        let burst_bytes = cc.pacing_available();
+        let mut spent = 0.0;
+        while spent <= burst_bytes + 1200.0 {
+            cc.on_send(1200);
+            spent += 1200.0;
+        }
+
+        assert!(
+            !cc.can_pace_packet(),
+            "pacing allowed unbounded sending: {} bytes still available after spending {}",
+            cc.pacing_available(),
+            spent
+        );
+    }
+
+    /// The allowance must refill over time, or sending would stall permanently
+    /// once the first burst is spent.
+    #[test]
+    fn test_pacing_bucket_refills_over_time() {
+        let mut cc = CongestionController::new(1200);
+        while cc.can_pace_packet() {
+            cc.on_send(1200);
+        }
+        assert!(!cc.can_pace_packet());
+
+        std::thread::sleep(Duration::from_millis(25));
+        assert!(
+            cc.can_pace_packet(),
+            "pacing bucket never refilled; sending would be stuck forever"
         );
     }
 

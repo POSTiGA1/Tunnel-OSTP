@@ -263,8 +263,19 @@ impl Dispatcher {
         self.peer_machines
             .iter()
             .map(|(&sid, ps)| {
-                let cwnd = (ps.machine.cwnd_packets() as i64).clamp(16, 16384);
+                // Ceiling matches MAX_CWND_PACKETS in ostp-core. The old 16384
+                // allowed ~20 MB outstanding toward one client — on a mobile
+                // downlink that is standing queue, not throughput, and it is the
+                // download direction that carries video.
+                let cwnd = (ps.machine.cwnd_packets() as i64).clamp(16, 1024);
                 let in_flight = ps.machine.in_flight_count() as i64;
+                // Pacing gates the RATE, cwnd only the outstanding amount. With
+                // the pacing bucket empty, report no headroom so the relay
+                // reader pauses instead of handing over another chunk that would
+                // leave back-to-back.
+                if !ps.machine.can_pace_packet() {
+                    return (sid, 0);
+                }
                 (sid, cwnd - in_flight)
             })
             .collect()
