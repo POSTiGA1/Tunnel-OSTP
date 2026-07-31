@@ -4,6 +4,11 @@ use thiserror::Error;
 use std::collections::{BTreeMap, VecDeque};
 use std::time::{Duration, Instant};
 
+/// Upper bound on a single frame's retransmit timer, after exponential backoff
+/// is applied to the adaptive RTO. Past this the session is dead from the
+/// user's point of view, and waiting longer only delays recovery.
+const MAX_EFFECTIVE_RTO: Duration = Duration::from_secs(8);
+
 use crate::congestion::CongestionController;
 use crate::crypto::{NoiseRole, NoiseSession, SessionCipher};
 use crate::framing::{AdaptivePadder, FrameHeader, FrameKind, FramedPacket, PaddingStrategy};
@@ -675,8 +680,15 @@ impl ProtocolMachine {
                 break;
             }
 
+            // Exponential backoff, but bounded in absolute terms. base_rto is
+            // itself adaptive and can reach RTO_MAX (16s) on a congested path;
+            // multiplying that by the 64x backoff cap yields a frame that sits
+            // unretransmitted for ~17 MINUTES, long past the point where the
+            // session is simply dead to the user. Cap the product so backoff
+            // stays a backoff rather than an outage.
             let backoff_factor = 1u64 << (frame.retries as u64).min(6);
-            let effective_rto = Duration::from_millis(base_rto_ms.saturating_mul(backoff_factor));
+            let effective_rto = Duration::from_millis(base_rto_ms.saturating_mul(backoff_factor))
+                .min(MAX_EFFECTIVE_RTO);
 
             if now.duration_since(frame.last_sent) >= effective_rto {
                 // Only burn the retry counter and reset the RTO timer when the

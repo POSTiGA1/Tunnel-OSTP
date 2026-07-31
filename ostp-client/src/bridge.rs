@@ -272,7 +272,12 @@ impl Bridge {
                     }
                 }
                 proxy_ev = proxy_rx.recv(), if self.running && sessions_opt.as_ref().map(|s| {
-                    s.iter().any(|ses| ses.machine.in_flight_count() < ses.machine.cwnd_packets().clamp(16, 16384))
+                    // Upper bound matches MAX_CWND_PACKETS in ostp-core's congestion
+                    // controller. The old 16384 ceiling let ~20 MB sit in flight,
+                    // which on a mobile uplink is minutes of buffered queue rather
+                    // than throughput — the app kept handing over data long after
+                    // the path had stopped draining it.
+                    s.iter().any(|ses| ses.machine.in_flight_count() < ses.machine.cwnd_packets().clamp(16, 1024))
                 }).unwrap_or(true) => {
                     self.handle_proxy_event(proxy_ev, &mut sessions_opt, &mut stream_map, &tx, &proxy_tx).await;
                 }

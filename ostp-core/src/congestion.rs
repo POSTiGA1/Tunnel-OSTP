@@ -65,6 +65,18 @@ const MIN_CWND_PACKETS: u64 = 2;
 /// Min RTT expiry window (after which we re-probe)
 const MIN_RTT_EXPIRY: Duration = Duration::from_secs(10);
 /// Minimum RTO (RFC 6298: 1s in TCP; we use 50ms since we own the protocol)
+/// Absolute ceiling on the congestion window, in packets. At a ~1200-byte MTU
+/// this is roughly 1.2 MB in flight — already far above the bandwidth-delay
+/// product of any link this protocol realistically runs over, so anything
+/// beyond it is standing queue, not throughput. The client previously allowed
+/// up to 16384 packets (~20 MB), which on a mobile uplink is minutes of buffer.
+const MAX_CWND_PACKETS: u64 = 1024;
+/// SRTT/min_rtt ratio at which slow start stops. Doubling is what fills a deep
+/// buffer fastest, so growth must end when the queue starts building rather
+/// than waiting for a loss that a deep buffer may never produce.
+const RTT_INFLATION_EXIT_SLOW_START: f64 = 2.0;
+/// SRTT/min_rtt ratio treated as a standing queue that must be actively drained.
+const RTT_INFLATION_BACKOFF: f64 = 4.0;
 const RTO_MIN: Duration = Duration::from_millis(50);
 /// Maximum RTO
 const RTO_MAX: Duration = Duration::from_secs(16);
@@ -198,9 +210,46 @@ impl CongestionController {
 
     /// Congestion-window growth shared by both ACK paths (slow start / probe).
     fn grow_window(&mut self, bytes: u64) {
-        // State machine
+        // ── Delay-based congestion signal ────────────────────────────────────
+        // A loss-only controller is blind on a deeply-buffered path, and mobile
+        // carrier buffers are very deep: they absorb a burst instead of dropping
+        // it, so no loss is ever signalled and cwnd keeps growing. The queue —
+        // not the link — is what grows, and the standing delay it adds shows up
+        // as RTT inflating far above the path's floor. Left unchecked this is a
+        // positive feedback loop: bigger queue -> larger RTT samples -> larger
+        // SRTT -> larger RTO -> retransmits pile on -> bigger queue, which is
+        // how a session ends up reporting multi-second (even multi-minute) RTT
+        // and stalls video until the buffer finally drains or the user
+        // reconnects. Treat sustained RTT inflation as congestion in its own
+        // right, exactly as it is.
+        let inflation = if self.rtt_initialized && !self.min_rtt.is_zero() {
+            self.srtt.as_secs_f64() / self.min_rtt.as_secs_f64()
+        } else {
+            1.0
+        };
+
+        if inflation >= RTT_INFLATION_BACKOFF {
+            // Standing queue is severe — actively drain it.
+            self.cwnd = (self.cwnd / 2).max(MIN_CWND_PACKETS * self.mtu);
+            self.ssthresh = self.cwnd;
+            self.phase = Phase::ProbeBandwidth;
+            tracing::debug!(cwnd = self.cwnd, inflation, "congestion: draining standing queue");
+            self.clamp_cwnd();
+            return;
+        }
+
         match self.phase {
             Phase::SlowStart => {
+                // Exponential doubling is what fills a deep buffer fastest, so
+                // leave slow start as soon as the queue starts to build rather
+                // than waiting for the loss that may never come.
+                if inflation >= RTT_INFLATION_EXIT_SLOW_START {
+                    self.ssthresh = self.cwnd;
+                    self.phase = Phase::ProbeBandwidth;
+                    tracing::debug!(cwnd = self.cwnd, inflation, "congestion: RTT inflation ended slow start");
+                    self.clamp_cwnd();
+                    return;
+                }
                 // Exponential growth: increase cwnd by acked bytes (doubles per RTT)
                 self.cwnd = self.cwnd.saturating_add(bytes);
                 if self.cwnd >= self.ssthresh {
@@ -212,6 +261,21 @@ impl CongestionController {
                 // TCP Reno Additive Increase: increase cwnd by ~1 MTU per RTT
                 self.cwnd = self.cwnd.saturating_add(bytes * self.mtu / self.cwnd.max(1));
             }
+        }
+
+        self.clamp_cwnd();
+    }
+
+    /// Hard ceiling on the congestion window.
+    ///
+    /// Independent of any estimate: no real path this protocol runs over has a
+    /// bandwidth-delay product anywhere near this, so a window above it is
+    /// buffered queue rather than data in transit. Without it, slow start on a
+    /// buffer that never drops could grow the window into the tens of megabytes.
+    fn clamp_cwnd(&mut self) {
+        let ceiling = MAX_CWND_PACKETS.saturating_mul(self.mtu);
+        if self.cwnd > ceiling {
+            self.cwnd = ceiling;
         }
     }
 
@@ -330,6 +394,53 @@ mod tests {
         let initial = cc.cwnd();
         cc.on_loss(1200);
         assert!(cc.cwnd() < initial);
+    }
+
+    /// The bufferbloat case: a deep buffer absorbs everything, so NOTHING is
+    /// ever lost, but the standing queue inflates RTT. A loss-only controller
+    /// grows cwnd forever here — which is how a session ends up reporting
+    /// multi-second RTT and stalling video.
+    #[test]
+    fn test_rtt_inflation_halts_growth_without_any_loss() {
+        let mut cc = CongestionController::new(1200);
+
+        // Establish a low path floor; this becomes min_rtt.
+        for _ in 0..4 {
+            cc.on_send(1200);
+            cc.on_ack(1200, Duration::from_millis(20));
+        }
+        let cwnd_before = cc.cwnd();
+
+        // Queue builds: RTT climbs far above the floor, still zero loss.
+        for _ in 0..20 {
+            cc.on_send(1200);
+            cc.on_ack(1200, Duration::from_millis(400));
+        }
+
+        assert!(
+            cc.cwnd() <= cwnd_before,
+            "cwnd kept growing while the queue was inflating RTT ({} -> {})",
+            cwnd_before,
+            cc.cwnd()
+        );
+    }
+
+    /// cwnd must never exceed the absolute ceiling, however long slow start
+    /// runs unopposed — above it the window is buffered queue, not throughput.
+    #[test]
+    fn test_cwnd_never_exceeds_absolute_ceiling() {
+        let mut cc = CongestionController::new(1200);
+        // Constant RTT: no inflation signal, so only the hard cap can stop this.
+        for _ in 0..5000 {
+            cc.on_send(1200);
+            cc.on_ack(1200, Duration::from_millis(30));
+        }
+        assert!(
+            cc.cwnd() <= MAX_CWND_PACKETS * 1200,
+            "cwnd {} exceeded the {}-packet ceiling",
+            cc.cwnd(),
+            MAX_CWND_PACKETS
+        );
     }
 
     #[test]
