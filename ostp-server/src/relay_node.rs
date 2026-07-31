@@ -95,7 +95,29 @@ async fn sync_keys(cfg: &RelayConfig, shared_keys: &SharedKeys) -> Result<usize>
 
     let resp = req.send().await?;
     if !resp.status().is_success() {
-        anyhow::bail!("API returned HTTP {}", resp.status());
+        // 404 here almost always means the URL is missing the panel's secret
+        // path segment rather than the server being down or the token being
+        // wrong. The management API is not served at /api — it is nested under
+        // the configured `api.webpath` (see create_api_router), which exists to
+        // keep the panel from being discoverable by scanners. A bare
+        // host:port therefore resolves to a route that does not exist, and the
+        // token is never even looked at, which makes "404" a deeply misleading
+        // thing to report on its own.
+        if resp.status() == reqwest::StatusCode::NOT_FOUND {
+            anyhow::bail!(
+                "API returned HTTP 404 for {url}. The management API is served under the \
+                 target server's secret `api.webpath`, not at /api — set upstream_api_url \
+                 to include it, e.g. \"http://HOST:9090/<webpath>\" (the same path you open \
+                 the web panel at). Check `api.webpath` in the target server's config."
+            );
+        }
+        if resp.status() == reqwest::StatusCode::UNAUTHORIZED {
+            anyhow::bail!(
+                "API returned HTTP 401 for {url}: upstream_api_token does not match the \
+                 target server's `api.token`."
+            );
+        }
+        anyhow::bail!("API returned HTTP {} for {url}", resp.status());
     }
 
     #[derive(serde::Deserialize)]
