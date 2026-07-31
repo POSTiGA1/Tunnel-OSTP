@@ -28,6 +28,12 @@ enum Commands {
     Init {
         mode: String,
     },
+    /// Hash a password for the web panel's `api.password_hash` config field
+    #[command(name = "hash-password", alias = "hp")]
+    HashPassword {
+        /// The password to hash. Omit to be prompted (keeps it out of shell history).
+        password: Option<String>,
+    },
     /// Generate a new secure access key
     #[command(name = "gk", alias = "generate-key")]
     GenerateKey {
@@ -920,6 +926,38 @@ async fn run_app() -> Result<()> {
         match cmd {
             Commands::Setup { init } => { args.setup = true; args.init = init; }
             Commands::Init { mode } => { args.init = Some(mode); }
+            Commands::HashPassword { password } => {
+                // The panel stores only a hash, and until now nothing in the CLI
+                // could produce one: `ostp init server` writes password_hash: ""
+                // and the only generator lived inside the Unix-only Server+Panel
+                // wizard branch, leaving no supported way to set up API auth on a
+                // plain server.
+                let password = match password {
+                    Some(p) => p,
+                    None => {
+                        print!("Password: ");
+                        use std::io::Write as _;
+                        std::io::stdout().flush().ok();
+                        let mut buf = String::new();
+                        std::io::stdin().read_line(&mut buf)?;
+                        buf.trim_end_matches(['\r', '\n']).to_string()
+                    }
+                };
+                if password.is_empty() {
+                    anyhow::bail!("password must not be empty");
+                }
+                // Must match api.rs's handle_login byte for byte.
+                let hash = format!(
+                    "{:x}",
+                    <sha2::Sha256 as sha2::Digest>::digest(password.as_bytes())
+                );
+                println!();
+                println!("Add this to the \"api\" section of your config:");
+                println!();
+                println!("  \"password_hash\": \"{hash}\"");
+                println!();
+                return Ok(());
+            }
             Commands::GenerateKey { format, count } => { args.generate_key = true; args.format = format; args.count = count; }
             Commands::Links => { args.links = true; }
             Commands::Check => { args.check = true; }

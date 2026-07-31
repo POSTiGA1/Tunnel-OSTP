@@ -137,6 +137,16 @@ pub struct Bridge {
     last_rtt_ms: f64,
     last_sample_at: Instant,
     last_valid_recv: Instant,
+    /// Set when a suspend/resume is detected, cleared once a reconnect actually
+    /// succeeds. Waking is precisely when the network is least likely to be
+    /// ready — Wi-Fi has not reassociated yet — so a single attempt fired
+    /// milliseconds after resume usually fails, and a one-shot forced reconnect
+    /// then fell back to the ordinary 25s stall heuristic. That heuristic keys
+    /// off a monotonic clock which does not advance while the machine is
+    /// asleep, so it could take a further 25s of real uptime to fire, or not
+    /// fire at all. Retrying until success removes the dependency on either.
+    forced_reconnect_pending: bool,
+    last_forced_reconnect_try: Instant,
 }
 
 impl Bridge {
@@ -173,6 +183,8 @@ impl Bridge {
             last_rtt_ms: 0.0,
             last_sample_at: Instant::now(),
             last_valid_recv: Instant::now(),
+            forced_reconnect_pending: false,
+            last_forced_reconnect_try: Instant::now(),
         })
     }
 
@@ -255,7 +267,27 @@ impl Bridge {
                         let _ = tx.send(UiEvent::Log(format!(
                             "Resumed after ~{}s suspend — forcing clean reconnect", wall_gap.as_secs()
                         ))).await;
+                        self.forced_reconnect_pending = true;
+                        self.last_forced_reconnect_try = Instant::now() - Duration::from_secs(60);
+                    }
+
+                    // Keep retrying a resume-triggered reconnect until one lands.
+                    // The first attempt fires within half a second of waking, when
+                    // the NIC is typically still reassociating, so treating it as
+                    // one-shot left the tunnel dead until some other timer noticed.
+                    if self.running
+                        && self.forced_reconnect_pending
+                        && self.last_forced_reconnect_try.elapsed() >= Duration::from_secs(3)
+                    {
+                        self.last_forced_reconnect_try = Instant::now();
                         self.handle_keepalive(true, &mut sessions_opt, &mut udp_rx_opt, &mut proxy_guard, &mut stream_map, &tx, &proxy_tx, &mut proxy_rx).await;
+                        // handle_keepalive refreshes last_valid_recv only when a
+                        // session was actually established, so this is a real
+                        // success check rather than "we tried".
+                        if self.last_valid_recv.elapsed() < Duration::from_secs(3) {
+                            self.forced_reconnect_pending = false;
+                            let _ = tx.send(UiEvent::Log("Reconnected after suspend".into())).await;
+                        }
                     }
                     if self.running {
                         self.emit_metrics(&tx).await;
