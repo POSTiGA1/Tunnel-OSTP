@@ -229,7 +229,45 @@ fn set_autostart(enable: bool) -> Result<(), String> {
                 .output();
         }
     }
+    #[cfg(target_os = "linux")]
+    {
+        // XDG autostart: desktop environments launch every .desktop file in
+        // ~/.config/autostart on login. This is the portable equivalent of the
+        // HKCU Run key above and needs no elevation.
+        let path = linux_autostart_path().ok_or("Cannot determine the autostart directory")?;
+        if enable {
+            let exe = std::env::current_exe().map_err(|e| format!("Cannot get exe path: {}", e))?;
+            if let Some(dir) = path.parent() {
+                std::fs::create_dir_all(dir)
+                    .map_err(|e| format!("Cannot create {}: {}", dir.display(), e))?;
+            }
+            let entry = format!(
+                "[Desktop Entry]\n\
+                 Type=Application\n\
+                 Name=OSTP\n\
+                 Exec=\"{}\"\n\
+                 Terminal=false\n\
+                 X-GNOME-Autostart-enabled=true\n",
+                exe.display()
+            );
+            std::fs::write(&path, entry)
+                .map_err(|e| format!("Cannot write {}: {}", path.display(), e))?;
+        } else if path.exists() {
+            std::fs::remove_file(&path)
+                .map_err(|e| format!("Cannot remove {}: {}", path.display(), e))?;
+        }
+    }
     Ok(())
+}
+
+/// Path of the XDG autostart entry, honouring XDG_CONFIG_HOME.
+#[cfg(target_os = "linux")]
+fn linux_autostart_path() -> Option<PathBuf> {
+    let base = std::env::var_os("XDG_CONFIG_HOME")
+        .map(PathBuf::from)
+        .filter(|p| !p.as_os_str().is_empty())
+        .or_else(|| std::env::var_os("HOME").map(|h| PathBuf::from(h).join(".config")))?;
+    Some(base.join("autostart").join("ostp.desktop"))
 }
 
 /// Checks if the app is currently in Windows startup.
@@ -244,6 +282,12 @@ fn get_autostart() -> bool {
             .output();
         if let Ok(o) = out {
             return o.status.success();
+        }
+    }
+    #[cfg(target_os = "linux")]
+    {
+        if let Some(path) = linux_autostart_path() {
+            return path.exists();
         }
     }
     false
@@ -625,22 +669,10 @@ async fn start_tun_via_helper(
     raw: &ClientConfigRaw,
     app: tauri::AppHandle,
 ) -> Result<bool, String> {
-    // TUN mode goes through a privileged helper, and the only elevation path
-    // implemented is the Windows UAC one (see launch_as_admin). The helper is
-    // also not built for other platforms by the release workflow. Say that
-    // plainly and up front: previously this fell through to the helper lookup
-    // and surfaced as a missing-file error naming a Windows executable, which
-    // on Linux reads as a packaging mistake rather than an unimplemented
-    // feature.
-    if !cfg!(windows) {
-        return Err(
-            "TUN mode is currently Windows-only: it needs a privileged helper, and elevation \
-             for it is only implemented on Windows. Use proxy mode (SOCKS5/HTTP) on this \
-             platform."
-                .to_string(),
-        );
-    }
-
+    // TUN goes through a privileged helper. Elevation is implemented for
+    // Windows (UAC) and Linux (polkit/pkexec); anywhere else launch_as_admin
+    // reports that plainly rather than letting this fail later as a confusing
+    // missing-file error.
     let port = {
         let listener = std::net::TcpListener::bind("127.0.0.1:0").map_err(|e| format!("Bind error: {}", e))?;
         listener.local_addr().unwrap().port()
@@ -825,8 +857,50 @@ fn launch_as_admin(exe: &std::path::PathBuf, token: &str, port: u16) -> anyhow::
     Ok(())
 }
 
-#[cfg(not(target_os = "windows"))]
-fn launch_as_admin(_exe: &PathBuf, _token: &str, _port: u16) -> Result<()> { anyhow::bail!("Windows only."); }
+#[cfg(target_os = "linux")]
+fn launch_as_admin(exe: &PathBuf, token: &str, port: u16) -> Result<()> {
+    use std::os::unix::fs::PermissionsExt;
+    use std::process::Command;
+
+    // Same shape as the Windows path: the token goes through a file rather than
+    // argv, so it never shows up in the process list.
+    let token_file = std::env::temp_dir().join(format!("ostp_auth_{}.tmp", rand::random::<u32>()));
+    std::fs::write(&token_file, token)?;
+    // Unlike Windows, /tmp is world-readable here, and this token authenticates
+    // control of the privileged tunnel helper — restrict it to the owner.
+    let _ = std::fs::set_permissions(&token_file, std::fs::Permissions::from_mode(0o600));
+
+    // pkexec is polkit's front-end: in a desktop session it raises a graphical
+    // authentication dialog. sudo is not an option from a GUI process, which has
+    // no terminal to prompt on.
+    match Command::new("pkexec")
+        .arg(exe)
+        .arg("--port")
+        .arg(port.to_string())
+        .arg("--token-file")
+        .arg(&token_file)
+        .spawn()
+    {
+        Ok(_) => Ok(()),
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
+            let _ = std::fs::remove_file(&token_file);
+            anyhow::bail!(
+                "pkexec was not found, so the TUN helper cannot be granted the privileges it \
+                 needs. Install polkit (package \"policykit-1\" on Debian/Ubuntu, \"polkit\" on \
+                 Fedora/Arch), or use proxy mode, which needs no elevation."
+            )
+        }
+        Err(e) => {
+            let _ = std::fs::remove_file(&token_file);
+            Err(e.into())
+        }
+    }
+}
+
+#[cfg(not(any(target_os = "windows", target_os = "linux")))]
+fn launch_as_admin(_exe: &PathBuf, _token: &str, _port: u16) -> Result<()> {
+    anyhow::bail!("TUN mode needs a privileged helper, which is implemented on Windows and Linux only. Use proxy mode on this platform.");
+}
 
 #[cfg(target_os = "windows")]
 fn show_error_dialog(msg: &str) {

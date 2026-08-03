@@ -4,6 +4,21 @@
 // or launched via ShellExecuteW("runas").
 
 fn main() {
+    // Key off the TARGET, not the host. In a build script `cfg(windows)`
+    // describes the machine doing the building, so cross-compiling the helper
+    // from Windows to Linux took this branch and failed with "Can only compile
+    // resource file when target_env is gnu or msvc". CARGO_CFG_TARGET_OS is the
+    // target being built for, which is what actually decides whether a Windows
+    // manifest belongs in the binary.
+    let target_os = std::env::var("CARGO_CFG_TARGET_OS").unwrap_or_default();
+    if target_os != "windows" {
+        return;
+    }
+    // Second gate, on the HOST: winres is declared under
+    // [target.'cfg(windows)'.build-dependencies], and build-dependencies are
+    // resolved against the host triple, so the crate simply does not exist when
+    // building on Linux. Referencing it unconditionally would fail to compile
+    // there even though the target check above already passed.
     #[cfg(windows)]
     {
         let mut res = winres::WindowsResource::new();

@@ -477,12 +477,19 @@ jobs:
         working-directory: ostp-gui
         run: |
           npm install
+          # TUN mode shells out to this helper, elevated via pkexec. Only the
+          # Windows job used to build it, so the Linux package shipped without
+          # it and TUN could never start.
+          cargo build -p ostp-tun-helper --release --target ${{ matrix.target }} --manifest-path ../Cargo.toml
           npx tauri build --no-bundle --target ${{ matrix.target }}
 
       - name: Package Portable Tarball
         run: |
+          set -euo pipefail
           mkdir ostp-linux-gui-${{ matrix.arch }}
           cp ostp-gui/src-tauri/target/${{ matrix.target }}/release/ostp-gui ostp-linux-gui-${{ matrix.arch }}/
+          # The GUI looks for the helper next to its own executable first.
+          cp target/${{ matrix.target }}/release/ostp-tun-helper ostp-linux-gui-${{ matrix.arch }}/
           tar -czf ostp-linux-gui-${{ matrix.arch }}.tar.gz ostp-linux-gui-${{ matrix.arch }}
 
       - name: Upload to GitHub Release
