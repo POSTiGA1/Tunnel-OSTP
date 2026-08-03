@@ -23,6 +23,12 @@ use crate::tunnel::{ProxyEvent, ProxyToClientMsg};
 /// candidate address is tried.
 const UOT_CONNECT_TIMEOUT: Duration = Duration::from_secs(4);
 
+/// How long to keep retrying a resume-triggered reconnect before handing the
+/// problem back to the ordinary stall path. That path is what releases the
+/// system proxy, so this is really a bound on how long the machine may be left
+/// with no working internet at all after waking.
+const RESUME_RECONNECT_GIVE_UP: Duration = Duration::from_secs(45);
+
 static SOCKET_PROTECTOR: std::sync::OnceLock<Box<dyn Fn(i32) -> bool + Send + Sync>> = std::sync::OnceLock::new();
 
 pub fn set_socket_protector<F>(f: F)
@@ -147,6 +153,11 @@ pub struct Bridge {
     /// fire at all. Retrying until success removes the dependency on either.
     forced_reconnect_pending: bool,
     last_forced_reconnect_try: Instant,
+    /// Wall-clock start of the current resume-reconnect campaign, used to bound
+    /// it. Wall clock rather than Instant because the monotonic clock does not
+    /// advance across suspend on Windows, so it cannot measure anything that
+    /// begins at wake.
+    forced_reconnect_started: Option<SystemTime>,
 }
 
 impl Bridge {
@@ -185,6 +196,7 @@ impl Bridge {
             last_valid_recv: Instant::now(),
             forced_reconnect_pending: false,
             last_forced_reconnect_try: Instant::now(),
+            forced_reconnect_started: None,
         })
     }
 
@@ -268,7 +280,43 @@ impl Bridge {
                             "Resumed after ~{}s suspend — forcing clean reconnect", wall_gap.as_secs()
                         ))).await;
                         self.forced_reconnect_pending = true;
+                        self.forced_reconnect_started = Some(SystemTime::now());
                         self.last_forced_reconnect_try = Instant::now() - Duration::from_secs(60);
+                    }
+
+                    // Give up if resume reconnects keep failing. Retrying forever
+                    // looks harmless but is not: the system proxy stays pointed at
+                    // our local listener the whole time, so the machine has NO
+                    // working internet — not merely no tunnel — while the UI sits
+                    // on "connecting". Handing the retry to the ordinary keepalive
+                    // path restores the proxy through its hard-timeout branch,
+                    // which force=true deliberately skips.
+                    //
+                    // Measured on the wall clock: Instant does not advance across
+                    // suspend on Windows (QPC stops), so a monotonic deadline can
+                    // not bound anything that starts at wake.
+                    if self.forced_reconnect_pending {
+                        let pending_for = self
+                            .forced_reconnect_started
+                            .and_then(|t| t.elapsed().ok())
+                            .unwrap_or_default();
+                        if pending_for > RESUME_RECONNECT_GIVE_UP {
+                            self.forced_reconnect_pending = false;
+                            self.forced_reconnect_started = None;
+                            let _ = tx.send(UiEvent::Log(format!(
+                                "Reconnect after suspend failed for {}s — releasing the system \
+                                 proxy so normal traffic works; will keep retrying in the \
+                                 background",
+                                pending_for.as_secs()
+                            ))).await;
+                            // Make the ordinary stall path fire on the next
+                            // keepalive tick: it is the one that tears the proxy
+                            // back down (or, with kill switch on, deliberately
+                            // keeps blocking).
+                            self.last_valid_recv = Instant::now()
+                                .checked_sub(Duration::from_secs(3600))
+                                .unwrap_or_else(Instant::now);
+                        }
                     }
 
                     // Keep retrying a resume-triggered reconnect until one lands.
@@ -286,6 +334,7 @@ impl Bridge {
                         // success check rather than "we tried".
                         if self.last_valid_recv.elapsed() < Duration::from_secs(3) {
                             self.forced_reconnect_pending = false;
+                            self.forced_reconnect_started = None;
                             let _ = tx.send(UiEvent::Log("Reconnected after suspend".into())).await;
                         }
                     }

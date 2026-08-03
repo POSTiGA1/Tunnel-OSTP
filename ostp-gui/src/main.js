@@ -660,6 +660,13 @@ function loadSettingsIntoForm() {
   updateClientVisibility();
 }
 
+// Last values actually pushed to the OS / backend, so repeated saves that did
+// not change them stay free. Undefined until the first save, which is correct:
+// the first one should apply.
+let lastAppliedAutostart;
+let lastAppliedTunnelConfig;
+let hotReloadTimer;
+
 function collectAndSaveSettings() {
   const s = {
     tun:          inTun.checked,
@@ -686,19 +693,41 @@ function collectAndSaveSettings() {
     fragChunk:    parseInt(inFragChunk.value) || 2,
     fragSleep:    !isNaN(parseInt(inFragSleep.value)) ? parseInt(inFragSleep.value) : 2,
   };
+  // Cheap and local: safe to run on every debounced keystroke.
   saveClientSettings(s);
   updateClientVisibility();
 
-  // Set autostart
-  invoke('set_autostart', { enable: s.launchStartup }).catch(() => {});
+  // Everything below talks to the OS or restarts the tunnel. Running it per
+  // keystroke is what made typing in the exclusion fields lag by seconds: the
+  // 400ms debounce fires during natural pauses in typing, and each firing hit
+  // the Windows registry and then tore down and rebuilt the tunnel.
 
-  // Hot-reload exclusions if connected
+  // Only touch autostart when it actually changed — this is a registry write.
+  if (s.launchStartup !== lastAppliedAutostart) {
+    lastAppliedAutostart = s.launchStartup;
+    invoke('set_autostart', { enable: s.launchStartup }).catch(() => {});
+  }
+
+  // Hot-reload the tunnel only when something it actually reads has changed,
+  // and on a much longer debounce: a reload is disruptive, so it should land
+  // once the user has stopped editing rather than between keystrokes.
   if (appState === 'connected') {
-    const cfg = buildConfig();
-    if (cfg) {
-      invoke('save_config', { jsonContent: JSON.stringify(cfg, null, 2) })
-        .then(() => invoke('reload_tunnel'))
-        .catch(() => {});
+    const tunnelRelevant = JSON.stringify([
+      s.tun, s.killSwitch, s.mux, s.muxSessions, s.mtu, s.dns, s.socks,
+      s.exDomains, s.exIps, s.exProcs, s.junkEnabled, s.junkPcMin, s.junkPcMax,
+      s.junkPsMin, s.junkPsMax, s.tcpFrag, s.fragChunk, s.fragSleep,
+    ]);
+    if (tunnelRelevant !== lastAppliedTunnelConfig) {
+      clearTimeout(hotReloadTimer);
+      hotReloadTimer = setTimeout(() => {
+        lastAppliedTunnelConfig = tunnelRelevant;
+        const cfg = buildConfig();
+        if (cfg) {
+          invoke('save_config', { jsonContent: JSON.stringify(cfg, null, 2) })
+            .then(() => invoke('reload_tunnel'))
+            .catch(() => {});
+        }
+      }, 1500);
     }
   }
 }
