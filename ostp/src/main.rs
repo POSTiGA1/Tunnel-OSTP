@@ -799,36 +799,16 @@ fn run_setup_wizard(config_path: &std::path::Path) -> Result<()> {
             let listen   = wizard_prompt("Listen address (host:port)", "0.0.0.0:50000");
             let upstream = wizard_prompt("Upstream server address (host:port)", "");
             if upstream.is_empty() { anyhow::bail!("Upstream address cannot be empty."); }
-            let api_url = wizard_prompt(
-                "Upstream API URL, including the panel's secret path (e.g. http://1.2.3.4:9090/bNAzr8Ss)",
-                "",
-            );
-            // The management API lives under the target server's api.webpath, so
-            // a bare host:port 404s on every key sync without ever checking the
-            // token. Catch that here instead of leaving it to be debugged from
-            // relay logs.
-            let has_path = api_url
-                .split("://")
-                .nth(1)
-                .map(|rest| rest.contains('/') && !rest.trim_end_matches('/').split('/').nth(1).unwrap_or("").is_empty())
-                .unwrap_or(false);
-            if !api_url.is_empty() && !has_path {
-                wizard_warn(
-                    "This URL has no path segment. The API is served under the target server's \
-                     api.webpath - key sync will fail with 404 unless you append it.",
-                );
-            }
-            let api_token = wizard_prompt("Upstream API token (must equal api.token on the target server)", "");
 
             wizard_step(2, TOTAL, "Saving configuration");
+            // No credentials are collected: the relay forwards transparently and
+            // authenticates nothing, so it needs neither the target's API nor a
+            // copy of the access keys.
             let relay_json = serde_json::json!({
                 "mode": "relay",
                 "listen": listen,
                 "upstream_tcp": upstream,
                 "upstream_udp": upstream,
-                "upstream_api_url": api_url,
-                "upstream_api_token": api_token,
-                "sync_interval_secs": 30,
                 "debug": false
             });
 
@@ -1155,7 +1135,9 @@ async fn run_app() -> Result<()> {
                         println!("  Listen: {:?}", r.listen.primary().cyan());
                         println!("  Upstream TCP: {}", r.upstream_tcp.cyan());
                         println!("  Upstream UDP: {}", r.upstream_udp.cyan());
-                        println!("  API sync: {}", r.upstream_api_url.yellow());
+                        if !r.upstream_api_url.is_empty() {
+                            println!("  {}", "upstream_api_url is set but no longer used - safe to remove".yellow());
+                        }
                     }
                 }
             }
@@ -1231,15 +1213,9 @@ async fn run_app() -> Result<()> {
   "listen": "0.0.0.0:50000",
   "upstream_tcp": "TARGET_SERVER_IP:50000",
   "upstream_udp": "TARGET_SERVER_IP:50000",
-  // MUST include the target server's secret api.webpath. The management API is
-  // nested under it (that path is what hides the panel from scanners), so a
-  // bare host:port hits a route that does not exist and key sync fails with 404
-  // before the token is ever checked. This is the same URL you open the panel
-  // at, e.g. "http://1.2.3.4:9090/bNAzr8Ss".
-  "upstream_api_url": "http://TARGET_SERVER_IP:9090/TARGET_SERVER_WEBPATH",
-  // Must equal api.token on the target server (NOT the panel password).
-  "upstream_api_token": "YOUR_API_TOKEN_HERE",
-  "sync_interval_secs": 30,
+  // The relay forwards transparently and holds no keys: sessions are
+  // authenticated end-to-end by the target server, which drops anything that
+  // fails. Nothing else needs configuring here.
   "debug": false
 }"#.to_string()
         } else {
@@ -1438,14 +1414,18 @@ async fn run_app() -> Result<()> {
             println!("{} Starting relay node on {:?}", "[ostp]".cyan().bold(), listen_addrs);
             println!("{} Upstream TCP: {}", "[ostp]".cyan().bold(), relay_cfg.upstream_tcp);
             println!("{} Upstream UDP: {}", "[ostp]".cyan().bold(), relay_cfg.upstream_udp);
-            println!("{} Key sync API: {}", "[ostp]".cyan().bold(), relay_cfg.upstream_api_url);
+            if !relay_cfg.upstream_api_url.is_empty() {
+                println!(
+                    "{} Note: upstream_api_url is no longer used and can be removed. The relay \
+                     forwards transparently; sessions are authenticated end-to-end by the target \
+                     server.",
+                    "[ostp]".yellow().bold()
+                );
+            }
             let relay_config = ostp_server::RelayConfig {
                 listen_addrs,
                 upstream_tcp: relay_cfg.upstream_tcp,
                 upstream_udp: relay_cfg.upstream_udp,
-                upstream_api_url: relay_cfg.upstream_api_url,
-                upstream_api_token: relay_cfg.upstream_api_token,
-                sync_interval_secs: relay_cfg.sync_interval_secs,
             };
             ostp_server::relay_node::run_relay_node(relay_config).await?;
         }

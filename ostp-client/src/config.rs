@@ -418,18 +418,21 @@ pub struct RelayServerConfig {
     pub upstream_tcp: String,
     /// Upstream address for UDP traffic
     pub upstream_udp: String,
-    /// Target server's API URL, for key sync
+    // ── Deprecated ──────────────────────────────────────────────────────────
+    // The relay used to authenticate clients itself and pulled the access-key
+    // list from the target server's management API to do it. It no longer does:
+    // sessions are authenticated end-to-end by the target server, and a relay
+    // that re-checks credentials only adds a weaker second gate plus a copy of
+    // the key list on a machine that does not need one. These are kept solely
+    // so existing relay configs still parse; they are ignored.
+    #[serde(default)]
     pub upstream_api_url: String,
-    /// Bearer token for the target server's API
     #[serde(default)]
     pub upstream_api_token: String,
-    /// Key sync interval in seconds (default 30)
-    #[serde(default = "default_sync_interval")]
+    #[serde(default)]
     pub sync_interval_secs: u64,
     pub debug: Option<bool>,
 }
-
-fn default_sync_interval() -> u64 { 30 }
 
 /// Supports both a single string "0.0.0.0:50000" and an array
 /// ["0.0.0.0:50000", "[::]:50000"].
