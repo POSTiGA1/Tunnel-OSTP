@@ -48,10 +48,23 @@ pub async fn connect_target(
             }
             if action == OutboundAction::Proxy {
                 let proxy_addr = format!("{}:{}", outbound.address, outbound.port);
-                return match outbound.protocol.as_str() {
+                // Case-insensitive: a config saying "SOCKS5" means the same thing
+                // as "socks5", and silently treating it as unknown is a trap.
+                return match outbound.protocol.to_ascii_lowercase().as_str() {
                     "socks5" => connect_via_socks5(&proxy_addr, target).await,
                     "http" => connect_via_http(&proxy_addr, target).await,
-                    _ => connect_direct(target, connect_timeout).await,
+                    // FAIL CLOSED. This used to fall through to a direct
+                    // connection, so any unrecognised protocol string — a typo,
+                    // a case difference, an empty value — silently sent ALL TCP
+                    // straight out of the server while the operator believed it
+                    // was proxied. Combined with the same bug on the UDP path,
+                    // that is how one session ends up presenting two different
+                    // exit addresses to the remote site.
+                    other => Err(anyhow::anyhow!(
+                        "outbound.protocol is \"{other}\", which is not a supported proxy type \
+                         (expected \"socks5\" or \"http\"); refusing to connect to {target} \
+                         directly, because the rules asked for the proxy"
+                    )),
                 };
             }
         }
@@ -370,10 +383,22 @@ pub async fn connect_udp_target(
             }
             if action == OutboundAction::Proxy {
                 let proxy_addr = format!("{}:{}", outbound.address, outbound.port);
-                if outbound.protocol == "socks5" {
+                if outbound.protocol.eq_ignore_ascii_case("socks5") {
                     return connect_udp_via_socks5(&proxy_addr, server_udp).await;
                 }
-                // HTTP CONNECT does not support UDP. Fallback to direct.
+                // FAIL CLOSED. HTTP CONNECT genuinely cannot carry UDP — but the
+                // answer to that is not to send the datagrams in the clear. The
+                // previous "fallback to direct" honoured a Proxy rule by
+                // egressing from the server's own address, so with an HTTP
+                // upstream every UDP flow (QUIC, DNS) leaked while TCP stayed
+                // proxied, presenting two exit IPs to the same remote site.
+                return Err(anyhow::anyhow!(
+                    "outbound rules route UDP to {target} through the proxy, but the upstream \
+                     protocol is \"{}\", which cannot carry UDP. Refusing to send directly. \
+                     Use a socks5 upstream, or add an explicit udp rule with action \"direct\" \
+                     or \"block\" so the intent is recorded in the config.",
+                    outbound.protocol
+                ));
             }
         }
     }

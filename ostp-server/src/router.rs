@@ -47,12 +47,29 @@ impl Router {
         
         let mut proxy = None;
         if let Some(ref c) = cfg {
-            if c.enabled && c.protocol == "socks5" {
-                let proxy_addr = format!("{}:{}", c.address, c.port);
-                if let Ok(p) = crate::outbound::connect_udp_via_socks5(&proxy_addr, server_udp.clone()).await {
-                    proxy = Some(Arc::new(p));
-                } else if self.debug {
-                    tracing::warn!("Failed to establish SOCKS5 UDP Associate");
+            if c.enabled {
+                if c.protocol == "socks5" {
+                    let proxy_addr = format!("{}:{}", c.address, c.port);
+                    match crate::outbound::connect_udp_via_socks5(&proxy_addr, server_udp.clone()).await {
+                        Ok(p) => proxy = Some(Arc::new(p)),
+                        // Warn unconditionally, not only under `debug`. Every UDP
+                        // flow the rules want proxied is now dropped instead of
+                        // sent, so an operator who cannot see this has a session
+                        // where TCP works and UDP silently does not.
+                        Err(e) => tracing::warn!(
+                            "SOCKS5 UDP ASSOCIATE to {proxy_addr} failed: {e}. UDP that the \
+                             outbound rules route through the proxy will be DROPPED (it is not \
+                             sent directly, which would expose this server's address)."
+                        ),
+                    }
+                } else {
+                    tracing::warn!(
+                        "Upstream proxy protocol is '{}', which cannot carry UDP. UDP matching \
+                         a Proxy rule will be DROPPED. Use a socks5 upstream for UDP, or add an \
+                         explicit udp rule with action \"direct\" or \"block\" to make the \
+                         intent explicit.",
+                        c.protocol
+                    );
                 }
             }
         }
@@ -87,9 +104,28 @@ impl UdpSessionRouter {
                     return Err(anyhow::anyhow!("blocked by outbound udp rule: {}", target));
                 }
                 if action == crate::outbound::OutboundAction::Proxy {
-                    if let Some(p) = &self.proxy {
-                        return p.send_to(data, target).await;
-                    }
+                    return match &self.proxy {
+                        Some(p) => p.send_to(data, target).await,
+                        // FAIL CLOSED. This used to fall through to the direct
+                        // socket, so whenever the UDP proxy was unavailable —
+                        // the SOCKS5 UDP ASSOCIATE failed, or the upstream is an
+                        // HTTP proxy, which cannot carry UDP at all — every UDP
+                        // datagram silently egressed from the server's own
+                        // address while TCP still went through the proxy. The
+                        // session then had two different exit IPs, which is what
+                        // Google flags and why YouTube (QUIC, i.e. UDP/443)
+                        // geolocated to the server instead of the proxy exit.
+                        //
+                        // A rule that says "proxy" must never be satisfied by
+                        // sending in the clear: a dropped datagram is visible and
+                        // debuggable, a deanonymising leak is neither.
+                        None => Err(anyhow::anyhow!(
+                            "outbound rule requires the proxy for UDP to {target}, but no UDP \
+                             proxy is available (SOCKS5 UDP ASSOCIATE failed, or the upstream \
+                             is an HTTP proxy, which cannot carry UDP) - dropping rather than \
+                             leaking the server's own address"
+                        )),
+                    };
                 }
             }
         }
