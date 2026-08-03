@@ -625,13 +625,30 @@ async fn start_tun_via_helper(
     raw: &ClientConfigRaw,
     app: tauri::AppHandle,
 ) -> Result<bool, String> {
+    // TUN mode goes through a privileged helper, and the only elevation path
+    // implemented is the Windows UAC one (see launch_as_admin). The helper is
+    // also not built for other platforms by the release workflow. Say that
+    // plainly and up front: previously this fell through to the helper lookup
+    // and surfaced as a missing-file error naming a Windows executable, which
+    // on Linux reads as a packaging mistake rather than an unimplemented
+    // feature.
+    if !cfg!(windows) {
+        return Err(
+            "TUN mode is currently Windows-only: it needs a privileged helper, and elevation \
+             for it is only implemented on Windows. Use proxy mode (SOCKS5/HTTP) on this \
+             platform."
+                .to_string(),
+        );
+    }
+
     let port = {
         let listener = std::net::TcpListener::bind("127.0.0.1:0").map_err(|e| format!("Bind error: {}", e))?;
         listener.local_addr().unwrap().port()
     };
 
     let auth_token = rand::random::<u64>().to_string();
-    let helper_exe = find_helper_exe().ok_or_else(|| "ostp-tun-helper.exe not found.".to_string())?;
+    let helper_exe = find_helper_exe()
+        .ok_or_else(|| format!("{HELPER_EXE_NAME} not found next to the app or in target/."))?;
     launch_as_admin(&helper_exe, &auth_token, port).map_err(|e| format!("Failed to launch helper: {}", e))?;
     tokio::time::sleep(std::time::Duration::from_millis(1500)).await;
 
@@ -705,21 +722,32 @@ struct HelperPipeState {
     error_msg: Option<String>,
 }
 
+/// Executable name of the TUN helper for the current platform.
+///
+/// The ".exe" suffix was hardcoded, so on Linux every lookup below searched for
+/// a file that cannot exist and the GUI reported the helper as missing on a
+/// platform where it ships without an extension.
+const HELPER_EXE_NAME: &str = if cfg!(windows) {
+    "ostp-tun-helper.exe"
+} else {
+    "ostp-tun-helper"
+};
+
 fn find_helper_exe() -> Option<PathBuf> {
     if let Ok(exe) = std::env::current_exe() {
         if let Some(dir) = exe.parent() {
             // 1. Release/Production adjacent
-            let candidate = dir.join("ostp-tun-helper.exe");
+            let candidate = dir.join(HELPER_EXE_NAME);
             if candidate.exists() { return Some(candidate); }
-            
+
             // 2. Tauri target directory fallback
             // e.g. from ostp-gui/src-tauri/target/debug/deps/
             let mut parent = dir;
             while let Some(p) = parent.parent() {
                 if p.file_name().map(|n| n == "target").unwrap_or(false) {
-                    let deb = p.join("debug").join("ostp-tun-helper.exe");
+                    let deb = p.join("debug").join(HELPER_EXE_NAME);
                     if deb.exists() { return Some(deb); }
-                    let rel = p.join("release").join("ostp-tun-helper.exe");
+                    let rel = p.join("release").join(HELPER_EXE_NAME);
                     if rel.exists() { return Some(rel); }
                 }
                 parent = p;
@@ -729,13 +757,13 @@ fn find_helper_exe() -> Option<PathBuf> {
     // 3. Current working directory target fallback
     let cwd = std::env::current_dir().unwrap_or_default();
     let candidates = [
-        cwd.join("ostp-tun-helper.exe"),
-        cwd.join("target").join("debug").join("ostp-tun-helper.exe"),
-        cwd.join("target").join("release").join("ostp-tun-helper.exe"),
-        cwd.join("..").join("target").join("debug").join("ostp-tun-helper.exe"),
-        cwd.join("..").join("target").join("release").join("ostp-tun-helper.exe"),
-        cwd.join("..").join("..").join("target").join("debug").join("ostp-tun-helper.exe"),
-        cwd.join("..").join("..").join("target").join("release").join("ostp-tun-helper.exe"),
+        cwd.join(HELPER_EXE_NAME),
+        cwd.join("target").join("debug").join(HELPER_EXE_NAME),
+        cwd.join("target").join("release").join(HELPER_EXE_NAME),
+        cwd.join("..").join("target").join("debug").join(HELPER_EXE_NAME),
+        cwd.join("..").join("target").join("release").join(HELPER_EXE_NAME),
+        cwd.join("..").join("..").join("target").join("debug").join(HELPER_EXE_NAME),
+        cwd.join("..").join("..").join("target").join("release").join(HELPER_EXE_NAME),
     ];
     for path in &candidates {
         if path.exists() { return Some(path.clone()); }

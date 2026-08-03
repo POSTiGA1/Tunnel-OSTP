@@ -11,9 +11,11 @@
     "windows": [
       {
         "title": "OSTP",
-        "width": 360,
-        "height": 680,
-        "resizable": false
+        "width": 400,
+        "height": 720,
+        "minWidth": 360,
+        "minHeight": 560,
+        "resizable": true
       }
     ],
     "security": {
