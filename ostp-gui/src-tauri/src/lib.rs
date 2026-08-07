@@ -204,19 +204,34 @@ fn get_wintun_install_path() -> String {
     String::new()
 }
 
+/// A `Command` for a console program, with the console window suppressed.
+///
+/// The GUI is a windowed-subsystem binary, so every console child it spawns
+/// pops up a console window for as long as that child runs. With `reg`,
+/// `tasklist` and `schtasks` all being invoked from here, that surfaced as
+/// windows flashing on screen — worst while polling for the scheduled task,
+/// which could spawn twenty of them in a row.
+#[cfg(target_os = "windows")]
+fn quiet_command(program: &str) -> std::process::Command {
+    use std::os::windows::process::CommandExt;
+    const CREATE_NO_WINDOW: u32 = 0x0800_0000;
+    let mut cmd = std::process::Command::new(program);
+    cmd.creation_flags(CREATE_NO_WINDOW);
+    cmd
+}
+
 /// Sets or removes the app from Windows startup (HKCU\...\Run).
 #[tauri::command]
 fn set_autostart(enable: bool) -> Result<(), String> {
     #[cfg(target_os = "windows")]
     {
-        use std::process::Command;
         let key = r"HKCU\Software\Microsoft\Windows\CurrentVersion\Run";
         let app_name = "OSTP";
         if enable {
             let exe = std::env::current_exe()
                 .map_err(|e| format!("Cannot get exe path: {}", e))?;
             let exe_str = format!("\"{}\"", exe.to_string_lossy());
-            let out = Command::new("reg")
+            let out = quiet_command("reg")
                 .args(["add", key, "/v", app_name, "/t", "REG_SZ", "/d", &exe_str, "/f"])
                 .output()
                 .map_err(|e| format!("reg add failed: {}", e))?;
@@ -224,7 +239,7 @@ fn set_autostart(enable: bool) -> Result<(), String> {
                 return Err(String::from_utf8_lossy(&out.stderr).to_string());
             }
         } else {
-            let _ = Command::new("reg")
+            let _ = quiet_command("reg")
                 .args(["delete", key, "/v", app_name, "/f"])
                 .output();
         }
@@ -275,9 +290,8 @@ fn linux_autostart_path() -> Option<PathBuf> {
 fn get_autostart() -> bool {
     #[cfg(target_os = "windows")]
     {
-        use std::process::Command;
         let key = r"HKCU\Software\Microsoft\Windows\CurrentVersion\Run";
-        let out = Command::new("reg")
+        let out = quiet_command("reg")
             .args(["query", key, "/v", "OSTP"])
             .output();
         if let Ok(o) = out {
@@ -298,8 +312,7 @@ fn get_autostart() -> bool {
 fn list_running_processes() -> Vec<String> {
     #[cfg(target_os = "windows")]
     {
-        use std::process::Command;
-        if let Ok(out) = Command::new("tasklist")
+        if let Ok(out) = quiet_command("tasklist")
             .args(["/FO", "CSV", "/NH"])
             .output()
         {
@@ -839,8 +852,7 @@ fn xml_escape(s: &str) -> String {
 /// Whether the elevated-launch Scheduled Task already exists.
 #[cfg(target_os = "windows")]
 fn helper_task_exists() -> bool {
-    use std::process::Command;
-    Command::new("schtasks")
+    quiet_command("schtasks")
         .args(["/Query", "/TN", HELPER_TASK_NAME])
         .output()
         .map(|o| o.status.success())
@@ -917,26 +929,54 @@ fn install_helper_task(exe: &std::path::Path) -> anyhow::Result<()> {
 
     // Registering a HighestAvailable task is itself privileged: this is the one
     // prompt, and it happens once per machine.
-    let schtasks = std::path::PathBuf::from("schtasks.exe");
-    let params = format!(
-        "/Create /TN \"{}\" /XML \"{}\" /F",
-        HELPER_TASK_NAME,
-        xml_path.display()
+    //
+    // Elevate through PowerShell's Start-Process -Wait rather than
+    // ShellExecuteW. ShellExecuteW returns as soon as the elevated process is
+    // LAUNCHED, so the XML below was being deleted while schtasks was still
+    // starting up — registration then failed, leaving the user with a consent
+    // prompt that accomplished nothing, followed by a second prompt from the
+    // fallback path. -Wait makes the deletion safe and lets the exit code be
+    // checked instead of guessed at by polling.
+    //
+    // ArgumentList takes an array, so the task name and XML path never need
+    // quoting or escaping through a command line, only PowerShell's own
+    // single-quote doubling.
+    let ps = format!(
+        "$p = Start-Process -FilePath 'schtasks.exe' -Verb RunAs -Wait -PassThru \
+         -WindowStyle Hidden -ArgumentList @('/Create','/TN','{}','/XML','{}','/F'); \
+         exit $p.ExitCode",
+        ps_quote(HELPER_TASK_NAME),
+        ps_quote(&xml_path.display().to_string()),
     );
-    let result = shell_execute_elevated(&schtasks, &params);
-    // Best-effort cleanup; schtasks may still be reading it, so ignore errors.
-    let _ = std::fs::remove_file(&xml_path);
-    result?;
 
-    // schtasks runs asynchronously through ShellExecute; wait briefly for the
-    // task to appear rather than reporting success before it exists.
-    for _ in 0..20 {
-        if helper_task_exists() {
-            return Ok(());
-        }
-        std::thread::sleep(std::time::Duration::from_millis(250));
+    let status = quiet_command("powershell")
+        .args(["-NoProfile", "-NonInteractive", "-WindowStyle", "Hidden", "-Command", &ps])
+        .status();
+
+    // schtasks has exited by now, so this is safe.
+    let _ = std::fs::remove_file(&xml_path);
+
+    match status {
+        Ok(s) if s.success() => {}
+        Ok(s) => anyhow::bail!(
+            "registering the scheduled task failed (exit code {:?}). A declined consent prompt \
+             reports 1223.",
+            s.code()
+        ),
+        Err(e) => anyhow::bail!("could not run powershell to register the task: {e}"),
     }
-    anyhow::bail!("the scheduled task did not appear after the elevation prompt (it may have been declined)")
+
+    if helper_task_exists() {
+        Ok(())
+    } else {
+        anyhow::bail!("schtasks reported success but the task is not present")
+    }
+}
+
+/// Escape a value for embedding in a PowerShell single-quoted string.
+#[cfg(target_os = "windows")]
+fn ps_quote(s: &str) -> String {
+    s.replace('\'', "''")
 }
 
 #[cfg(target_os = "windows")]
@@ -960,8 +1000,7 @@ fn launch_as_admin(exe: &std::path::PathBuf, token: &str, port: u16) -> anyhow::
             }
         }
         if helper_task_exists() {
-            use std::process::Command;
-            let run = Command::new("schtasks")
+            let run = quiet_command("schtasks")
                 .args(["/Run", "/TN", HELPER_TASK_NAME])
                 .output();
             match run {
@@ -1030,60 +1069,6 @@ fn launch_as_admin_direct(exe: &std::path::PathBuf, token: &str, port: u16) -> a
              an unsigned binary can be silently blocked by SmartScreen/antivirus during \
              elevation — try running ostp-gui.exe as Administrator manually.",
             ret, win_err, exe.display()
-        );
-    }
-    Ok(())
-}
-
-/// Run `exe` elevated with `params`, raising the UAC prompt.
-///
-/// Shared by the fallback launch path and by the one-time task registration, so
-/// both report a declined prompt the same way instead of ShellExecuteW's
-/// pseudo-HINSTANCE being interpreted twice.
-#[cfg(target_os = "windows")]
-fn shell_execute_elevated(exe: &std::path::Path, params: &str) -> anyhow::Result<()> {
-    use std::ffi::OsStr;
-    use std::os::windows::ffi::OsStrExt;
-    use std::ptr::null_mut;
-
-    let exe_wstr: Vec<u16> = exe.as_os_str().encode_wide().chain(Some(0)).collect();
-    let verb_wstr: Vec<u16> = OsStr::new("runas").encode_wide().chain(Some(0)).collect();
-    let params_wstr: Vec<u16> = OsStr::new(params).encode_wide().chain(Some(0)).collect();
-
-    #[link(name = "shell32")]
-    extern "system" {
-        fn ShellExecuteW(h: *mut std::ffi::c_void, op: *const u16, f: *const u16, p: *const u16, d: *const u16, s: i32) -> isize;
-    }
-    #[link(name = "kernel32")]
-    extern "system" {
-        fn GetLastError() -> u32;
-    }
-
-    let cwd_path = std::env::current_exe().unwrap_or_else(|_| std::path::PathBuf::from("."));
-    let dir_wstr: Vec<u16> = cwd_path
-        .parent()
-        .unwrap_or(std::path::Path::new("."))
-        .as_os_str()
-        .encode_wide()
-        .chain(Some(0))
-        .collect();
-
-    let ret = unsafe {
-        ShellExecuteW(null_mut(), verb_wstr.as_ptr(), exe_wstr.as_ptr(), params_wstr.as_ptr(), dir_wstr.as_ptr(), 1)
-    };
-
-    // 1223 is ERROR_CANCELLED, which lands in the ">32 means success" range —
-    // see the note in launch_as_admin_direct.
-    if ret == 1223 {
-        anyhow::bail!("UAC elevation was denied.");
-    }
-    if ret <= 32 {
-        let win_err = unsafe { GetLastError() };
-        anyhow::bail!(
-            "Failed to request UAC elevation (ShellExecuteW ret={}, GetLastError={}, path={})",
-            ret,
-            win_err,
-            exe.display()
         );
     }
     Ok(())
