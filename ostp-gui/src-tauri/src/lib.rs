@@ -849,14 +849,74 @@ fn xml_escape(s: &str) -> String {
         .replace('\'', "&apos;")
 }
 
-/// Whether the elevated-launch Scheduled Task already exists.
+/// Reverse of [`xml_escape`]. `&amp;` must be undone last or `&amp;lt;` would
+/// come back as `<`.
 #[cfg(target_os = "windows")]
-fn helper_task_exists() -> bool {
-    quiet_command("schtasks")
-        .args(["/Query", "/TN", HELPER_TASK_NAME])
+fn xml_unescape(s: &str) -> String {
+    s.replace("&quot;", "\"")
+        .replace("&apos;", "'")
+        .replace("&lt;", "<")
+        .replace("&gt;", ">")
+        .replace("&amp;", "&")
+}
+
+/// The exe path currently baked into the registered task, if any.
+///
+/// Queried as XML rather than `/FO LIST /V`: the list format's field labels are
+/// localized (on a Russian Windows "Task To Run" is "Задача для запуска"),
+/// whereas XML tag names are fixed. schtasks writes UTF-16LE with a BOM here,
+/// but tolerate UTF-8 in case that ever changes.
+#[cfg(target_os = "windows")]
+fn helper_task_command() -> Option<String> {
+    let out = quiet_command("schtasks")
+        .args(["/Query", "/TN", HELPER_TASK_NAME, "/XML"])
         .output()
-        .map(|o| o.status.success())
-        .unwrap_or(false)
+        .ok()?;
+    if !out.status.success() {
+        return None;
+    }
+
+    let text = if out.stdout.starts_with(&[0xFF, 0xFE]) {
+        let units: Vec<u16> = out.stdout[2..]
+            .chunks_exact(2)
+            .map(|c| u16::from_le_bytes([c[0], c[1]]))
+            .collect();
+        String::from_utf16_lossy(&units)
+    } else {
+        String::from_utf8_lossy(&out.stdout).into_owned()
+    };
+
+    let start = text.find("<Command>")? + "<Command>".len();
+    let end = text[start..].find("</Command>")? + start;
+    Some(xml_unescape(text[start..end].trim()))
+}
+
+/// Whether a task is registered AND still points at the exe we are about to run.
+///
+/// The path matters as much as the name. A task registered by a dev build (or
+/// by an install that has since moved) keeps its original `<Command>`, and
+/// `schtasks /Run` reports success merely for *accepting* the request — a task
+/// whose exe no longer exists fails asynchronously and silently. Trusting the
+/// name alone therefore bought a 60-second "Timeout connecting to helper" on
+/// every single connect, permanently, until the task was deleted by hand.
+/// Re-registering costs one consent prompt and fixes it for good.
+#[cfg(target_os = "windows")]
+fn helper_task_matches(exe: &std::path::Path) -> bool {
+    let Some(registered) = helper_task_command() else {
+        return false;
+    };
+    let registered = registered.trim().trim_matches('"');
+
+    // Canonicalize both sides when possible so `..`, short 8.3 names and
+    // casing differences do not read as a mismatch. A missing file cannot be
+    // canonicalized — which is itself a mismatch worth re-registering over.
+    match (
+        std::fs::canonicalize(registered),
+        std::fs::canonicalize(exe),
+    ) {
+        (Ok(a), Ok(b)) => a == b,
+        _ => registered.eq_ignore_ascii_case(&exe.display().to_string()),
+    }
 }
 
 /// Register the Scheduled Task. This is the ONLY step that needs elevation, and
@@ -966,10 +1026,10 @@ fn install_helper_task(exe: &std::path::Path) -> anyhow::Result<()> {
         Err(e) => anyhow::bail!("could not run powershell to register the task: {e}"),
     }
 
-    if helper_task_exists() {
+    if helper_task_matches(exe) {
         Ok(())
     } else {
-        anyhow::bail!("schtasks reported success but the task is not present")
+        anyhow::bail!("schtasks reported success but the task does not point at {}", exe.display())
     }
 }
 
@@ -994,12 +1054,12 @@ fn launch_as_admin(exe: &std::path::PathBuf, token: &str, port: u16) -> anyhow::
     let wrote_args = std::fs::write(&args_file, payload.to_string()).is_ok();
 
     if wrote_args {
-        if !helper_task_exists() {
+        if !helper_task_matches(exe) {
             if let Err(e) = install_helper_task(exe) {
                 eprintln!("[OSTP] could not register the helper task ({e}); falling back to a direct elevated launch");
             }
         }
-        if helper_task_exists() {
+        if helper_task_matches(exe) {
             let run = quiet_command("schtasks")
                 .args(["/Run", "/TN", HELPER_TASK_NAME])
                 .output();
