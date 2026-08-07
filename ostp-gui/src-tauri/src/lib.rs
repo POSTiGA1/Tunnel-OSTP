@@ -803,8 +803,186 @@ fn find_helper_exe() -> Option<PathBuf> {
     None
 }
 
+/// Name of the Scheduled Task that runs the helper elevated without a prompt.
+#[cfg(target_os = "windows")]
+const HELPER_TASK_NAME: &str = "OSTP TUN Helper";
+
+/// Fixed path the GUI writes launch parameters to, and the task's command line
+/// reads them from.
+///
+/// A Scheduled Task stores a FIXED command line, so the per-launch port and
+/// token cannot travel as arguments. The file lives under the user's own
+/// LOCALAPPDATA: the helper runs elevated but as the SAME user, so this keeps
+/// the token inside the trust boundary it already had — no other user can read
+/// it, which would not be true of a shared location.
+#[cfg(target_os = "windows")]
+fn helper_args_file() -> PathBuf {
+    let base = std::env::var_os("LOCALAPPDATA")
+        .map(PathBuf::from)
+        .unwrap_or_else(std::env::temp_dir);
+    base.join("OSTP").join("helper-args.json")
+}
+
+/// Minimal XML text escaping for the values interpolated into the task
+/// definition. Paths and usernames are attacker-irrelevant here but can easily
+/// contain `&`, which would otherwise produce invalid XML and a confusing
+/// schtasks parse failure.
+#[cfg(target_os = "windows")]
+fn xml_escape(s: &str) -> String {
+    s.replace('&', "&amp;")
+        .replace('<', "&lt;")
+        .replace('>', "&gt;")
+        .replace('"', "&quot;")
+        .replace('\'', "&apos;")
+}
+
+/// Whether the elevated-launch Scheduled Task already exists.
+#[cfg(target_os = "windows")]
+fn helper_task_exists() -> bool {
+    use std::process::Command;
+    Command::new("schtasks")
+        .args(["/Query", "/TN", HELPER_TASK_NAME])
+        .output()
+        .map(|o| o.status.success())
+        .unwrap_or(false)
+}
+
+/// Register the Scheduled Task. This is the ONLY step that needs elevation, and
+/// it happens once per machine; every later tunnel start reuses the task.
+///
+/// RunLevel=HIGHEST makes the task run elevated, and because a task launch is
+/// not an elevation request, Windows shows no consent dialog for it.
+#[cfg(target_os = "windows")]
+fn install_helper_task(exe: &std::path::Path) -> anyhow::Result<()> {
+    let args_file = helper_args_file();
+    if let Some(dir) = args_file.parent() {
+        std::fs::create_dir_all(dir)?;
+    }
+
+    // Register from an XML definition rather than /TR. The command line would
+    // otherwise need the exe path and the args path quoted INSIDE an already
+    // quoted /TR value, escaped again through ShellExecuteW — a notoriously
+    // brittle chain when either path contains a space, which both of these do
+    // by default (Program Files, and usernames with spaces). XML also lets the
+    // battery and time-limit settings below be stated explicitly.
+    let user = format!(
+        "{}\\{}",
+        std::env::var("USERDOMAIN").unwrap_or_else(|_| "%COMPUTERNAME%".into()),
+        std::env::var("USERNAME").unwrap_or_default()
+    );
+    let xml = format!(
+        r#"<?xml version="1.0" encoding="UTF-16"?>
+<Task version="1.2" xmlns="http://schemas.microsoft.com/windows/2004/02/mit/task">
+  <RegistrationInfo>
+    <Description>Runs the OSTP TUN helper elevated so enabling the tunnel does not prompt for consent every time.</Description>
+  </RegistrationInfo>
+  <Principals>
+    <Principal id="Author">
+      <UserId>{user}</UserId>
+      <LogonType>InteractiveToken</LogonType>
+      <RunLevel>HighestAvailable</RunLevel>
+    </Principal>
+  </Principals>
+  <Settings>
+    <MultipleInstancesPolicy>Parallel</MultipleInstancesPolicy>
+    <DisallowStartIfOnBatteries>false</DisallowStartIfOnBatteries>
+    <StopIfGoingOnBatteries>false</StopIfGoingOnBatteries>
+    <StartWhenAvailable>false</StartWhenAvailable>
+    <RunOnlyIfNetworkAvailable>false</RunOnlyIfNetworkAvailable>
+    <ExecutionTimeLimit>PT0S</ExecutionTimeLimit>
+    <Enabled>true</Enabled>
+    <Hidden>false</Hidden>
+    <AllowHardTerminate>true</AllowHardTerminate>
+  </Settings>
+  <Actions Context="Author">
+    <Exec>
+      <Command>{exe}</Command>
+      <Arguments>--args-file "{args}"</Arguments>
+    </Exec>
+  </Actions>
+</Task>
+"#,
+        user = xml_escape(&user),
+        exe = xml_escape(&exe.display().to_string()),
+        args = xml_escape(&args_file.display().to_string()),
+    );
+
+    // schtasks /Create /XML expects UTF-16LE with a BOM.
+    let xml_path = std::env::temp_dir().join(format!("ostp_task_{}.xml", rand::random::<u32>()));
+    let mut utf16: Vec<u8> = vec![0xFF, 0xFE];
+    for unit in xml.encode_utf16() {
+        utf16.extend_from_slice(&unit.to_le_bytes());
+    }
+    std::fs::write(&xml_path, &utf16)?;
+
+    // Registering a HighestAvailable task is itself privileged: this is the one
+    // prompt, and it happens once per machine.
+    let schtasks = std::path::PathBuf::from("schtasks.exe");
+    let params = format!(
+        "/Create /TN \"{}\" /XML \"{}\" /F",
+        HELPER_TASK_NAME,
+        xml_path.display()
+    );
+    let result = shell_execute_elevated(&schtasks, &params);
+    // Best-effort cleanup; schtasks may still be reading it, so ignore errors.
+    let _ = std::fs::remove_file(&xml_path);
+    result?;
+
+    // schtasks runs asynchronously through ShellExecute; wait briefly for the
+    // task to appear rather than reporting success before it exists.
+    for _ in 0..20 {
+        if helper_task_exists() {
+            return Ok(());
+        }
+        std::thread::sleep(std::time::Duration::from_millis(250));
+    }
+    anyhow::bail!("the scheduled task did not appear after the elevation prompt (it may have been declined)")
+}
+
 #[cfg(target_os = "windows")]
 fn launch_as_admin(exe: &std::path::PathBuf, token: &str, port: u16) -> anyhow::Result<()> {
+    // Preferred path: hand the parameters over in a file and trigger the
+    // pre-registered task, which runs elevated with no prompt. Falls back to a
+    // direct elevated launch when the task is absent (first ever run, or the
+    // user removed it) — and that first run is also where the task gets created,
+    // so the prompt appears once rather than on every connect.
+    let args_file = helper_args_file();
+    if let Some(dir) = args_file.parent() {
+        let _ = std::fs::create_dir_all(dir);
+    }
+    let payload = serde_json::json!({ "port": port, "token": token });
+    let wrote_args = std::fs::write(&args_file, payload.to_string()).is_ok();
+
+    if wrote_args {
+        if !helper_task_exists() {
+            if let Err(e) = install_helper_task(exe) {
+                eprintln!("[OSTP] could not register the helper task ({e}); falling back to a direct elevated launch");
+            }
+        }
+        if helper_task_exists() {
+            use std::process::Command;
+            let run = Command::new("schtasks")
+                .args(["/Run", "/TN", HELPER_TASK_NAME])
+                .output();
+            match run {
+                Ok(o) if o.status.success() => return Ok(()),
+                Ok(o) => eprintln!(
+                    "[OSTP] schtasks /Run failed: {}",
+                    String::from_utf8_lossy(&o.stderr).trim()
+                ),
+                Err(e) => eprintln!("[OSTP] schtasks /Run could not start: {e}"),
+            }
+        }
+        // Falling through: remove the file so a stale token is not left behind.
+        let _ = std::fs::remove_file(&args_file);
+    }
+
+    launch_as_admin_direct(exe, token, port)
+}
+
+/// The original one-prompt-per-launch path, kept as the fallback.
+#[cfg(target_os = "windows")]
+fn launch_as_admin_direct(exe: &std::path::PathBuf, token: &str, port: u16) -> anyhow::Result<()> {
     use std::ffi::OsStr;
     use std::os::windows::ffi::OsStrExt;
     use std::ptr::null_mut;
@@ -852,6 +1030,60 @@ fn launch_as_admin(exe: &std::path::PathBuf, token: &str, port: u16) -> anyhow::
              an unsigned binary can be silently blocked by SmartScreen/antivirus during \
              elevation — try running ostp-gui.exe as Administrator manually.",
             ret, win_err, exe.display()
+        );
+    }
+    Ok(())
+}
+
+/// Run `exe` elevated with `params`, raising the UAC prompt.
+///
+/// Shared by the fallback launch path and by the one-time task registration, so
+/// both report a declined prompt the same way instead of ShellExecuteW's
+/// pseudo-HINSTANCE being interpreted twice.
+#[cfg(target_os = "windows")]
+fn shell_execute_elevated(exe: &std::path::Path, params: &str) -> anyhow::Result<()> {
+    use std::ffi::OsStr;
+    use std::os::windows::ffi::OsStrExt;
+    use std::ptr::null_mut;
+
+    let exe_wstr: Vec<u16> = exe.as_os_str().encode_wide().chain(Some(0)).collect();
+    let verb_wstr: Vec<u16> = OsStr::new("runas").encode_wide().chain(Some(0)).collect();
+    let params_wstr: Vec<u16> = OsStr::new(params).encode_wide().chain(Some(0)).collect();
+
+    #[link(name = "shell32")]
+    extern "system" {
+        fn ShellExecuteW(h: *mut std::ffi::c_void, op: *const u16, f: *const u16, p: *const u16, d: *const u16, s: i32) -> isize;
+    }
+    #[link(name = "kernel32")]
+    extern "system" {
+        fn GetLastError() -> u32;
+    }
+
+    let cwd_path = std::env::current_exe().unwrap_or_else(|_| std::path::PathBuf::from("."));
+    let dir_wstr: Vec<u16> = cwd_path
+        .parent()
+        .unwrap_or(std::path::Path::new("."))
+        .as_os_str()
+        .encode_wide()
+        .chain(Some(0))
+        .collect();
+
+    let ret = unsafe {
+        ShellExecuteW(null_mut(), verb_wstr.as_ptr(), exe_wstr.as_ptr(), params_wstr.as_ptr(), dir_wstr.as_ptr(), 1)
+    };
+
+    // 1223 is ERROR_CANCELLED, which lands in the ">32 means success" range —
+    // see the note in launch_as_admin_direct.
+    if ret == 1223 {
+        anyhow::bail!("UAC elevation was denied.");
+    }
+    if ret <= 32 {
+        let win_err = unsafe { GetLastError() };
+        anyhow::bail!(
+            "Failed to request UAC elevation (ShellExecuteW ret={}, GetLastError={}, path={})",
+            ret,
+            win_err,
+            exe.display()
         );
     }
     Ok(())

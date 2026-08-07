@@ -24,6 +24,14 @@ fn log_to_file(msg: &str) {
 
 
 
+/// Launch parameters handed over in a file rather than on the command line.
+/// See the `--args-file` handling in `main` for why.
+#[derive(Deserialize)]
+struct HelperArgs {
+    port: u16,
+    token: String,
+}
+
 #[derive(Deserialize)]
 #[serde(tag = "cmd", rename_all = "lowercase")]
 enum GuiCmd {
@@ -74,6 +82,28 @@ async fn main() -> Result<()> {
             if let Ok(content) = std::fs::read_to_string(path) {
                 expected_token = content.trim().to_string();
                 let _ = std::fs::remove_file(path); // securely delete after reading
+            }
+        }
+        // Both port and token from one file. A Scheduled Task stores a FIXED
+        // command line, so anything that varies per launch cannot be passed as
+        // an argument — the GUI writes this file immediately before triggering
+        // the task instead. That indirection is what lets the task be created
+        // once (a single UAC prompt) and reused for every later connect without
+        // prompting again.
+        if args[i] == "--args-file" && i + 1 < args.len() {
+            let path = &args[i + 1];
+            match std::fs::read_to_string(path) {
+                Ok(content) => {
+                    let _ = std::fs::remove_file(path); // single use
+                    match serde_json::from_str::<HelperArgs>(&content) {
+                        Ok(parsed) => {
+                            port = parsed.port;
+                            expected_token = parsed.token;
+                        }
+                        Err(e) => log_to_file(&format!("Failed to parse --args-file: {e}")),
+                    }
+                }
+                Err(e) => log_to_file(&format!("Failed to read --args-file {path}: {e}")),
             }
         }
     }
