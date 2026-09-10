@@ -1,70 +1,93 @@
 # OSTP System Architecture
 
 ## Overview
-The Obfuscated Secure Transport Protocol (OSTP) is a high-performance, asynchronous network tunneling framework designed to provide secure, resilient, and indistinguishable data transport over untrusted networks. It is built entirely in Rust to guarantee memory safety, concurrency, and minimal overhead.
+OSTP (Ospab Stealth Transport Protocol) is a high-performance, asynchronous network tunneling framework designed to provide secure, resilient, and indistinguishable data transport over untrusted networks. It is built entirely in Rust to guarantee memory safety, concurrency, and minimal overhead.
 
 ---
 
 ## Workspace Structure
-The project is modularized into the following crates:
-1. **ostp-core**: The core engine. Contains protocol state machines, Noise Protocol Framework handshakes, data framing serialization, dynamic obfuscation algorithms, and reliable packet delivery (ARQ).
-2. **ostp-client**: The client daemon. Manages local traffic interception via dual-mode SOCKS5/HTTP proxies or virtualized network adapters (TUN/Wintun), multiplexing active host streams into a single UDP tunnel, and interfacing with TURN servers.
-3. **ostp-server**: The high-concurrency connection dispatcher, responsible for demultiplexing data from multiple sessions, handling seamless IP roaming, and forwarding traffic to the broader internet.
-4. **ostp-obfuscator**: Utility crate for static traffic shaping and dynamic obfuscation key derivation tools.
-5. **ostp-jni**: Android JNI bindings that allow embedding OSTP inside mobile applications via an isolated runtime.
-6. **ostp**: The unified command-line application that executes the protocol in either server or client mode.
+The Cargo workspace is modularized into the following crates:
+
+1. **ostp-core**: The protocol engine. Contains the `ProtocolMachine` state machine, Noise handshake driving, AEAD framing, header obfuscation, adaptive padding, the `RelayMessage` application-multiplexing layer, and the BBR-inspired congestion controller. Fully `sans-io` — no networking of its own.
+2. **ostp-client**: The client daemon. Runs a dual-mode SOCKS5/HTTP inbound proxy and/or a TUN virtual adapter, drives NAT/exclusion logic, and maintains the encrypted session (including reconnection and roaming) to the remote server.
+3. **ostp-server**: The high-concurrency dispatcher. Demultiplexes inbound datagrams by session ID, terminates sessions, handles IP roaming, proxies decrypted traffic to the open internet, and hosts the optional Management API, built-in DNS resolver, and TCP fallback listener.
+4. **ostp-tun**: Platform TUN-adapter bindings (Windows/Wintun, Linux, macOS) shared by the client and the GUI helper.
+5. **ostp-tun-helper**: A small, separately-privileged process the desktop GUI launches to create/own the TUN adapter, so the GUI itself doesn't need to run elevated.
+6. **ostp-jni**: Android JNI bindings (`OstpClientSdk` native methods: start/stop client, metrics, logs) that embed the client engine inside the Flutter/Android app via an isolated Tokio runtime.
+7. **ostp**: The unified CLI binary — runs the engine in server, client, or relay mode, and hosts the `setup`/`init`/`gk`/`links`/`connect`/`migrate`/`update` subcommands (see [`client.md`](client.md) / [`server.md`](server.md)).
+
+Two further application shells consume these crates but live outside the Cargo workspace: **ostp-gui** (a Tauri desktop app, Windows-focused) and **ostp-flutter** (the cross-platform mobile app, Android via `ostp-jni`). See [`integrations.md`](integrations.md).
 
 ---
 
-## Framing Format and Data Structure
+## Outer Envelope vs. Inner Frame
 
-All multiplexed data is segmented into logical frames before encryption and transmission. The `FrameHeader` has a fixed size of **12 bytes**:
+OSTP has two distinct framing layers (full byte layout in [`specification.md`](specification.md)):
+
+1. **Outer wire envelope** — `[masked session_id : 4][masked nonce : 8][AEAD ciphertext+tag]` for data datagrams, or `[masked session_id : 4][masked noise_len : 2][noise_payload][random padding]` during the handshake. This is what ever touches the network; the first 12 (or 6) bytes are XOR-masked as a unit with an HMAC-SHA256 mask derived from the packet's own payload.
+2. **Inner `FrameHeader`** — the plaintext recovered *after* AEAD decryption. Fixed 12 bytes:
 
 | Offset (Bytes) | Data Type | Field Name | Description |
 | :--- | :--- | :--- | :--- |
-| 0 | `u8` | `version` | Protocol version (current: `1`) |
-| 1 | `u8` | `kind` | Frame type (see Kind Table below) |
-| 2 | `u8` | `flags` | Control flags for stream management |
-| 3 | `u8` | *reserved* | Reserved for future extensions (0) |
-| 4-5 | `u16 BE` | `stream_id` | Logical identifier of the multiplexed stream |
-| 6-9 | `u32 BE` | `payload_len` | Length of the actual payload in bytes |
-| 10-11 | `u16 BE` | `pad_len` | Length of the appended adaptive padding |
+| 0 | `u8` | `version` | Inner frame format version (current: `1`) |
+| 1 | `u8` | `kind` | Frame kind (see below) |
+| 2–3 | 2×`u8` | *(random)* | Filled with random bytes (not zero) to avoid a known-plaintext pattern inside the encrypted region — there is no `flags` field |
+| 4–5 | `u16 BE` | `stream_id` | Reserved for future per-stream framing; `0` on control frames |
+| 6–9 | `u32 BE` | `payload_len` | Length of the payload in bytes |
+| 10–11 | `u16 BE` | `pad_len` | Length of the appended random padding |
 
-### Frame Kinds (`FrameKind`):
-- `1 - Handshake`: Key exchange payloads (Noise framework interaction).
-- `2 - Data`: Encrypted upper-layer application payloads.
-- `3 - Close`: Signals closure of a stream or the entire tunnel.
-- `4 - KeepAlive`: Ping/Pong datagram to keep NAT mappings alive.
-- `5 - Nack`: Explicit Negative Acknowledgment requesting immediate packet retransmission.
-- `6 - Ack`: Confirms successful receipt of sequence number ranges.
+### Frame Kinds (`FrameKind`)
+- `1 - Handshake`: reserved; handshake messages actually travel in the outer envelope, not as an inner frame.
+- `2 - Data`: carries a `RelayMessage` (see below).
+- `3 - Close`: signals session teardown.
+- `4 - KeepAlive`: keeps NAT mappings alive.
+- `5 - Nack`: explicit negative-ack requesting immediate retransmission.
+- `6 - Ack`: cumulative + selective ack.
 
-A complete packet (`FramedPacket`) is encoded as:
-`[12-byte FrameHeader]` + `[N-byte Payload]` + `[M-byte Padding]`
+A complete inner record (`FramedPacket`) is `[12-byte FrameHeader] + [N-byte Payload] + [M-byte Padding]`, and it is this whole record that gets AEAD-encrypted to produce the outer envelope's ciphertext.
+
+---
+
+## Application Multiplexing (`RelayMessage`)
+
+A `Data` frame's payload is a tag-length-value `RelayMessage`: `Connect(addr)`, `Data(bytes)`, `Close`, `ConnectOk`, `Error(msg)`, `Ping`/`Pong(ts)`, `UdpAssociate`, `UdpData(addr, bytes)`, `KeepAlive`. This is the layer that actually multiplexes many proxied TCP connections and UDP flows over one encrypted session — `stream_id` in the inner `FrameHeader` is not yet used to demultiplex; sequencing of a given proxied connection is implicit in the order of its `Connect`/`Data`/`Close` messages.
 
 ---
 
 ## Reliable ARQ System (Automatic Repeat reQuest)
 
-To guarantee ordered, lossless data delivery over the unreliable UDP medium, `ostp-core` implements a custom Selective Repeat ARQ mechanism:
+`ostp-core` implements a custom Selective-Repeat ARQ over the unreliable datagram substrate:
 
-1. **Sequence Tracking**: Each data frame is assigned a strictly monotonic 64-bit `nonce`, which acts both as the sequence number and the initialization vector for the AEAD cipher.
-2. **Transmission History (`sent_history`)**: Sent datagrams are cached until acknowledged by the peer. The buffer prevents memory bloat by enforcing a `max_sent_history` limit.
-3. **Fast-Path Nack Retransmission**:
-   - When a gap in the incoming sequence numbers is detected, the receiver immediately generates and transmits a `Nack` frame containing the missing sequence (`expected_recv_nonce`).
-   - Upon receiving the `Nack`, the sender instantly locates the requested frame in its history and performs an immediate retransmission, bypassing standard timeout loops.
-4. **Timeout-Based Retries (RTO / Tick)**:
-   - A periodic `OstpEvent::Tick` fires every few milliseconds.
-   - Any unacknowledged packet exceeding the Retransmission TimeOut (`rto_ms`) duration is retransmitted, incrementing its retry counter.
-5. **Out-of-Order Delivery (`reorder_buffer`)**:
-   - Packets received ahead of order are placed into a sorted B-Tree map.
-   - Once the missing gap packets are successfully received, the buffer is flushed sequentially to deliver contiguous data to the application layer.
+1. **Sequence tracking**: each data frame gets a strictly monotonic 64-bit `nonce`, which is simultaneously the ARQ sequence number and the AEAD nonce.
+2. **Transmission history (`sent_history`)**: sent datagrams are cached until acknowledged, capped at `max_sent_history` (server/client default: 32,768) entries.
+3. **Fast-path Nack retransmission**: on detecting a sequence gap, the receiver immediately sends a rate-limited `Nack` (at most once per `max(10ms, RTO/2)`) naming the lowest missing nonce; the sender looks it up in `sent_history` and retransmits immediately, bypassing the timeout loop.
+4. **Timeout-based retries**: a periodic `OstpEvent::Tick` retransmits any frame past its adaptive RTO (RFC 6298, `[50ms, 16s]`) with exponential backoff up to 64×, budgeted at `max(2, cwnd_packets/4)` (capped 64) retransmits per tick.
+5. **Out-of-order delivery (`reorder_buffer`)**: frames received ahead of sequence sit in a `BTreeMap` (capped at `max_reorder_buffer`, default 8,192) until the gap closes, then flush in order.
+6. **Zombie eviction & gap recovery**: a frame retried past `max_retries + 2` attempts (default `max_retries` = 8) is dropped from `sent_history` and can never be retransmitted again. If that leaves the receiver's expected-nonce cursor stuck with no forward progress for `clamp(8×RTO, 2s, 10s)`, it deliberately skips the unrecoverable nonce, delivers everything already buffered behind it, and forces an `Ack` — trading one lost chunk for restoring a session that would otherwise freeze permanently.
+
+---
+
+## Congestion Control
+
+A BBR-inspired controller (`ostp-core::congestion`) tracks `cwnd`/RTT per session: exponential slow start from a 32-packet initial window, tolerant of isolated loss (only 3+ losses inside a 500ms window count as sustained congestion and exit slow start), additive-increase/multiplicative-decrease (×0.7) in the probe-bandwidth phase, and RFC 6298 SRTT/RTTVAR-based RTO with Karn's-algorithm RTT sampling (never sampled from a retransmitted frame).
 
 ---
 
 ## Dynamic Roaming
 
-OSTP is optimized for mobile environments. Session mappings are bound to unique cryptographic cryptographic identifiers (`session_id`), not network addresses.
-When a client switches networks (e.g., transitioning from LTE to Wi-Fi):
-1. Subsequent datagrams are sent from the new IP:Port, retaining the established `session_id` and cryptographic states.
-2. The server decrypts the frame, identifies the session in its dispatcher registry, and instantly updates the return routing coordinates.
-3. The user's active TCP streams within the tunnel remain alive and uninteruppted.
+Session mappings are bound to the cryptographic `session_id`, not the network address. When a client switches networks (e.g., LTE to Wi-Fi):
+1. Subsequent datagrams arrive from the new IP:port, still carrying the established `session_id`.
+2. The server's AEAD authentication succeeds, the dispatcher looks up the session by ID, and atomically updates its tracked return address — gated behind a 50-token bucket (refilled at 50/sec) so an address-spoofing flood can't force unbounded rebinding work.
+3. The client's proxied TCP/UDP flows stay alive, uninterrupted.
+
+---
+
+## Server-Side Subsystems
+
+Beyond the dispatcher/ARQ core, `ostp-server` hosts several optional subsystems, each independently configurable — see [`server.md`](server.md) for details:
+
+- **Management API** (`api.rs`): REST API for stats, user/key CRUD, traffic limits, audit log, and router rules, authenticated by Bearer token or a password-hash-backed session login.
+- **DNS resolver** (`dns.rs`): AdBlock-list filtering and DNS-over-HTTPS forwarding for tunneled clients, with a rate-limited reply path.
+- **Fallback listener** (`fallback.rs`): pipes unauthenticated TCP connections (DPI probes, scanners) through to a real backend (e.g. local nginx), so an active probe sees an ordinary website instead of a closed or anomalous port.
+- **Outbound chaining** (`outbound.rs`): optional egress through an upstream SOCKS5/HTTP proxy, with per-rule (domain suffix / CIDR / protocol) routing to proxy, direct, or block.
+- **Relay-node federation** (`relay_node.rs`): a lightweight relay mode that accepts client connections (UDP or UoT), authenticates them against access keys synced from an upstream server's Management API, and blindly forwards authorized traffic on — letting a chain of relays front one target server without each hop knowing traffic contents.

@@ -22,27 +22,30 @@ For zero-configuration deployments on Windows, the client programmatically confi
   `http=127.0.0.1:1088;https=127.0.0.1:1088`
 - Upon graceful shutdown, previous registry values are fully restored, ensuring the user is never left without basic internet connectivity.
 
-### 3. Virtual Network Interface (TUN/Wintun)
-On Windows and Linux, the client can instantiate a high-speed virtual TUN adapter (utilizing the **Wintun** driver):
-- Intercepts 100% of machine traffic at OSI Layer 3 (raw IP packets).
-- A lightweight internal user-space TCP/IP stack synthetically reconstructs logical streams and routes them into the OSTP multiplexer, enabling system-wide VPN-grade tunneling without manual application configurations.
+### 3. Virtual Network Interface (TUN)
+On Windows and Linux, the client can instantiate a virtual TUN adapter (Wintun on Windows) that intercepts 100% of machine traffic at OSI Layer 3 (raw IP packets). A userspace TCP/IP stack (the `netstack-smoltcp` crate) reconstructs logical TCP/UDP flows from those raw packets and routes them into the OSTP multiplexer (§`RelayMessage`, see [`specification.md`](specification.md)), enabling system-wide VPN-grade tunneling without per-application configuration. On the desktop GUI, TUN-adapter creation is delegated to a separately-privileged `ostp-tun-helper` process so the GUI itself doesn't need to run elevated (see [`integrations.md`](integrations.md)).
 
 ---
 
-## NAT Traversal and Port-Aligned Discovery
+## Transport Modes
 
-Successfully routing UDP traffic past carrier-grade firewalls (Symmetric and Port-Restricted NATs) requires deterministic port handling:
-1. **Unified Socket**: The client binds exactly *one* underlying `UdpSocket`.
-2. **STUN/TURN Discovery**: Utilizing the active socket, it issues STUN queries or orchestrates authenticated TURN allocations (RFC 5766) via pure-Rust `HMAC-SHA1` and `MD5` hashing logic.
-3. **Mapping Reuse**: Following NAT coordinate identification, all subsequent OSTP payload transmissions utilize **the same primary socket**. Edge routers treat this as a single persistent egress flow, allowing the remote server's incoming packets to bypass firewall blocks.
+The client speaks OSTP over one of two carrier transports, selected by `transport.mode` in the config:
+
+- **`udp`** (default): each OSTP datagram is sent as one UDP datagram directly to the server. The client binds a single `UdpSocket` and reuses it for the entire session, so NAT/firewall mapping stays stable for the tunnel's lifetime.
+- **`uot`** (UDP-over-TCP): each OSTP datagram is instead carried over a plain TCP connection, framed with a 2-byte length prefix. This is for networks that block or heavily throttle unrecognized UDP; no protocol is mimicked (not a fake TLS/HTTP shell) — the TCP stream is just length-prefixed opaque blobs, consistent with OSTP's "no recognizable header" design.
+
+Two further obfuscation knobs apply mainly to `uot`, configured under the same `transport` block: `junk_pc`/`junk_ps` (count/size range of random filler datagrams sent before the handshake, each stamped with a key-derived, time-rotating marker) and `tcp_fragmentation`/`frag_chunk`/`frag_sleep` (splits the first TCP segment — the handshake — into small chunks with short delays, so DPI inspecting only the first segment never sees a complete handshake). See [`obfuscation.md`](obfuscation.md) for the cryptographic detail.
+
+There is no STUN/TURN client in the production path — `session_id`-based roaming (§ [`server.md`](server.md)) and, for UDP-blocking networks, the `uot` transport are how OSTP handles restrictive NATs and firewalls instead.
 
 ---
 
 ## Fault Tolerance & Automated Recovery
 
 The client is engineered to maintain persistence without requiring user intervention:
-- **Infinite Reconnection Loop**: When the orchestration loop (`runner.rs`) captures a `UiEvent::TunnelStopped`, it automatically schedules a tunnel restart after a fixed 5-second back-off. This loop contains no maximum attempt caps, pursuing restoration until the user issues a termination command.
-- **Log De-noising**: Standard, expected TCP interruptions (such as `ConnectionReset`, `BrokenPipe`, or `UnexpectedEof`) are actively suppressed from console output, preserving log clarity for true state transitions (`Idle -> Connecting -> Connected`).
+- **Stall detection and reconnection:** if no valid datagram has been received for 25 seconds, the client starts a background reconnect attempt while keeping the existing session usable in the meantime. If silence continues to 180 seconds (3 minutes) total, the session is declared permanently lost and the tunnel stops — unless the kill switch is enabled, in which case the client keeps retrying indefinitely instead of falling open to unencrypted traffic.
+- **Sleep/resume handling:** on OS resume (or a detected network change), the client forces an immediate reconnect rather than waiting out the normal stall timer, since the monotonic clock it uses may not have advanced across a sleep.
+- **Log de-noising**: standard, expected TCP interruptions (such as `ConnectionReset`, `BrokenPipe`, or `UnexpectedEof`) are actively suppressed from console output, preserving log clarity for true state transitions (`Idle -> Connecting -> Connected`).
 
 ---
 
@@ -52,16 +55,18 @@ To minimize latency and overhead for trusted resources, the OSTP client incorpor
 
 - **`domains`**: A list of domain suffixes (e.g., `["trusted-site.com", "local.lan"]`). Traffic bound for these domains is instantly channeled via the default local gateway, bypassing encryption entirely.
 - **`ips`**: A list of target subnet destinations in CIDR format (e.g., `["192.168.1.0/24", "10.0.0.0/8"]`), ensuring local area networks maintain full wire-speed throughput.
-- **`processes`**: A list of OS executable filenames (e.g., `["discord.exe", "steam.exe"]`). Applications specified here will automatically evade the VPN's virtual network driver.
+- **`processes`**: A list of OS executable filenames (e.g., `["discord.exe", "steam.exe"]`). Applications specified here will automatically evade the VPN's virtual network driver (Windows only — matched via the owning process of a TCP connection through `GetExtendedTcpTable`).
 
-> [!NOTE]
-> The exclusion/bypass logic is fully operational, rigorously optimized, and ready for immediate production deployment.
+Exclusions are hot-reloadable: editing `config.json` while the client is running updates the active exclusion set without a reconnect.
 
 ---
 
 ## Multiplexing
 
-The wire protocol provides support for bundling multiple physical UDP session handles into a single logical transport pipeline via the `"mux"` block:
+Two independent things are called "multiplexing" in OSTP and should not be confused:
+
+1. **Per-flow multiplexing** (always on): every proxied TCP connection and UDP flow rides the *same* single encrypted session as a sequence of `RelayMessage`s (`Connect`/`Data`/`Close`, `UdpAssociate`/`UdpData`) — this is how one OSTP session already carries an arbitrary number of concurrent browser tabs, downloads, etc.
+2. **Session-level multiplexing** (opt-in, the `"mux"` block below): running more than one independent OSTP session to the same server in parallel, to spread traffic and loss across multiple nonce sequences / congestion-control instances.
 
 ```json
 "mux": {
@@ -70,5 +75,4 @@ The wire protocol provides support for bundling multiple physical UDP session ha
 }
 ```
 
-### Current Status
-Multi-session multiplexing (`sessions > 1`) is supported. Use the `"mux"` block to scale concurrent transport sessions as needed for throughput or resiliency.
+Setting `sessions > 1` with `enabled: true` activates session-level multiplexing.

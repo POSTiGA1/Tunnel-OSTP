@@ -14,10 +14,12 @@ PRK              = HKDF-Extract(salt = SHA-256(access_key)[0..16], IKM = access_
 obfuscation_key  = HKDF-Expand(PRK, info = SHA-256(access_key)[16..] || 0x01, 8 bytes)
 psk              = HKDF-Expand(PRK, info = SHA-256(access_key)[16..] || 0x02, 32 bytes)
 handshake_pad    = HKDF-Expand(PRK, info = SHA-256(access_key)[16..] || 0x03, 2 bytes)
-junk_marker      = HKDF-Expand(PRK, info = SHA-256(access_key)[16..] || 0x04, 4 bytes)
+junk_marker(w)   = HKDF-Expand(PRK, info = SHA-256(access_key)[16..] || 0x04 || LE(window), 4 bytes)
 ```
 
 The wire protocol version is mixed into the IKM, not sent as a plaintext byte: peers on a different protocol version derive an entirely different `obfuscation_key`, so they simply cannot deobfuscate each other's packets and are rejected as unauthorized — a hard version gate with no recognizable marker ever appearing on the wire. No secret is ever transmitted; both sides derive the same values independently from the shared access key.
+
+Unlike the other three secrets, `junk_marker` is **not** a fixed per-key value — it is additionally parameterised by `window`, the current wall-clock time divided into 60-second buckets (`JUNK_MARKER_WINDOW_SECS`). The marker therefore rotates every window even though the access key never changes, so a captured junk packet's marker is only valid for about a minute and carries no static per-user fingerprint an observer could log and correlate across sessions. The server checks both the current and the immediately preceding window when matching junk, to absorb clock skew between client and server.
 
 ---
 

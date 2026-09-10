@@ -1,16 +1,19 @@
 # Ospab Stealth Transport Protocol (OSTP) Specification
 
-**Version:** 1.0 (May 2026)  
-**Authors:** Georgiy S., Ospab Foundation  
-**Status:** Stable, Informational  
+**Version:** 1.1 (July 2026)
+**Wire Protocol Version:** 5 (`PROTOCOL_VERSION`, key-derived, never sent in cleartext — see §6)
+**Authors:** Georgiy S., Ospab Foundation
+**Status:** Stable, Informational
 
 ---
 
 ## 1. Introduction
 
-The **Ospab Stealth Transport Protocol (OSTP)** is a high-entropy, multiplexed Layer 4 transport pipeline developed to achieve secure, resilient data replication between distributed nodes across networks characterized by severe stochastic disturbance and hostile packet-level telemetry inspections (Deep Packet Inspection / DPI).
+The **Ospab Stealth Transport Protocol (OSTP)** is a high-entropy, multiplexed transport pipeline developed to achieve secure, resilient data replication between distributed nodes across networks characterized by severe stochastic disturbance and hostile packet-level telemetry inspections (Deep Packet Inspection / DPI).
 
-Standard tunneling protocols (e.g., OpenVPN, WireGuard) produce traffic patterns that are reliably identified by stateful DPI systems through static magic bytes, fixed handshake sizes, or predictable sequence patterns. OSTP addresses this threat model by employing mathematical state scrambling and randomized frame-boundary injection prior to final serialization. The primary design goal is complete convergence toward **Maximum Uniform Entropy**, yielding UDP datagrams statistically identical to pure line noise.
+Standard tunneling protocols (e.g., OpenVPN, WireGuard) produce traffic patterns that are reliably identified by stateful DPI systems through static magic bytes, fixed handshake sizes, or predictable sequence patterns. OSTP addresses this threat model by employing key-derived per-packet masking and randomized frame-boundary injection prior to final serialization. The primary design goal is complete convergence toward **Maximum Uniform Entropy**, yielding datagrams statistically identical to pure line noise, with no plaintext version marker or magic byte anywhere on the wire.
+
+OSTP is transport-agnostic at the datagram level: the same masked/encrypted datagram is carried either directly over UDP, or — for networks that block or throttle unrecognized UDP — inside a plain TCP byte stream (**UoT**, "UDP-over-TCP"; see §9). Neither transport adds any protocol-identifying header of its own.
 
 ---
 
@@ -24,23 +27,26 @@ OSTP is built strictly upon standardized, modern cryptographic primitives:
 | **Key Agreement** | X25519 (RFC 7748) | Ephemeral Elliptic Curve Diffie-Hellman. |
 | **Symmetric Encryption** | ChaCha20-Poly1305 (RFC 8439) | Authenticated Encryption with Associated Data (AEAD) for all payload data. |
 | **Hashing** | BLAKE2s (RFC 7693) | Noise internal state hashing and mixing. |
+| **Key Derivation** | HKDF-SHA256 (RFC 5869) | Derives every protocol secret from the shared access key (§6). |
 | **Obfuscation Masking** | HMAC-SHA-256 (RFC 2104) | Per-packet header scrambling to eliminate static byte signatures. |
 
 ---
 
 ## 3. Protocol Architecture
 
-OSTP operates in a client-server paradigm over a singular bidirectional UDP socket:
-*   **Relay Bridge (Client / Initiator):** Establishes connections, generates Session IDs, and drives handshake initiation.
-*   **Collector Node (Server / Responder):** Accepts connections, validates credentials, and relays application-layer traffic.
+OSTP operates in a client-server paradigm:
+* **Client (Initiator):** Establishes connections, generates the Session ID, and drives handshake initiation.
+* **Server (Responder):** Accepts connections, validates access keys, and relays application-layer traffic to the open internet.
 
-OSTP supports **internal cryptographic multiplexing**, allowing multiple logical sub-streams to occupy the shared socket state without head-of-line blocking.
+A single OSTP session (one Noise handshake, one `session_id`, one nonce sequence) carries **all** of a client's traffic. Multiplexing of individual TCP/UDP flows onto that one session is done above the transport layer, by an application-level message protocol (`RelayMessage`, §8) carried inside `Data` frames — not by opening additional cryptographic sessions. An optional `mux` mode can run several independent OSTP sessions in parallel purely to spread load/loss across more than one nonce sequence (§9.3); it is unrelated to per-flow multiplexing.
 
 ---
 
-## 4. Frame Format (Wire Specification)
+## 4. Outer Wire Envelope
 
-An OSTP packet serialized for transport conforms to physical MTU alignments. Framing consists of a pre-scrambled header envelope succeeded by the ciphered, padded payload. All multi-byte fields use network byte order (big-endian).
+Every OSTP datagram — handshake or data — conforms to a pre-scrambled header envelope followed by ciphered content. All multi-byte fields use network byte order (big-endian). There are two envelope shapes, selected by protocol state.
+
+### 4.1 Data Datagram (Established Session)
 
 ```text
  0                   1                   2                   3
@@ -49,93 +55,191 @@ An OSTP packet serialized for transport conforms to physical MTU alignments. Fra
 |          Masked Session Identifier (32 bits)                  |
 +-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+
 |                                                               |
-+                    Plaintext Nonce (64 bits)                  +
++                     Masked Nonce (64 bits)                    +
 |                                                               |
 +-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+
 |                                                               |
-~              AEAD Ciphertext (Variable Length)                ~
-|                                                               |
-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+
-|              16-Octet Poly1305 Authentication Tag             |
+~              AEAD Ciphertext + 16-byte Poly1305 Tag           ~
+|                    (Variable Length)                          |
 +-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+
 ```
 
-### 4.1 Field Descriptions
+* **Masked Session Identifier (32 bits):** The Session ID, part of a 12-byte header that is XOR-masked as a unit (see §5).
+* **Masked Nonce (64 bits):** A monotonically increasing per-session counter used both as the ARQ sequence number and as the AEAD nonce (zero-padded into a 96-bit ChaCha20-Poly1305 nonce). It is **not** transmitted in cleartext — it is masked together with the Session ID — but it is authenticated: the plaintext 4-byte session ID is passed as AEAD Associated Data, and the nonce value itself is implicit in which AEAD key stream position was used, so any tampering fails Poly1305 verification on decrypt.
+* **AEAD Ciphertext + Tag:** ChaCha20-Poly1305 output; the trailing 16 bytes are the Poly1305 authentication tag. The plaintext under this ciphertext is itself a second, inner frame — see §7.
 
-*   **Masked Session Identifier (32 bits):** The Session ID XOR-masked with a pseudorandom stream generated by HMAC-SHA-256.
-*   **Plaintext Nonce (64 bits):** A monotonically increasing counter used for ARQ sequence tracking and as the AEAD cipher IV. Transmitted in plaintext, but fully authenticated via AEAD AAD.
-*   **AEAD Ciphertext:** The inner payload encrypted with ChaCha20-Poly1305.
-*   **Authentication Tag:** The 16-byte MAC ensuring ciphertext and header integrity.
+### 4.2 Handshake Datagram
 
----
+```text
+[ session_id : 4 ][ noise_len : 2 ][ noise_payload : N ][ random_padding : var ]
+  \_______________ masked as one 6-byte unit _______________/
+```
 
-## 5. Traffic Obfuscation (IPMS)
-
-To ensure that the Session ID field is statistically independent across consecutive packets, OSTP employs **In-Place Matrix Scrambling (IPMS)** using HMAC-SHA-256.
-
-1.  **Obfuscation Key Derivation:**
-    Both nodes independently derive an 8-byte obfuscation key (`K_obf`) from the shared access key prior to the handshake:
-    `K_obf = SHA-256(access_key || "obfusca")[0..7]`
-
-2.  **Per-Packet Masking:**
-    The Session ID is masked using a per-packet pseudorandom value:
-    `mask[0..3] = HMAC-SHA-256(K_obf, Nonce)[0..3]`
-    `Masked_SID = SID_raw XOR mask`
-
-Because the `Nonce` is unique per packet, the mask is cryptographically independent for every datagram. A passive observer cannot correlate packets to a single session without knowledge of `K_obf`.
+* **session_id** (4 bytes) — a fresh random value chosen by the initiator for this session.
+* **noise_len** (2 bytes) — length in bytes of the following Noise handshake message.
+* **noise_payload** (N bytes) — one message of the `Noise_NNpsk0_25519_ChaChaPoly_BLAKE2s` exchange (cleartext on the wire, but itself opaque/random-looking: an ephemeral X25519 public key plus an AEAD-encrypted, PSK-authenticated payload).
+* **random_padding** — cryptographically random filler. Its length is drawn from a **key-derived range** `[handshake_pad_min, handshake_pad_max]` (§6), so different access keys produce different handshake-packet size distributions and no single size threshold works as a universal DPI filter.
 
 ---
 
-## 6. Handshake and Cryptographic Synchronization
+## 5. Header Obfuscation
 
-OSTP executes a Noise Protocol Framework exchange utilizing the `Noise_NNpsk0_25519_ChaChaPoly_BLAKE2s` pattern.
+To keep the Session ID and Nonce statistically independent across consecutive packets — and indistinguishable from the AEAD ciphertext that follows them — OSTP masks the entire outer header as a unit, keying the mask off the packet's own payload rather than a counter:
 
-1.  The Registration Key (`access_key`) is converted to a 32-octet strong pre-shared key (PSK) via HKDF-SHA-256.
-2.  The PSK is integrated into the state at pattern position zero, authorizing and encrypting the very first handshaking datagram.
-3.  Ephemeral Curve25519 key exchange (`ee`) is evaluated, and the two directional transport keys are taken from Noise's `Split()` over the final chaining key `ck`.
+```
+Data packet:      mask[0..12] = HMAC-SHA256(obfuscation_key, ciphertext[0..min(32,len)])[0..12]
+                   (session_id || nonce) ^= mask
 
-> **Forward secrecy.** The transport keys are derived from the chaining key
-> `ck`, which absorbs the ephemeral `ee` Diffie-Hellman result. They are **not**
-> derived from the Noise handshake hash `h` — `h` only ever absorbs public
-> transcript data (ephemeral public keys and on-wire ciphertexts) and never the
-> DH secret, so keys derived from it would give an access-key holder the ability
-> to decrypt any recorded session. Deriving from `ck` binds each session to its
-> ephemeral private keys, which are discarded after the handshake: an adversary
-> who later compromises the PSK still cannot decrypt past traffic. This is a
-> wire-breaking property gated by the internal protocol version (currently 5);
-> peers on an older version derive different keys and cannot interoperate.
+Handshake packet:  mask[0..6]  = HMAC-SHA256(obfuscation_key, noise_payload[0..min(32,len)])[0..6]
+                   (session_id || noise_len) ^= mask
+```
 
-The initial handshake payload includes a Unix timestamp to mitigate replay attacks. The server enforces a ±300-second (5-minute) synchronization window and additionally records accepted handshakes in an anti-replay set for that window.
+Because the sampled payload is itself cryptographically random (AEAD ciphertext, or a Noise ephemeral key + encrypted payload), the mask is unique per packet without needing an explicit counter or IV field on the wire. Full derivation of `obfuscation_key` is specified in §6 and in [`obfuscation.md`](obfuscation.md).
 
 ---
 
-## 7. Reliability and Data Channel
+## 6. Key Derivation and Handshake
 
-### 7.1 Selective-Repeat ARQ
-OSTP provides reliability over UDP using a **Selective-Repeat ARQ** mechanism:
-*   The receiver maintains a reorder buffer (default: 32768 packets) for out-of-order packet reassembly.
-*   Acknowledgments use a **Cumulative + SACK** scheme: the ACK payload contains a cumulative range `(0, expected_recv_nonce - 1)` confirming all contiguous packets received, plus up to 7 additional Selective ACK ranges for non-contiguous blocks in the reorder buffer.
-*   **Rate-limited NACK:** When a gap is detected, the receiver emits a NACK for the lowest missing nonce, but no more than once per 30ms. This prevents retransmission storms under normal UDP jitter.
-*   **Retransmission:** Unacknowledged data frames are retransmitted after an adaptive Retransmission Timeout (RTO, default: 100ms) with exponential backoff (up to 64× base RTO).
-*   **Zombie Frame Eviction:** Frames exceeding `max_retries + 4` attempts are automatically dropped from the send history, preventing unbounded memory consumption and stale retransmissions.
-*   **In-flight Counting:** Backpressure is based only on retransmittable (data) frames; control frames (ACK/NACK) are excluded from the in-flight count to prevent false backpressure under high load.
-*   **Graceful Close:** The `Closing` state processes all remaining in-flight packets before transitioning to `Closed`, preventing data loss during session teardown.
+### 6.1 Secret Derivation (Kerckhoffs's Principle)
+
+Every protocol secret is derived from the shared `access_key` via HKDF-SHA256 (RFC 5869), with **no hardcoded strings or magic constants** anywhere in the derivation:
+
+```
+key_hash = SHA-256(access_key)
+salt     = key_hash[0..16]
+info_base= key_hash[16..32]
+ikm      = access_key || PROTOCOL_VERSION        // version byte 5, never sent on the wire
+PRK      = HKDF-Extract(salt, ikm)
+
+obfuscation_key   = HKDF-Expand(PRK, info_base || 0x01, 8 bytes)
+psk               = HKDF-Expand(PRK, info_base || 0x02, 32 bytes)
+handshake_pad     = HKDF-Expand(PRK, info_base || 0x03, 2 bytes)  -> pad_min, pad_max
+junk_marker(window)= HKDF-Expand(PRK, info_base || 0x04 || window_LE, 4 bytes)
+```
+
+`PROTOCOL_VERSION` is mixed into the IKM rather than sent as a plaintext byte: peers running an incompatible wire version derive an entirely different `obfuscation_key`/`psk` and simply fail to deobfuscate or decrypt each other's traffic — a hard, deterministic version gate with no observable marker. `junk_marker` additionally rotates every `JUNK_MARKER_WINDOW_SECS` (60s) of wall-clock time (§9.2), so pre-handshake filler traffic carries no static per-user signature either.
+
+### 6.2 Handshake Exchange
+
+OSTP executes a Noise Protocol Framework exchange using the `Noise_NNpsk0_25519_ChaChaPoly_BLAKE2s` pattern (`psk0, e` / `e, ee`):
+
+1. The derived `psk` (32 bytes, §6.1) is bound into the handshake at pattern position zero, authorizing and encrypting the very first datagram.
+2. Ephemeral Curve25519 key exchange (`ee`) is evaluated.
+3. The two directional transport keys are taken from Noise's `Split()` over the **final chaining key `ck`** — not the handshake hash `h`.
+
+> **Forward secrecy.** `ck` absorbs the ephemeral `ee` Diffie-Hellman result; `h` only ever absorbs public transcript data (ephemeral public keys and on-wire ciphertexts) and never the DH secret. Keys derived from `h` would depend only on the PSK and public data, letting anyone who later learns the access key decrypt any recorded session. Deriving from `ck` binds each session to ephemeral private keys that are discarded once the handshake completes: a later PSK compromise does not expose past traffic. This is a wire-breaking property gated by `PROTOCOL_VERSION` (currently 5); peers on an older version derive different keys and cannot interoperate.
+
+The initial handshake payload includes a Unix timestamp to mitigate replay attacks. The server enforces a ±300-second synchronization window and records accepted handshakes in a bounded anti-replay cache (default capacity 50,000 entries) for that window, rejecting exact retransmissions.
+
+---
+
+## 7. Inner Frame Layout
+
+The plaintext recovered from the AEAD ciphertext (§4.1) is itself a framed record — this is the layer that carries stream multiplexing, control messages, and padding:
+
+```
+[ 12-byte FrameHeader ] [ payload : payload_len bytes ] [ padding : pad_len bytes ]
+```
+
+| Offset | Type | Field | Description |
+|---|---|---|---|
+| 0 | `u8` | `version` | Inner frame format version (currently `1`) |
+| 1 | `u8` | `kind` | Frame kind (§7.1) |
+| 2–3 | 2×`u8` | *(random)* | Filled with random bytes, not zero — avoids a known-plaintext pattern inside the AEAD-encrypted region |
+| 4–5 | `u16 BE` | `stream_id` | Reserved for future per-stream framing; `0` for control frames (`Ack`/`Nack`/`Close`) |
+| 6–9 | `u32 BE` | `payload_len` | Length of `payload` in bytes |
+| 10–11 | `u16 BE` | `pad_len` | Length of the trailing random `padding` |
+
+### 7.1 Frame Kinds
+
+| Value | Kind | Purpose |
+|---|---|---|
+| 1 | `Handshake` | Unused on the wire today (handshake messages travel in the outer envelope, §4.2); reserved. |
+| 2 | `Data` | Application payload — carries a `RelayMessage` (§8). |
+| 3 | `Close` | Terminates the session. |
+| 4 | `KeepAlive` | Keeps NAT/firewall mappings alive; carries no ARQ-visible payload. |
+| 5 | `Nack` | Requests immediate retransmission of a specific missing nonce. |
+| 6 | `Ack` | Cumulative + selective acknowledgment (§9.1). |
 
 ### 7.2 Adaptive Padding
-To resist traffic analysis via Packet Length Analysis (PLA), OSTP pads plaintext payloads before AEAD encryption. Padding bytes are drawn from a cryptographically secure random source. The protocol supports dynamic padding boundaries up to the maximum MTU (e.g., 1400 bytes), smoothing out recognizable application traffic bursts into constant-bitrate-like streams.
 
-### 7.3 IP Roaming
-The server supports seamless network handoffs (e.g., transitioning from Wi-Fi to cellular networks). If a packet successfully passes AEAD authentication, the server automatically binds the Session ID to the new source IP address without requiring a session restart. The server maintains a rate-limited roaming scanner (50 tokens/sec) to prevent CPU exhaustion from probing attacks.
-
-### 7.4 Session Keepalive
-*   **Client-side:** Ping/Pong frames with RTT measurement are sent every 5 seconds. If no valid UDP packet is received for 60 seconds, the client initiates reconnection.
-*   **Server-side:** Sessions with no activity for 300 seconds are automatically evicted.
+Padding bytes are cryptographically random and live **inside** the AEAD-encrypted region, so a passive observer cannot distinguish padding from payload or recover the true message length. Three strategies are available: `Fixed(target)`, `Profile` (bucketed to resemble JSON-RPC / HTTPS-burst / video-stream length distributions), and the default `Adaptive` strategy, which buckets the payload to the next 64-byte boundary and adds bounded random jitter on top — smoothing recognizable application bursts into a more constant-bitrate-like stream without ever exceeding the path MTU.
 
 ---
 
-## 8. Security Considerations
+## 8. Application Multiplexing Layer (`RelayMessage`)
 
-*   **Nonce Exhaustion:** The Nonce field is 64 bits. Implementations MUST terminate and re-key a session before the Nonce overflows to prevent AEAD keystream reuse.
-*   **Session Exhaustion (DoS):** Servers MUST enforce a strict cap on concurrent sessions (e.g., 1024) and silently drop handshake attempts exceeding this limit to prevent memory exhaustion attacks.
-*   **Handshake-trial CPU DoS:** Because there is no cleartext key identifier on the wire (a deliberate stealth property), a datagram from an unknown source must be trial-decrypted against every registered key. Servers MUST bound this work: OSTP caches each key's derived secrets and time-windowed junk markers (so a trial is a cheap comparison plus one AEAD attempt per key, not a fresh HKDF/HMAC), and gates the trial path behind a global token bucket (default 100/s) so a spoofed-source flood cannot force unbounded per-packet crypto. The established-session fast path and IP-roaming path are not subject to this bucket.
-*   **Header Authentication:** The header obfuscation mechanism provides privacy, not integrity. Header integrity is mathematically guaranteed by the Poly1305 Authentication Tag, which covers the entire 12-byte header as Additional Authenticated Data (AAD).
+Everything the client and server exchange after the handshake — proxied TCP connects, UDP associates, keepalives — is a `RelayMessage`, tag-length-value encoded and carried as the payload of `Data` frames:
+
+| Tag | Message | Payload |
+|---|---|---|
+| 1 | `Connect(addr)` | Target `host:port` to open a TCP connection to |
+| 2 | `Data(bytes)` | A chunk of an already-open stream's payload |
+| 3 | `KeepAlive` | No payload |
+| 4 | `Close` | No payload — closes the associated stream |
+| 5 | `ConnectOk` | No payload — acknowledges a successful `Connect` |
+| 6 | `Error(msg)` | UTF-8 error string |
+| 7 | `Ping(timestamp)` | 8-byte client-chosen timestamp, echoed back for RTT measurement |
+| 8 | `Pong(timestamp)` | Echo of the `Ping` timestamp |
+| 9 | `UdpAssociate` | No payload — requests a UDP relay association |
+| 10 | `UdpData(addr, bytes)` | Length-prefixed target address plus a UDP datagram payload |
+
+This is the layer that lets a single OSTP session carry an arbitrary number of concurrent proxied TCP connections and UDP flows: each is identified by its own sequence of `Connect`/`Data`/`Close` (or `UdpAssociate`/`UdpData`) messages multiplexed over the one encrypted nonce sequence, with the client's local SOCKS5/HTTP proxy or TUN adapter as the demultiplexing point on the client side.
+
+---
+
+## 9. Transport, Reliability, and Session Management
+
+### 9.1 Selective-Repeat ARQ
+
+OSTP provides reliability over an inherently unreliable datagram substrate using a **Selective-Repeat ARQ** mechanism (production defaults shown; all are configurable):
+
+* **Reorder buffer:** out-of-order frames are held in a `BTreeMap` keyed by nonce, capped at 8,192 buffered frames (`max_reorder_buffer`). A frame arriving more than 16,384 nonces (`max_reorder`) ahead of the expected sequence is rejected with an immediate `Nack` rather than buffered.
+* **Acknowledgment:** **Cumulative + SACK.** The `Ack` payload always starts with the cumulative range `(0, expected_recv_nonce - 1)`, followed by up to 7 additional selective-ACK ranges describing non-contiguous blocks already sitting in the reorder buffer (8 ranges total).
+* **Rate-limited NACK:** on detecting a gap, the receiver emits a `Nack` for the lowest missing nonce, but at most once every `max(10ms, current_RTO / 2)` — this fires *before* the sender's own retransmit timer, prompting a fast retransmit, while still bounding the storm under bursty loss.
+* **Retransmission:** unacknowledged data frames are retransmitted after an adaptive RTO (RFC 6298 `SRTT + 4×RTTVAR`, clamped to `[50ms, 16s]`, default base 100ms) with exponential backoff up to 64× the base RTO.
+* **Zombie frame eviction:** a frame that has been retried more than `max_retries + 2` times (default `max_retries` = 8, so 10 total attempts) is dropped from the sender's history — it can no longer be retransmitted, which is what makes gap recovery (§9.4) necessary on the receive side.
+* **In-flight accounting:** only retransmittable `Data` frames count toward backpressure; control frames (`Ack`/`Nack`) are excluded so acknowledgment traffic can never itself throttle the session.
+* **Graceful close:** the `Closing` state keeps processing inbound frames (including trailing ACKs and retransmits) instead of tearing down on the first post-`Close` packet, so in-flight data isn't lost during teardown.
+
+### 9.2 Junk Packets and TCP Fragmentation
+
+Before the handshake, a client may send a configurable number of random-size filler datagrams, each stamped with the time-windowed `junk_marker` from §6.1 rather than a fixed constant. The server derives the same per-key marker while trying candidate keys and silently drops matching junk before it ever reaches "unauthorized probe" logging. Over the UoT transport only, the first TCP segment (the handshake) can additionally be split into small chunks with short inter-write delays, so DPI that inspects only the first TCP segment never observes a complete handshake. See [`obfuscation.md`](obfuscation.md) for full detail; neither mechanism applies to plain UDP transport.
+
+### 9.3 Transport Modes and Session Multiplexing
+
+* **UDP** (default): each OSTP datagram is one UDP datagram.
+* **UoT (UDP-over-TCP):** each OSTP datagram is carried inside a plain TCP byte stream, framed with a 2-byte big-endian length prefix (`u16`, sufficient since OSTP datagrams are MTU-bounded and always well under 64 KiB). No protocol mimicry is attempted — the TCP stream carries only length-prefixed opaque blobs, following the project's "no recognizable header at all" stance rather than impersonating TLS/HTTP.
+* **Session-level multiplexing (`mux`):** independently of per-flow multiplexing (§8), a client may run more than one full OSTP session (`sessions > 1`) in parallel to the same server, spreading traffic — and loss — across multiple nonce sequences and congestion-control instances.
+
+### 9.4 Gap Recovery
+
+Because delivery is strictly gated on the next expected nonce, a single frame that the sender has given up retransmitting (§9.1, zombie eviction) would otherwise stall the receiver forever, with every later buffered frame withheld — a state indistinguishable from a healthy link `sending ACKs/NACKs into the void`. To break this deadlock, if the expected-nonce sequence makes no forward progress for `clamp(8 × current_RTO, 2s, 10s)`, the receiver skips forward to the lowest nonce it has buffered, delivers everything contiguous from there, and forces an `Ack` so the sender learns the sequence moved on. This trades one lost `RelayMessage` chunk for restoring liveness on an otherwise permanently frozen session.
+
+### 9.5 Congestion Control
+
+A simplified BBR-inspired controller (per-session, independent of TCP-level congestion control on any carrier transport) governs how much data may be in flight:
+
+* **Slow start:** begins at an initial window of 32 MTU-sized packets and grows exponentially per ACKed byte. An isolated loss during slow start (a single dropped frame — Wi-Fi noise, an LTE handover blip) takes a mild window haircut (×0.8) but **stays** in slow start; only 3+ losses within a rolling 500ms window are treated as sustained congestion, which exits slow start and halves the window (`ssthresh = cwnd / 2`).
+* **Probe-bandwidth phase:** additive increase (~1 MTU/RTT); loss triggers a multiplicative decrease to 70% of `cwnd` (gentler than TCP Cubic's 50%).
+* **RTT/RTO estimation:** RFC 6298 `SRTT`/`RTTVAR`, clamped `RTO ∈ [50ms, 16s]`. RTT samples are taken only from frames that were never retransmitted (Karn's algorithm), so a retransmit never spuriously drags the estimate down.
+* **Retransmit budget:** each tick may resend up to `max(2, cwnd_packets / 4)` frames, capped at 64, keeping retransmission bandwidth-aware rather than a flat per-tick constant.
+
+### 9.6 IP Roaming
+
+The server treats `session_id`, not the source `IP:port`, as the durable session identity. Any inbound datagram that passes AEAD authentication for a known session updates that session's tracked return address in place, with no handshake restart — enabling sub-second handoffs across Wi-Fi↔cellular transitions. Because roaming from an unfamiliar address is otherwise a cheap way to force the dispatcher to scan for a match, the roaming path is gated behind its own token bucket (50-token burst, refilled at 50 tokens/sec) to bound the CPU cost of address-spoofing probes; already-authenticated traffic from a session's current known address is not subject to this bucket.
+
+### 9.7 Session Keepalive and Recovery
+
+* **Client-side:** `Ping`/`Pong` `RelayMessage`s (§8) are exchanged every `keepalive_interval_sec` (default 5s) for RTT measurement. After 25s of received-datagram silence the client begins a background reconnect attempt while continuing to use the existing session; after 180s of total silence it treats the session as permanently lost and stops the tunnel — unless the kill switch is enabled, in which case it retries indefinitely rather than falling open.
+* **Server-side:** sessions with no valid inbound datagram for 600 seconds are evicted from the dispatcher's session table.
+
+---
+
+## 10. Security Considerations
+
+* **Nonce Exhaustion:** the nonce field is 64 bits. Implementations MUST terminate and re-key a session before it overflows, to prevent AEAD keystream reuse.
+* **Session Exhaustion (DoS):** the server enforces a hard cap on concurrent sessions (default 1024) and silently drops handshake attempts beyond it, bounding memory exhaustion attacks.
+* **Handshake-trial CPU DoS:** because there is no cleartext key identifier on the wire (a deliberate stealth property), a datagram from an unrecognized source must be trial-processed against every registered key. The server caches each key's derived secrets and time-windowed junk markers (so a trial is a cheap comparison plus at most one AEAD attempt per key, not a fresh HKDF/HMAC per attempt) and gates the whole trial path behind a global token bucket (100 trials/sec by default). The established-session fast path and the IP-roaming path (§9.6) are not subject to this bucket.
+* **Header Authentication:** header obfuscation provides privacy, not integrity on its own — but header tampering is still detected, because the 12-byte outer header (session ID + nonce) is authenticated as AEAD Additional Authenticated Data, so any bit-flip fails Poly1305 verification on decrypt even though the header carries no dedicated MAC of its own.
+* **Replay Cache Bound:** the handshake anti-replay cache is capped (default 50,000 entries) and windowed to the ±300s handshake-timestamp tolerance, so it cannot be grown without bound by an attacker replaying old handshakes.

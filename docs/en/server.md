@@ -1,17 +1,18 @@
 # OSTP Server Daemon
 
 ## Overview
-The OSTP Server functions as a high-performance network gateway, engineered to concurrently serve thousands of anonymous, obfuscated secure tunnels. It handles raw packet demultiplexing, decrypts encapsulated payloads, and proxies standard stream traffic out to the destination internet endpoints.
+The OSTP Server functions as a high-performance network gateway, engineered to concurrently serve thousands of anonymous, obfuscated secure tunnels. It handles raw datagram demultiplexing, decrypts encapsulated payloads, and proxies standard stream traffic out to the destination internet endpoints — optionally exposing a management API, a built-in DNS resolver, and a decoy fallback listener alongside the tunnel itself.
 
 ---
 
 ## Dispatcher Core Architecture
 
-The core scheduler of the server is the centralized `Dispatcher` module. Departing from traditional synchronous, thread-per-socket designs, it enforces a strict separation of network I/O and session states:
+The core scheduler of the server is the centralized `Dispatcher` module. Departing from traditional synchronous, thread-per-socket designs, it enforces a strict separation of network I/O and session state:
 
-1. **Asynchronous Socket Poll**: An independent asynchronous ingestion task continuously reads datagrams from the global `UdpSocket` and channels them directly to the multi-threaded dispatcher dispatch queue.
-2. **Crypto Session Registry**: The dispatcher maintains an efficient hash map containing all active client states, indexed by their `session_id`.
-3. **Zero-Copy Routing**: For every incoming payload, the dispatcher executes a fast `O(1)` state matching query. Once a valid `session_id` registry matches, the ciphertext is passed directly to its dedicated `ProtocolMachine` for execution.
+1. **Asynchronous Socket Poll**: an independent asynchronous ingestion task continuously reads datagrams from the listening socket(s) — UDP and/or UoT/TCP — and channels them to the dispatcher.
+2. **Crypto Session Registry**: the dispatcher maintains a hash map of all active sessions, indexed by `session_id`.
+3. **Zero-Copy Routing**: for every incoming payload, the dispatcher performs an `O(1)` lookup by `session_id`. On a match, the ciphertext is handed directly to that session's `ProtocolMachine`.
+4. **Handshake-trial path**: a datagram from an unrecognized source carries no cleartext key identifier (by design — see [`obfuscation.md`](obfuscation.md)), so it is trial-processed against every registered access key's cached derived secrets. This path is rate-limited by a global token bucket (default 100 trials/sec) independent of the established-session fast path, bounding the CPU cost of a spoofed-source flood.
 
 ---
 
@@ -25,17 +26,67 @@ Any corrupted frame, AEAD authentication tag failure, or malformed protocol pack
 - Existing, authenticated sessions **are never terminated or reset** when an invalid packet arrives on their matching ID. This strictly blocks blind packet injection (spoofing) vectors aimed at interrupting existing user tunnels.
 
 ### 2. Replay Prevention
-To defend against man-in-the-middle adversaries intercepting and later replaying valid UDP handshake frames:
-- Client handshakes embed cryptographic chronological markers (timestamps) in their payload envelopes.
-- The server validates timestamps against local system clocks, rejecting attempts outside acceptable synchronization limits.
-- Accepted handshake material is cached temporarily in a memory cache to categorically discard exact bitwise re-transmissions.
+To defend against man-in-the-middle adversaries intercepting and later replaying valid handshake datagrams:
+- Client handshakes embed a Unix timestamp in their payload.
+- The server validates it against a ±300-second synchronization window.
+- Accepted handshakes are recorded in a bounded anti-replay cache (default capacity 50,000 entries) to categorically discard exact bitwise retransmissions within that window.
+
+### 3. Session and Trial Caps
+- Concurrent sessions are hard-capped (default 1,024); handshakes beyond the cap are silently dropped rather than evicting an existing session.
+- Sessions idle for 600 seconds (10 minutes — generous enough to survive typical mobile-NAT rebinding delays) are evicted from the dispatcher.
 
 ---
 
 ## Zero-Latency Client Roaming
 
-The server inherently treats IP:Port coordinates as fluid and volatile variables rather than static identifiers:
-- Upon receiving **any successfully decrypted and authenticated** data frame, the dispatcher reads its immediate source IP and port.
-- If this origin deviates from the recorded tracking coordinate for that session, the server executes an atomic in-place update.
-- Subsequent outbound packets designated for the client are instantly dispatched to the newly updated endpoint.
-- This methodology facilitates millisecond-level handoffs during cellular tower changes or Wi-Fi switches, fully preserving upper TCP sessions.
+The server treats IP:port coordinates as fluid, tracking sessions by `session_id` instead:
+- Upon receiving **any successfully decrypted and authenticated** data frame, the dispatcher reads its source IP and port.
+- If this origin deviates from the recorded tracking coordinate for that session, the server executes an atomic in-place update — no handshake restart.
+- Subsequent outbound packets for the client are dispatched to the newly updated endpoint.
+- The rebind path is gated behind its own token bucket (50-token burst, refilled at 50/sec) so a flood of spoofed-source packets can't force unbounded roaming-scan work; this bucket does not affect already-current, already-authenticated traffic.
+- This facilitates millisecond-level handoffs during cellular tower changes or Wi-Fi switches, fully preserving upper TCP sessions.
+
+---
+
+## Management API
+
+An optional REST API (`api.rs`), enabled via the `api` block in `config.json`, exposes server status, per-user traffic statistics, and key management for building panels/dashboards (e.g. 3x-ui-style integrations):
+
+- **Authentication**: either a static Bearer `token` (also used for relay-node federation, below), or a username/password-hash login (`POST /login`) issuing a session token — comparisons are constant-time to avoid timing side-channels. If no token and no username/password-hash are configured, the API is open to whoever can reach the bind address — bind it to `127.0.0.1` and front it with a reverse proxy for anything internet-facing.
+- **Endpoints** (mounted under the configured `webpath`): `GET /server/status`, `GET`/`PUT /server/config`, `GET`/`POST /users`, `GET`/`PUT`/`DELETE /users/{key}`, `PUT /users/{key}/limit`, `POST /users/{key}/reset`, `POST /users/bulk`, `GET`/`POST`/`DELETE /audit`, `GET`/`PUT /router/rules`, and `GET /subscribe/{key}` (no Bearer token needed — the access key itself authenticates the request, returning a ready-to-use client config or `ostp://` share link).
+- See the [Management API wiki page](https://github.com/ospab/ostp/wiki/Management-API) for the full request/response reference.
+
+---
+
+## Built-in DNS Resolver
+
+An optional embedded DNS server (`dns.rs`), independent of the DNS *tunneling* concept — this resolves DNS *for* already-tunneled clients, it does not carry OSTP traffic itself:
+
+- Listens on a configurable UDP port (default `50053`) that clients point their resolver at.
+- Serves custom domain overrides, filters against AdBlock-style hosts lists, and forwards everything else via DNS-over-HTTPS (default upstream `https://cloudflare-dns.com/dns-query`).
+- An `intercept_all_port53` mode can additionally catch and resolve any UDP traffic to port 53 through the tunnel even when the full resolver is disabled, to prevent DNS leaks.
+- Replies are rate-limited to bound abuse of the resolver as an amplification vector.
+
+---
+
+## Fallback (Decoy) Listener
+
+An optional TCP listener (`fallback.rs`) that makes active probing unproductive: any TCP connection that isn't a recognized OSTP/UoT handshake is transparently piped through to a real backend (e.g. a local nginx serving an ordinary site), so a DPI system or a human actively probing the port sees a normal website rather than a closed port or an anomalous protocol. Configured via `fallback.enabled` / `fallback.listen` / `fallback.target`.
+
+---
+
+## Outbound Chaining
+
+By default the server proxies decrypted client traffic directly to the internet from its own address. `outbound.rs` optionally routes some or all of that egress through an upstream SOCKS5/HTTP proxy instead, with per-rule matching (`domain_suffix`, `ip_cidr`, `protocol`) selecting `proxy`, `direct`, or `block` — e.g. sending `.onion` traffic to a local Tor SOCKS proxy while everything else goes direct.
+
+---
+
+## Relay-Node Federation
+
+`relay_node.rs` implements a lightweight relay mode (`"mode": "relay"` in config) for chaining: `Client → Relay₁ → Relay₂ → ... → Target Server`. A relay node:
+
+1. Accepts client connections over UDP and/or UoT, same as a full server.
+2. Periodically syncs the current access-key set from the **target** server's Management API (`upstream_api_url` + `upstream_api_token`, default interval 30s), so it can authenticate clients without an operator manually mirroring keys.
+3. Validates each client purely by HMAC/AEAD against the synced keys, then forwards authorized traffic upstream unchanged — a relay node never decrypts or inspects tunneled payload, only proves a client holds a valid key before relaying its (still end-to-end encrypted) bytes on.
+
+This lets an operator front one target server with disposable relay IPs, without the relays themselves being trusted with traffic content.
