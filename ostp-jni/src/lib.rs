@@ -403,6 +403,158 @@ pub extern "system" fn Java_net_ostp_client_OstpClientSdk_addLog(
     }
 }
 
+#[derive(serde::Deserialize)]
+struct ProberMatrixRequest {
+    server_addr: String,
+    access_key: String,
+    #[serde(default = "default_matrix_timeout_ms")]
+    timeout_ms: u64,
+}
+fn default_matrix_timeout_ms() -> u64 { 2500 }
+
+/// Runs a real, authenticated handshake against every resolved
+/// address × transport combination for `server_addr` and reports which ones
+/// actually complete. Uses its own short-lived tokio runtime, independent of
+/// any active VPN session in `STATE` — this can run while a tunnel is
+/// connected without disturbing it. Blocks the calling thread until the
+/// sweep finishes (callers must invoke this off the UI thread).
+#[no_mangle]
+pub extern "system" fn Java_net_ostp_client_OstpClientSdk_nativeRunProberMatrix(
+    mut env: JNIEnv,
+    _class: JClass,
+    request_json: JString,
+) -> jstring {
+    let req_str: String = match env.get_string(&request_json) {
+        Ok(s) => s.into(),
+        Err(_) => return null_jstring(&mut env),
+    };
+
+    let req: ProberMatrixRequest = match serde_json::from_str(&req_str) {
+        Ok(r) => r,
+        Err(e) => return error_jstring(&mut env, &format!("invalid request json: {e}")),
+    };
+
+    let result = match Runtime::new() {
+        Ok(rt) => rt.block_on(ostp_client::prober::run_matrix(
+            &req.server_addr,
+            req.access_key.as_bytes(),
+            std::time::Duration::from_millis(req.timeout_ms),
+        )),
+        Err(e) => Err(anyhow::anyhow!("failed to create tokio runtime: {e}")),
+    };
+
+    match result {
+        Ok(entries) => json_jstring(&mut env, &entries),
+        Err(e) => error_jstring(&mut env, &e.to_string()),
+    }
+}
+
+#[derive(serde::Deserialize)]
+struct ProberTtlRequest {
+    address: String,
+    port: u16,
+    transport: String,
+    access_key: String,
+    #[serde(default = "default_max_ttl")]
+    max_ttl: u32,
+    #[serde(default = "default_ttl_timeout_ms")]
+    timeout_ms: u64,
+}
+fn default_max_ttl() -> u32 { 20 }
+fn default_ttl_timeout_ms() -> u64 { 900 }
+
+/// Repeats a handshake attempt at increasing IP_TTL against one
+/// already-known address × transport combination (normally one the matrix
+/// scan above found working, or failing in an interesting way), to estimate
+/// the hop distance at which a middlebox starts answering in place of the
+/// real server. Same threading model as the matrix scan.
+#[no_mangle]
+pub extern "system" fn Java_net_ostp_client_OstpClientSdk_nativeRunProberTtlScan(
+    mut env: JNIEnv,
+    _class: JClass,
+    request_json: JString,
+) -> jstring {
+    let req_str: String = match env.get_string(&request_json) {
+        Ok(s) => s.into(),
+        Err(_) => return null_jstring(&mut env),
+    };
+
+    let req: ProberTtlRequest = match serde_json::from_str(&req_str) {
+        Ok(r) => r,
+        Err(e) => return error_jstring(&mut env, &format!("invalid request json: {e}")),
+    };
+
+    let target_ip: std::net::IpAddr = match req.address.parse() {
+        Ok(ip) => ip,
+        Err(e) => return error_jstring(&mut env, &format!("invalid address: {e}")),
+    };
+    let transport = match req.transport.as_str() {
+        "udp" => ostp_client::prober::TransportKind::Udp,
+        "uot" => ostp_client::prober::TransportKind::Uot,
+        "uot_frag" => ostp_client::prober::TransportKind::UotFrag,
+        other => return error_jstring(&mut env, &format!("unknown transport: {other}")),
+    };
+
+    let report = match Runtime::new() {
+        Ok(rt) => rt.block_on(ostp_client::prober::run_ttl_scan(
+            target_ip,
+            req.port,
+            transport,
+            req.access_key.as_bytes(),
+            req.max_ttl,
+            std::time::Duration::from_millis(req.timeout_ms),
+        )),
+        Err(e) => return error_jstring(&mut env, &format!("failed to create tokio runtime: {e}")),
+    };
+
+    json_jstring(&mut env, &report)
+}
+
+/// Runs the generic (non-ostp) DPI/TSPU fingerprinting battery against fixed
+/// public targets — the same differential SNI/DNS/CONNECT tests the
+/// standalone `ostp-prober` desktop tool uses — to characterize what the
+/// current network filters, independent of whether the user's own server
+/// works. Same threading model as the matrix/TTL scans: its own short-lived
+/// runtime, safe to run while a tunnel is connected (every probe socket is
+/// protected against the VPN), blocks the calling thread (~10s).
+#[no_mangle]
+pub extern "system" fn Java_net_ostp_client_OstpClientSdk_nativeRunProberDpiBattery(
+    mut env: JNIEnv,
+    _class: JClass,
+) -> jstring {
+    let report = match Runtime::new() {
+        Ok(rt) => rt.block_on(ostp_client::dpi_probes::run_dpi_battery()),
+        Err(e) => return error_jstring(&mut env, &format!("failed to create tokio runtime: {e}")),
+    };
+
+    json_jstring(&mut env, &report)
+}
+
+fn null_jstring(env: &mut JNIEnv) -> jstring {
+    match env.new_string("{}") {
+        Ok(s) => s.into_raw(),
+        Err(_) => std::ptr::null_mut(),
+    }
+}
+
+fn error_jstring(env: &mut JNIEnv, msg: &str) -> jstring {
+    let body = serde_json::json!({ "error": msg }).to_string();
+    match env.new_string(body.replace('\0', "")) {
+        Ok(s) => s.into_raw(),
+        Err(_) => std::ptr::null_mut(),
+    }
+}
+
+fn json_jstring<T: serde::Serialize>(env: &mut JNIEnv, value: &T) -> jstring {
+    let body = serde_json::to_string(value).unwrap_or_else(|e| {
+        serde_json::json!({ "error": format!("failed to serialize report: {e}") }).to_string()
+    });
+    match env.new_string(body.replace('\0', "")) {
+        Ok(s) => s.into_raw(),
+        Err(_) => std::ptr::null_mut(),
+    }
+}
+
 /// Called by Android NetworkCallback when the active network changes (WiFi→LTE, etc.).
 /// Sends BridgeCommand::NetworkChanged to trigger an immediate reconnect in the Rust bridge.
 #[no_mangle]
