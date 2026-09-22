@@ -1044,14 +1044,14 @@ impl Bridge {
 
             tx.send(UiEvent::Log(format!("Connecting to remote server: {}...", target_addr))).await.ok();
 
-            let socket = match self.try_connect_transport(target_ip, port).await {
+            let socket = match self.try_connect_transport(target_ip, port, tx).await {
                 Ok(sock) => sock,
                 Err(e) => {
                     if let (std::net::IpAddr::V4(ipv4), false) = (target_ip, nat64_attempted) {
                         nat64_attempted = true;
                         tx.send(UiEvent::Log(format!("Direct IPv4 connection failed: {}. Trying NAT64 fallback...", e))).await.ok();
                         let nat64_ipv6 = synthesize_nat64(ipv4).await;
-                        match self.try_connect_transport(std::net::IpAddr::V6(nat64_ipv6), port).await {
+                        match self.try_connect_transport(std::net::IpAddr::V6(nat64_ipv6), port, tx).await {
                             Ok(sock) => sock,
                             Err(fallback_err) => {
                                 last_err = anyhow::anyhow!("Direct IPv4 failed: {}. NAT64 fallback failed: {}", e, fallback_err);
@@ -1133,7 +1133,7 @@ impl Bridge {
                     nat64_attempted = true;
                     tx.send(UiEvent::Log("Direct IPv4 handshake timed out. Trying NAT64 fallback...".to_string())).await.ok();
                     let nat64_ipv6 = synthesize_nat64(ipv4).await;
-                    match self.try_connect_transport(std::net::IpAddr::V6(nat64_ipv6), port).await {
+                    match self.try_connect_transport(std::net::IpAddr::V6(nat64_ipv6), port, tx).await {
                         Ok(fallback_socket) => {
                             let mut fallback_success = false;
                             for attempt in 0..4 {
@@ -1177,6 +1177,21 @@ impl Bridge {
 
             let inbound = Bytes::copy_from_slice(&buf[..size]);
             if let Err(e) = machine.on_event(OstpEvent::Inbound(inbound)) {
+                // A frame that reaches here and still fails to validate (bad
+                // session id, truncated noise payload, ...) did not come from
+                // the real ostp server responding to our handshake — the real
+                // server always echoes our session id. Surface the raw bytes
+                // only in debug mode, and only on this failure path: a
+                // successfully-validated handshake response is genuine server
+                // traffic and is never dumped.
+                if self.debug {
+                    tx.send(UiEvent::Log(format!(
+                        "[debug] handshake response failed validation ({}) — does not look \
+                         like an ostp server reply, possible operator/DPI interference: {}",
+                        e,
+                        describe_foreign_bytes(&buf[..size])
+                    ))).await.ok();
+                }
                 last_err = anyhow::anyhow!("Protocol invalid response: {}", e);
                 continue;
             }
@@ -1214,6 +1229,7 @@ impl Bridge {
         &self,
         target_ip: std::net::IpAddr,
         port: u16,
+        tx: &mpsc::Sender<UiEvent>,
     ) -> Result<crate::transport::Transport> {
         let mode = self.transport_mode.to_lowercase();
         if mode == "uot" || mode == "tcp" {
@@ -1319,17 +1335,63 @@ impl Bridge {
                 }
             });
             
-            // Task to read from tcp stream to tx_in
+            // Task to read from tcp stream to tx_in. Reads whatever is available
+            // and only pulls a frame out once the full [len:2][payload] is in hand,
+            // instead of read_exact-ing the length prefix and then the body as two
+            // separate blocking reads. That distinction matters on mobile networks:
+            // some operators' DPI/transparent proxy answers the TCP connection
+            // itself with a short block/redirect page (a few hundred bytes) instead
+            // of relaying to the real ostp server. The old code would read those
+            // bytes as a bogus length prefix, block on read_exact for a body that
+            // never arrives, and just time out with nothing to show for it. This
+            // version notices the stream ending mid-frame and, in debug mode only,
+            // surfaces the leftover bytes — which by construction never include a
+            // successfully-parsed (and therefore likely-genuine) ostp frame.
             let tx_in_clone = tx_in.clone();
+            let debug_capture = self.debug;
+            let ui_tx = tx.clone();
             tokio::spawn(async move {
                 use tokio::io::AsyncReadExt;
+                let mut acc: Vec<u8> = Vec::new();
+                let mut chunk = [0u8; 4096];
                 loop {
-                    let mut len_buf = [0u8; 2];
-                    if read_half.read_exact(&mut len_buf).await.is_err() { break; }
-                    let len = u16::from_be_bytes(len_buf) as usize;
-                    let mut data = vec![0u8; len];
-                    if read_half.read_exact(&mut data).await.is_err() { break; }
-                    if tx_in_clone.send(bytes::Bytes::from(data)).await.is_err() { break; }
+                    if acc.len() >= 2 {
+                        let len = u16::from_be_bytes([acc[0], acc[1]]) as usize;
+                        if acc.len() >= 2 + len {
+                            let data = acc[2..2 + len].to_vec();
+                            acc.drain(0..2 + len);
+                            if tx_in_clone.send(bytes::Bytes::from(data)).await.is_err() { break; }
+                            continue;
+                        }
+                    }
+                    match read_half.read(&mut chunk).await {
+                        Ok(0) => {
+                            if debug_capture && !acc.is_empty() {
+                                ui_tx.send(UiEvent::Log(format!(
+                                    "[debug] connection closed with {} unparsed byte(s) left over \
+                                     (does not look like an ostp frame — possible operator/DPI \
+                                     interference): {}",
+                                    acc.len(),
+                                    describe_foreign_bytes(&acc)
+                                ))).await.ok();
+                            }
+                            break;
+                        }
+                        Ok(n) => acc.extend_from_slice(&chunk[..n]),
+                        Err(e) => {
+                            if debug_capture && !acc.is_empty() {
+                                ui_tx.send(UiEvent::Log(format!(
+                                    "[debug] read error after {} unparsed byte(s) \
+                                     (does not look like an ostp frame — possible operator/DPI \
+                                     interference): {} ({})",
+                                    acc.len(),
+                                    describe_foreign_bytes(&acc),
+                                    e
+                                ))).await.ok();
+                            }
+                            break;
+                        }
+                    }
                 }
             });
             
@@ -1363,6 +1425,24 @@ impl Bridge {
             Ok(crate::transport::Transport::Udp(Arc::new(socket)))
         }
     }
+}
+
+/// Debug-mode-only preview of bytes that failed to parse as an ostp frame,
+/// for diagnosing operators whose DPI/transparent proxy injects its own
+/// response instead of relaying to the real server. Shows a lossy-UTF8 text
+/// preview (block/redirect pages are usually plain HTTP) alongside hex, capped
+/// so a large injected payload doesn't flood the log.
+fn describe_foreign_bytes(data: &[u8]) -> String {
+    const MAX_PREVIEW: usize = 300;
+    let shown = &data[..data.len().min(MAX_PREVIEW)];
+    let text: String = String::from_utf8_lossy(shown).chars().flat_map(|c| c.escape_default()).collect();
+    let hex: String = shown.iter().map(|b| format!("{:02x}", b)).collect::<Vec<_>>().join(" ");
+    let truncated = if data.len() > MAX_PREVIEW {
+        format!(" (truncated, {} bytes total)", data.len())
+    } else {
+        String::new()
+    };
+    format!("text=\"{text}\" hex=[{hex}]{truncated}")
 }
 
 fn next_profile(current: TrafficProfile) -> TrafficProfile {
