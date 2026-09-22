@@ -102,6 +102,48 @@ class MainActivity : FlutterActivity() {
                         result.error("ERROR", e.message, null)
                     }
                 }
+                "runProberMatrix" -> {
+                    // Real handshakes over every address x transport combo can
+                    // take several seconds total — same reasoning as
+                    // getInstalledApps below: never block the UI thread with it.
+                    val requestJson = call.argument<String>("requestJson") ?: "{}"
+                    Thread {
+                        try {
+                            val report = net.ostp.client.OstpClientSdk.runProberMatrix(requestJson)
+                            runOnUiThread { result.success(report) }
+                        } catch (e: Throwable) {
+                            runOnUiThread { result.error("ERROR", e.message, null) }
+                        }
+                    }.start()
+                }
+                "runProberTtlScan" -> {
+                    // A full TTL sweep (up to max_ttl attempts, each with its
+                    // own timeout) can take tens of seconds — background thread
+                    // is mandatory here, not just good practice.
+                    val requestJson = call.argument<String>("requestJson") ?: "{}"
+                    Thread {
+                        try {
+                            val report = net.ostp.client.OstpClientSdk.runProberTtlScan(requestJson)
+                            runOnUiThread { result.success(report) }
+                        } catch (e: Throwable) {
+                            runOnUiThread { result.error("ERROR", e.message, null) }
+                        }
+                    }.start()
+                }
+                "runProberDpiBattery" -> {
+                    // The full DPI/TSPU differential battery (SNI, HTTP Host,
+                    // DNS hijack/injection, CONNECT hijack, RST injection,
+                    // UDP throttle...) takes ~10s of real network round trips
+                    // — same as the matrix/TTL scans above, background thread.
+                    Thread {
+                        try {
+                            val report = net.ostp.client.OstpClientSdk.runProberDpiBattery()
+                            runOnUiThread { result.success(report) }
+                        } catch (e: Throwable) {
+                            runOnUiThread { result.error("ERROR", e.message, null) }
+                        }
+                    }.start()
+                }
                 "getInstalledApps" -> {
                     // MethodChannel handlers run on the main/UI thread by default.
                     // Enumerating every installed package AND decoding+re-encoding

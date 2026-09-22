@@ -50,4 +50,16 @@ object OstpClientSdk {
     @Keep
     @JvmStatic
     external fun notifyNetworkChanged()
+
+    @Keep
+    @JvmStatic
+    external fun runProberMatrix(requestJson: String): String
+
+    @Keep
+    @JvmStatic
+    external fun runProberTtlScan(requestJson: String): String
+
+    @Keep
+    @JvmStatic
+    external fun runProberDpiBattery(): String
 }

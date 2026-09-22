@@ -87,11 +87,48 @@ class _LogsScreenState extends State<LogsScreen> {
     });
   }
 
+  /// Copies the log lines plus, when present, the last prober run's results
+  /// (`prober_screen.dart` persists these after each run) — one bundle a
+  /// user can paste into a support request without having to separately
+  /// screenshot the Prober screen.
   Future<void> _copyLogs() async {
-    final text = _logs.join('\n');
-    await Clipboard.setData(ClipboardData(text: text));
-    if (mounted) ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('Logs copied to clipboard')));
+    final buffer = StringBuffer(_logs.join('\n'));
+
+    final prefs = await SharedPreferences.getInstance();
+    final matrix = prefs.getString('last_prober_matrix');
+    final ttl = prefs.getString('last_prober_ttl');
+    final dpi = prefs.getString('last_prober_dpi');
+    if (matrix != null || ttl != null || dpi != null) {
+      buffer.writeln();
+      buffer.writeln('--- Network Prober results ---');
+      if (matrix != null) {
+        buffer.writeln('Address x transport matrix:');
+        buffer.writeln(matrix);
+      }
+      if (ttl != null) {
+        buffer.writeln('TTL / middlebox scan:');
+        buffer.writeln(ttl);
+      }
+      if (dpi != null) {
+        buffer.writeln('DPI / TSPU fingerprint:');
+        buffer.writeln(dpi);
+      }
+    }
+
+    await Clipboard.setData(ClipboardData(text: buffer.toString()));
+    if (mounted) {
+      ScaffoldMessenger.of(context).showSnackBar(SnackBar(
+        content: Text(matrix != null || ttl != null
+            ? 'Logs + prober results copied to clipboard'
+            : 'Logs copied to clipboard'),
+      ));
+    }
   }
+
+  /// A line this app itself flagged as not looking like it came from the
+  /// ostp server (see `describe_foreign_bytes` on the Rust side) — surfaced
+  /// distinctly so it isn't lost among routine connection-status lines.
+  bool _isDpiLine(String line) => line.contains('[debug]') && line.toLowerCase().contains('dpi');
 
   @override
   Widget build(BuildContext context) {
@@ -112,15 +149,29 @@ class _LogsScreenState extends State<LogsScreen> {
           controller: _scrollCtrl,
           itemCount: _logs.length,
           itemBuilder: (context, index) {
+            final line = _logs[index];
+            final isDpi = _isDpiLine(line);
             return Padding(
               padding: const EdgeInsets.symmetric(vertical: 2.0),
-              child: Text(
-                _logs[index],
-                style: const TextStyle(
-                  fontFamily: 'monospace',
-                  fontSize: 12,
-                  color: Colors.greenAccent,
-                ),
+              child: Row(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  if (isDpi) const Padding(
+                    padding: EdgeInsets.only(right: 6, top: 1),
+                    child: Icon(Icons.warning_amber_rounded, size: 14, color: Colors.orangeAccent),
+                  ),
+                  Expanded(
+                    child: Text(
+                      line,
+                      style: TextStyle(
+                        fontFamily: 'monospace',
+                        fontSize: 12,
+                        color: isDpi ? Colors.orangeAccent : Colors.greenAccent,
+                        fontWeight: isDpi ? FontWeight.w600 : FontWeight.normal,
+                      ),
+                    ),
+                  ),
+                ],
               ),
             );
           },

@@ -7,6 +7,7 @@ import 'package:shared_preferences/shared_preferences.dart';
 import 'package:package_info_plus/package_info_plus.dart';
 import '../models/connection_state_enum.dart';
 import '../models/ostp_profile.dart';
+import 'prober_screen.dart';
 import 'settings_screen.dart';
 
 /// Success green for the "connected" state — the button aura/border/icon and
@@ -274,114 +275,6 @@ class _HomeScreenState extends State<HomeScreen> with TickerProviderStateMixin {
     }
   }
 
-  /// Cycles transport mode x MTU to find a working combination against the
-  /// active profile's server. WSS/Reality are gone (the core dropped
-  /// TLS-mimicry transports entirely — see §A), so this only has udp/uot x
-  /// MTU left to probe; junk/frag stay at whatever the active profile has set.
-  Future<void> _runAutoMode() async {
-    final mtus = [1500, 1350, 1280, 1140];
-    final modes = ['udp', 'uot'];
-
-    final active = _activeProfile;
-    if (active == null || active.serverAddr.isEmpty || active.accessKey.isEmpty) {
-      ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(content: Text('Please select a profile with a server and key first')),
-      );
-      return;
-    }
-
-    final originalMode = active.transportMode;
-    final originalMtu = widget.prefs.getString('mtu') ?? '1140';
-
-    for (final mode in modes) {
-      for (final mtu in mtus) {
-        if (!mounted) return;
-        ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(content: Text('Testing: $mode | MTU: $mtu'), duration: const Duration(seconds: 2)),
-        );
-
-        await widget.prefs.setString('mtu', mtu.toString());
-        active.transportMode = mode;
-        _updateLatestConfigJson();
-
-        setState(() {
-          _state = ConnectionStateEnum.connecting;
-        });
-        _pulseController.repeat(reverse: true);
-        _spinController.repeat();
-
-        try {
-          final configJson = widget.prefs.getString('latest_config_json') ?? '{}';
-          await platform.invokeMethod('startTunnel', {"configJson": configJson});
-
-          bool started = false;
-          for (int i = 0; i < 10; i++) {
-            await Future.delayed(const Duration(milliseconds: 500));
-            final isRunning = await platform.invokeMethod('isRunning');
-            if (isRunning == true) {
-              started = true;
-              break;
-            }
-          }
-
-          if (started) {
-            _setConnected();
-            await Future.delayed(const Duration(seconds: 3));
-            try {
-              final metricsJson = await platform.invokeMethod('getMetrics');
-              if (metricsJson != null && metricsJson.isNotEmpty) {
-                final Map<String, dynamic> parsed = jsonDecode(metricsJson);
-                final rttMs = parsed['rtt_ms'] as int? ?? 0;
-                if (rttMs > 0) {
-                  // Working combo found — persist it onto the profile.
-                  _persistActiveProfile();
-                  if (mounted) {
-                    ScaffoldMessenger.of(context).showSnackBar(
-                      SnackBar(content: Text('Success! Found working config: $mode (MTU $mtu)')),
-                    );
-                  }
-                  return;
-                }
-              }
-            } catch (_) {
-              // Ignore metrics error, fall through to try next combo.
-            }
-
-            await platform.invokeMethod('stopTunnel');
-            _setDisconnected();
-          } else {
-            _setDisconnected();
-          }
-        } catch (_) {
-          _setDisconnected();
-        }
-      }
-    }
-
-    // No working combo found — revert the active profile/mtu to what they
-    // were before probing so we don't leave it on a broken guess.
-    active.transportMode = originalMode;
-    await widget.prefs.setString('mtu', originalMtu);
-    _updateLatestConfigJson();
-
-    if (mounted) {
-      ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(content: Text('Auto search finished. No working config found.')),
-      );
-    }
-  }
-
-  void _persistActiveProfile() {
-    final active = _activeProfile;
-    if (active == null) return;
-    final profiles = decodeProfiles(widget.prefs.getString('profiles_json'));
-    final idx = profiles.indexWhere((p) => p.id == active.id);
-    if (idx >= 0) {
-      profiles[idx] = active;
-      widget.prefs.setString('profiles_json', encodeProfiles(profiles));
-    }
-  }
-
   void _setConnected() {
     if (!mounted) return;
     setState(() {
@@ -600,15 +493,13 @@ class _HomeScreenState extends State<HomeScreen> with TickerProviderStateMixin {
             children: [
               IconButton(
                 iconSize: 30,
-                icon: const Icon(Icons.auto_mode_rounded, color: Colors.white),
+                icon: const Icon(Icons.network_check_rounded, color: Colors.white),
+                tooltip: 'Network Prober',
                 onPressed: () {
-                  if (_state != ConnectionStateEnum.disconnected) {
-                    ScaffoldMessenger.of(context).showSnackBar(
-                      const SnackBar(content: Text('Disconnect first to run Auto mode')),
-                    );
-                    return;
-                  }
-                  _runAutoMode();
+                  Navigator.push(
+                    context,
+                    MaterialPageRoute(builder: (context) => ProberScreen(prefs: widget.prefs)),
+                  );
                 },
               ),
               IconButton(
