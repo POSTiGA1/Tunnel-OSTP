@@ -14,6 +14,7 @@ use tokio::time::{interval, timeout, Instant, MissedTickBehavior};
 
 use crate::app::{BridgeCommand, ConnectionStatus, UiEvent};
 use crate::config::ClientConfig;
+use crate::debug_preview::describe_foreign_bytes;
 use crate::tunnel::{ProxyEvent, ProxyToClientMsg};
 
 /// Per-address ceiling on the UoT/TCP connect attempt. Long enough that a
@@ -1243,159 +1244,36 @@ impl Bridge {
             // budget before it ever reached the IPv4 address that would have
             // connected immediately. UDP never showed this because connect() on
             // a UDP socket only sets the default peer and returns at once.
-            let stream = tokio::time::timeout(
-                UOT_CONNECT_TIMEOUT,
-                tokio::net::TcpStream::connect((target_ip, port)),
-            )
-            .await
-            .map_err(|_| {
-                anyhow::anyhow!(
-                    "TCP connect to {target_ip}:{port} timed out after {:?}",
-                    UOT_CONNECT_TIMEOUT
-                )
-            })??;
-            let _ = stream.set_nodelay(true);
-            let (mut read_half, mut write_half) = stream.into_split();
+            let (transport, mut foreign_rx) = crate::transport::connect_uot(
+                target_ip,
+                port,
+                crate::transport::UotOptions {
+                    tcp_fragmentation: self.tcp_fragmentation,
+                    frag_chunk: self.frag_chunk,
+                    frag_sleep: self.frag_sleep,
+                    junk_pc: self.junk_pc,
+                    junk_ps: self.junk_ps,
+                    access_key: self.access_key.clone(),
+                    ttl: None,
+                    connect_timeout: UOT_CONNECT_TIMEOUT,
+                },
+            ).await?;
 
-            let tcp_fragmentation = self.tcp_fragmentation;
-            let frag_chunk = self.frag_chunk;
-            let frag_sleep = self.frag_sleep;
-            let [junk_pc_min, junk_pc_max] = self.junk_pc;
-            let [junk_ps_min, junk_ps_max] = self.junk_ps;
-            // Time-rotating per-key junk marker — NOT a global constant and NOT
-            // even a static per-user value: it changes every window, so junk
-            // carries no fixed DPI signature on the wire. All frames in this
-            // burst are sent within milliseconds, so one window applies to all.
-            let junk_marker = ostp_core::crypto::derive_junk_marker(
-                &self.access_key,
-                ostp_core::crypto::current_junk_window(),
-            );
-
-            {
-                use tokio::io::AsyncWriteExt;
-                // Build all junk frames up front so ThreadRng isn't held across an
-                // await point (keeps this future Send).
-                let junk_frames: Vec<Vec<u8>> = {
-                    let mut rng = rand::thread_rng();
-                    let min_c = junk_pc_min;
-                    let max_c = junk_pc_max.max(min_c);
-                    let num_junk = rng.gen_range(min_c..=max_c);
-                    (0..num_junk)
-                        .map(|_| {
-                            let min_s = junk_ps_min.max(1);
-                            let max_s = junk_ps_max.max(min_s);
-                            let junk_len = rng.gen_range(min_s..=max_s);
-                            let mut frame = Vec::with_capacity(2 + junk_len);
-                            frame.extend_from_slice(&(junk_len as u16).to_be_bytes());
-                            let start = frame.len();
-                            frame.resize(start + junk_len, 0);
-                            rng.fill(&mut frame[start..]);
-                            // Stamp this key's derived junk marker so the server drops it silently.
-                            if junk_len >= 4 {
-                                frame[start..start+4].copy_from_slice(&junk_marker);
-                            }
-                            frame
-                        })
-                        .collect()
-                };
-                for frame in junk_frames {
-                    if write_half.write_all(&frame).await.is_err() { break; }
-                    tokio::time::sleep(std::time::Duration::from_millis(5)).await;
-                }
+            // Forward foreign-bytes findings into the UI log, but only in debug
+            // mode — a successfully-validated ostp frame is genuine server
+            // traffic and never reaches this channel in the first place, so
+            // this is purely "does not look like it came from the ostp
+            // server" diagnostics, not a dump of real traffic.
+            if self.debug {
+                let ui_tx = tx.clone();
+                tokio::spawn(async move {
+                    while let Some(msg) = foreign_rx.recv().await {
+                        ui_tx.send(UiEvent::Log(format!("[debug] {msg}"))).await.ok();
+                    }
+                });
             }
 
-            let (tx_out, mut rx_out) = tokio::sync::mpsc::channel::<bytes::Bytes>(1024);
-            let (tx_in, rx_in) = tokio::sync::mpsc::channel::<bytes::Bytes>(1024);
-
-            // Writer: length-prefix each frame. With tcp_fragmentation on, split
-            // the FIRST real frame (the handshake — junk above was written
-            // directly, so it doesn't count) into tiny TCP segments with short
-            // gaps so DPI can't reassemble/classify the handshake from one read.
-            tokio::spawn(async move {
-                use tokio::io::AsyncWriteExt;
-                let mut first_packet = true;
-                while let Some(data) = rx_out.recv().await {
-                    let len_buf = (data.len() as u16).to_be_bytes();
-                    if first_packet && tcp_fragmentation {
-                        first_packet = false;
-                        if write_half.write_all(&len_buf[0..1]).await.is_err() { break; }
-                        tokio::time::sleep(std::time::Duration::from_millis(5)).await;
-                        if write_half.write_all(&len_buf[1..2]).await.is_err() { break; }
-                        tokio::time::sleep(std::time::Duration::from_millis(5)).await;
-                        let mut broke = false;
-                        for chunk in data.chunks(frag_chunk) {
-                            if write_half.write_all(chunk).await.is_err() { broke = true; break; }
-                            tokio::time::sleep(std::time::Duration::from_millis(frag_sleep)).await;
-                        }
-                        if broke { break; }
-                    } else {
-                        if write_half.write_all(&len_buf).await.is_err() { break; }
-                        if write_half.write_all(&data).await.is_err() { break; }
-                    }
-                }
-            });
-            
-            // Task to read from tcp stream to tx_in. Reads whatever is available
-            // and only pulls a frame out once the full [len:2][payload] is in hand,
-            // instead of read_exact-ing the length prefix and then the body as two
-            // separate blocking reads. That distinction matters on mobile networks:
-            // some operators' DPI/transparent proxy answers the TCP connection
-            // itself with a short block/redirect page (a few hundred bytes) instead
-            // of relaying to the real ostp server. The old code would read those
-            // bytes as a bogus length prefix, block on read_exact for a body that
-            // never arrives, and just time out with nothing to show for it. This
-            // version notices the stream ending mid-frame and, in debug mode only,
-            // surfaces the leftover bytes — which by construction never include a
-            // successfully-parsed (and therefore likely-genuine) ostp frame.
-            let tx_in_clone = tx_in.clone();
-            let debug_capture = self.debug;
-            let ui_tx = tx.clone();
-            tokio::spawn(async move {
-                use tokio::io::AsyncReadExt;
-                let mut acc: Vec<u8> = Vec::new();
-                let mut chunk = [0u8; 4096];
-                loop {
-                    if acc.len() >= 2 {
-                        let len = u16::from_be_bytes([acc[0], acc[1]]) as usize;
-                        if acc.len() >= 2 + len {
-                            let data = acc[2..2 + len].to_vec();
-                            acc.drain(0..2 + len);
-                            if tx_in_clone.send(bytes::Bytes::from(data)).await.is_err() { break; }
-                            continue;
-                        }
-                    }
-                    match read_half.read(&mut chunk).await {
-                        Ok(0) => {
-                            if debug_capture && !acc.is_empty() {
-                                ui_tx.send(UiEvent::Log(format!(
-                                    "[debug] connection closed with {} unparsed byte(s) left over \
-                                     (does not look like an ostp frame — possible operator/DPI \
-                                     interference): {}",
-                                    acc.len(),
-                                    describe_foreign_bytes(&acc)
-                                ))).await.ok();
-                            }
-                            break;
-                        }
-                        Ok(n) => acc.extend_from_slice(&chunk[..n]),
-                        Err(e) => {
-                            if debug_capture && !acc.is_empty() {
-                                ui_tx.send(UiEvent::Log(format!(
-                                    "[debug] read error after {} unparsed byte(s) \
-                                     (does not look like an ostp frame — possible operator/DPI \
-                                     interference): {} ({})",
-                                    acc.len(),
-                                    describe_foreign_bytes(&acc),
-                                    e
-                                ))).await.ok();
-                            }
-                            break;
-                        }
-                    }
-                }
-            });
-            
-            Ok(crate::transport::Transport::Uot { tx: tx_out, rx: std::sync::Arc::new(tokio::sync::Mutex::new(rx_in)) })
+            Ok(transport)
         } else {
             let is_ipv6 = target_ip.is_ipv6();
             let domain = if is_ipv6 { socket2::Domain::IPV6 } else { socket2::Domain::IPV4 };
@@ -1427,24 +1305,6 @@ impl Bridge {
     }
 }
 
-/// Debug-mode-only preview of bytes that failed to parse as an ostp frame,
-/// for diagnosing operators whose DPI/transparent proxy injects its own
-/// response instead of relaying to the real server. Shows a lossy-UTF8 text
-/// preview (block/redirect pages are usually plain HTTP) alongside hex, capped
-/// so a large injected payload doesn't flood the log.
-fn describe_foreign_bytes(data: &[u8]) -> String {
-    const MAX_PREVIEW: usize = 300;
-    let shown = &data[..data.len().min(MAX_PREVIEW)];
-    let text: String = String::from_utf8_lossy(shown).chars().flat_map(|c| c.escape_default()).collect();
-    let hex: String = shown.iter().map(|b| format!("{:02x}", b)).collect::<Vec<_>>().join(" ");
-    let truncated = if data.len() > MAX_PREVIEW {
-        format!(" (truncated, {} bytes total)", data.len())
-    } else {
-        String::new()
-    };
-    format!("text=\"{text}\" hex=[{hex}]{truncated}")
-}
-
 fn next_profile(current: TrafficProfile) -> TrafficProfile {
     match current {
         TrafficProfile::JsonRpc => TrafficProfile::HttpsBurst,
@@ -1453,7 +1313,7 @@ fn next_profile(current: TrafficProfile) -> TrafficProfile {
     }
 }
 
-async fn synthesize_nat64(ip: std::net::Ipv4Addr) -> std::net::Ipv6Addr {
+pub(crate) async fn synthesize_nat64(ip: std::net::Ipv4Addr) -> std::net::Ipv6Addr {
     // Well-known prefix (RFC 6052), used if discovery doesn't answer in time.
     let mut prefix = [0x00, 0x64, 0xff, 0x9b, 0, 0, 0, 0, 0, 0, 0, 0];
     // Bound the discovery lookup. This runs on exactly the networks that are

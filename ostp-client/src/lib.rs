@@ -1,6 +1,7 @@
 pub mod app;
 pub mod bridge;
 pub mod config;
+pub mod debug_preview;
 pub mod migrate;
 pub mod signal;
 pub mod sysproxy;
