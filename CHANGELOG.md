@@ -15,6 +15,7 @@ Older history is on the [Releases](https://github.com/ospab/ostp/releases) page 
 ### Changed
 - README (English and Russian) rewritten to match what the code actually does, with the current command list.
 - CONTRIBUTING: real project structure, no references to files on a developer's disk.
+- The wiki rewritten against the code: false claims removed, the TLS transport, subscriptions, panel, DNS and roaming described, and an honest section on limitations.
 
 ### Fixed
 - `ostp.wiki` is a proper submodule again (`.gitmodules` was missing).

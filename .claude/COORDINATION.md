@@ -21,4 +21,3 @@ on what. Keep it short and current.
 
 | Session / branch | Area (files) | What | Status |
 |---|---|---|---|
-| `claude/ostp-cert-validation-gr1dis` | `README*.md`, `CONTRIBUTING*.md`, `docs/`, `CHANGELOG*.md`, `SECURITY*.md`, `.github/ISSUE_TEMPLATE`, `.github/pull_request_template.md`, `.gitmodules`, `REBUILD_PLAN.md`, `icons/`, `ostp-gui/README.md`, `ostp-flutter/README.md`, `[package]` metadata in `*/Cargo.toml`; new `ostp/src/changelog_cmd.rs` + its registration in `ostp/src/main.rs` | Documentation pass; `ostp changelog` (`cl`) command | in progress |
