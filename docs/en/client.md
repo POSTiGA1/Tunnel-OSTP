@@ -54,9 +54,9 @@ The client is engineered to maintain persistence without requiring user interven
 
 To minimize latency and overhead for trusted resources, the OSTP client incorporates an integrated direct-routing bypass engine. This is configured inside the `"exclude"` block of the `config.json` file:
 
-- **`domains`**: A list of domain suffixes (e.g., `["trusted-site.com", "local.lan"]`). Traffic bound for these domains is instantly channeled via the default local gateway, bypassing encryption entirely.
+- **`domains`**: A list of domain suffixes (e.g., `["trusted-site.com", "local.lan"]`). Traffic bound for these domains is instantly channeled via the default local gateway, bypassing encryption entirely. Internationalized names (`пример.рф`) work: every name is compared in punycode (`xn--e1afmkfd.xn--p1ai`), the form DNS, TLS SNI and browsers use.
 - **`ips`**: A list of target subnet destinations in CIDR format (e.g., `["192.168.1.0/24", "10.0.0.0/8"]`), ensuring local area networks maintain full wire-speed throughput.
-- **`processes`**: A list of OS executable filenames (e.g., `["discord.exe", "steam.exe"]`). Applications specified here will automatically evade the VPN's virtual network driver (Windows only — matched via the owning process of a TCP connection through `GetExtendedTcpTable`).
+- **`processes`**: A list of executable names or parts of them (e.g., `["discord", "steam.exe"]`, case-insensitive). Every connection those programs open goes direct. The client finds a connection's program by its local address in the system socket tables: `GetExtendedTcpTable`/`GetExtendedUdpTable` (IPv4 and IPv6) on Windows, `/proc/net/{tcp,udp}{,6}` on Linux. It works in both modes: in TUN mode by the packet's source address, in proxy mode by the program's end of its connection to the local proxy (programs that honor the system proxy). The client's own sockets are never matched, so an entry like `ostp` cannot send the tunnel itself direct. Not available on Android, where per-app split tunneling does this.
 
 Exclusions are hot-reloadable: editing `config.json` while the client is running updates the active exclusion set without a reconnect.
 

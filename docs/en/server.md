@@ -34,6 +34,7 @@ To defend against man-in-the-middle adversaries intercepting and later replaying
 ### 3. Session and Trial Caps
 - Concurrent sessions are hard-capped (default 1,024); handshakes beyond the cap are silently dropped rather than evicting an existing session.
 - Sessions idle for 600 seconds (10 minutes — generous enough to survive typical mobile-NAT rebinding delays) are evicted from the dispatcher.
+- A TCP or TLS connection (UoT) that delivers no complete datagram for 5 minutes is closed. Clients send a keepalive every few seconds, so only dead or abandoned connections reach this; the session itself survives and can continue over a new connection. Behind a web server, the site OSTP writes times out after the same 5 minutes (`proxy_read_timeout 5m` for nginx, `timeout=300` for Apache).
 
 ---
 
@@ -52,7 +53,7 @@ The server treats IP:port coordinates as fluid, tracking sessions by `session_id
 
 An optional REST API (`api.rs`), enabled via the `api` block in `config.json`, exposes server status, per-user traffic statistics, and key management for building panels/dashboards (e.g. 3x-ui-style integrations):
 
-- **Authentication**: either a static Bearer `token` (also used for relay-node federation, below), or a username/password-hash login (`POST /login`) issuing a session token — comparisons are constant-time to avoid timing side-channels. If no token and no username/password-hash are configured, the API is open to whoever can reach the bind address — bind it to `127.0.0.1` and front it with a reverse proxy for anything internet-facing.
+- **Authentication**: either a static Bearer `token` (also used for relay-node federation, below), or a username/password-hash login (`POST /login`) issuing a session token — comparisons are constant-time to avoid timing side-channels. Without a sign-in (neither a token nor a username with a password hash) the API does not start at all, whatever the bind address: `127.0.0.1` is no protection, because every client reaches the server's loopback through the tunnel as `10.1.0.1`. An empty `"token": ""` counts as no token. `ostp panel enable` sets a sign-in.
 - **Endpoints** (mounted under the configured `webpath`): `GET /server/status`, `GET`/`PUT /server/config`, `GET`/`POST /users`, `GET`/`PUT`/`DELETE /users/{key}`, `PUT /users/{key}/limit`, `POST /users/{key}/reset`, `POST /users/bulk`, `GET`/`POST`/`DELETE /audit`, `GET`/`PUT /router/rules`, and `GET /subscribe/{key}` (no Bearer token needed — the access key itself authenticates the request, returning a ready-to-use client config or `ostp://` share link).
 - See the [Management API wiki page](https://github.com/ospab/ostp/wiki/Management-API) for the full request/response reference.
 
@@ -71,7 +72,26 @@ ostp panel disable
 
 `enable` does not turn on a panel without sign-in: it asks for a name and a password when they are missing. The password is never an argument (it would stay in shell history) and needs 8 or more characters. Every command keeps a copy of the config and restarts a running service (`--no-restart` to skip).
 
-Open the panel on the server at `http://127.0.0.1:9090/<webpath>/`, from elsewhere through an SSH tunnel (`ssh -L 9090:127.0.0.1:9090 user@server`) or over HTTPS on the domain when the built-in frontend holds 443 or the web server forwards the panel path (`ostp panel set --vhost`). `ostp panel status` lists every address that works.
+Open the panel on the server at `http://127.0.0.1:9090/<webpath>/`, from elsewhere through an SSH tunnel (`ssh -L 9090:127.0.0.1:9090 user@server`) or over HTTPS on the domain when the built-in frontend holds 443 or the web server forwards the panel path (`ostp panel set --vhost`). `ostp panel status` lists every address that works. A device connected through this server also reaches it at `http://10.1.0.1:<port>/<webpath>/`. The desktop and Android apps open it through their own SSH connection (*Server management → Management → Open the panel*), no open port needed. The panel's layout adapts to phone screens.
+
+---
+
+## Traffic statistics and `ostp manage`
+
+Every 30 seconds the server writes per-user traffic to `.ostp_stats.json` next to its config (readable by root only; written to a temporary file and renamed). The counters start from zero when the service starts.
+
+`ostp manage` (hidden from `--help`) prints the server's state and applies everyday changes as one JSON object, with `{"error": ...}` and exit code 1 on failure. Nothing asks questions, so it runs without a terminal: this is what the desktop and Android apps run over SSH.
+
+| Command | What it does |
+|---|---|
+| `ostp manage install [--port N] [--host H] [--user NAME]` | First install: writes a server config with one user, opens the port in ufw or firewalld if one is active, registers and starts the service. On a configured server only makes sure the service runs |
+| `ostp manage status` | Version, service state, sessions, users, listen address, TLS domain and certificate, subscriptions, panel, and the system: OS, load, memory, disk |
+| `ostp manage users` | Every user with links, subscription URL and traffic |
+| `ostp manage user-add NAME`, `user-remove WHO`, `user-rename WHO NAME` | WHO is a number (as in `ostp links`), a name or a key. The running server picks up the change from the file; the last user cannot be removed |
+| `ostp manage logs [-n N]` | The service log's last lines |
+| `ostp manage restart` | Restarts the service, reports whether it stayed up |
+
+`install.sh -y [-b beta] [--port N] [--host H] [--user NAME]` installs without the setup wizard and runs `ostp manage install` on a first install.
 
 ---
 

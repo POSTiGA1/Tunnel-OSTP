@@ -9,14 +9,16 @@ OSTP (Ospab Stealth Transport Protocol) is a high-performance, asynchronous netw
 The Cargo workspace is modularized into the following crates:
 
 1. **ostp-core**: The protocol engine. Contains the `ProtocolMachine` state machine, Noise handshake driving, AEAD framing, header obfuscation, adaptive padding, the `RelayMessage` application-multiplexing layer, and the BBR-inspired congestion controller. Fully `sans-io` — no networking of its own.
-2. **ostp-client**: The client daemon. Runs a dual-mode SOCKS5/HTTP inbound proxy and/or a TUN virtual adapter, drives NAT/exclusion logic, and maintains the encrypted session (including reconnection and roaming) to the remote server.
+2. **ostp-client**: The client daemon. Runs a dual-mode SOCKS5/HTTP inbound proxy and/or a TUN virtual adapter, drives NAT/exclusion logic, and maintains the encrypted session to the remote server, moving it to a new socket of the same transport when the network changes (roaming).
 3. **ostp-server**: The high-concurrency dispatcher. Demultiplexes inbound datagrams by session ID, terminates sessions, handles IP roaming, proxies decrypted traffic to the open internet, and hosts the optional Management API, built-in DNS resolver, and TCP fallback listener.
 4. **ostp-tun**: Platform TUN-adapter bindings (Windows/Wintun, Linux, macOS) shared by the client and the GUI helper.
 5. **ostp-tun-helper**: A small, separately-privileged process the desktop GUI launches to create/own the TUN adapter, so the GUI itself doesn't need to run elevated.
-6. **ostp-jni**: Android JNI bindings (`OstpClientSdk` native methods: start/stop client, metrics, logs) that embed the client engine inside the Flutter/Android app via an isolated Tokio runtime.
-7. **ostp**: The unified CLI binary — runs the engine in server, client, or relay mode, and hosts the `setup`/`init`/`gk`/`links`/`connect`/`migrate`/`update` subcommands (see [`client.md`](client.md) / [`server.md`](server.md)).
+6. **ostp-jni**: Android JNI bindings (`OstpClientSdk` native methods: start/stop client, metrics, logs, prober, subscriptions, server management) that embed the client engine inside the Flutter/Android app via isolated Tokio runtimes.
+7. **ostp-dns**: The filtering DNS resolver the server runs for its clients (block lists, rules, rewrites, cache).
+8. **ostp-ssh**: The SSH client both apps use to install OSTP on a server and manage it: password or key sign-in, a pinned host key, commands as root, a local port forward to the web panel, and the saved-servers list with sealed secrets (see [`integrations.md`](integrations.md#your-own-server-from-the-apps)).
+9. **ostp**: The unified CLI binary — runs the engine in server, client, or relay mode, and hosts the `setup`/`init`/`gk`/`links`/`connect`/`migrate`/`update`/`cert`/`sub`/`panel`/`dns`/`manage`/`changelog` subcommands (see [`client.md`](client.md) / [`server.md`](server.md)).
 
-Two further application shells consume these crates but live outside the Cargo workspace: **ostp-gui** (a Tauri desktop app, Windows-focused) and **ostp-flutter** (the cross-platform mobile app, Android via `ostp-jni`). See [`integrations.md`](integrations.md).
+Two further application shells consume these crates but live outside the Cargo workspace: **ostp-gui** (a Tauri desktop app for Windows and Linux) and **ostp-flutter** (the cross-platform mobile app, Android via `ostp-jni`). See [`integrations.md`](integrations.md).
 
 ---
 
@@ -89,7 +91,8 @@ Details in the [specification, §9.6](specification.md). Looking a session up fo
 
 Beyond the dispatcher/ARQ core, `ostp-server` hosts several optional subsystems, each independently configurable — see [`server.md`](server.md) for details:
 
-- **Management API** (`api.rs`): REST API for stats, user/key CRUD, traffic limits, audit log, and router rules, authenticated by Bearer token or a password-hash-backed session login.
+- **Management API** (`api.rs`): REST API for stats, user/key CRUD, traffic limits, audit log, and router rules, authenticated by Bearer token or a password-hash-backed session login; it does not start without one of them.
+- **Traffic statistics file**: per-user traffic written next to the config every 30 seconds, read by `ostp manage` (what the apps run over SSH).
 - **DNS resolver** (`dns.rs`): AdBlock-list filtering and DNS-over-HTTPS forwarding for tunneled clients, with a rate-limited reply path.
 - **Fallback listener** (`fallback.rs`): pipes unauthenticated TCP connections (DPI probes, scanners) through to a real backend (e.g. local nginx), so an active probe sees an ordinary website instead of a closed or anomalous port.
 - **Outbound chaining** (`outbound.rs`): optional egress through an upstream SOCKS5/HTTP proxy, with per-rule (domain suffix / CIDR / protocol) routing to proxy, direct, or block.

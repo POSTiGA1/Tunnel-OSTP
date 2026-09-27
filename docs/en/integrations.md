@@ -4,19 +4,45 @@
 The OSTP core protocol (`ostp-core`) is `sans-io` and completely platform-agnostic. Each host application links it and supplies the actual networking, TUN adapter, and UI — described below.
 
 ## Mobile: Flutter App + Android JNI Bindings
-`ostp-flutter` is the cross-platform mobile app (Flutter, Android today). It embeds the Rust client engine on Android through `ostp-jni`, a dedicated crate exporting a small C-ABI/JNI surface (`Java_net_ostp_client_OstpClientSdk_*`: start/stop the client, fetch metrics, fetch logs, push a log line, notify of a network change) consumed by the app's Kotlin layer (`OstpClientSdk.kt`, `OstpVpnService.kt`).
+`ostp-flutter` is the cross-platform mobile app (Flutter, Android today). It embeds the Rust client engine on Android through `ostp-jni`, a dedicated crate exporting a small JNI surface (`Java_net_ostp_client_OstpClientSdk_*`) consumed by the app's Kotlin layer (`OstpClientSdk.kt`, `OstpVpnService.kt`, `MainActivity.kt`): start/stop the client, metrics, logs, network changes, the prober, subscriptions, update checks, and `serversCall` for server management (below).
 
-- **Isolated runtime**: `ostp-jni` spins up and owns its own multithreaded Tokio runtime inside the host process, so tunnel I/O never blocks the Android UI thread.
-- **Telemetry bridge**: metrics and logs are polled across the JNI boundary through plain, memory-safe getter calls rather than a push channel, keeping the FFI surface small.
+- **Isolated runtime**: `ostp-jni` owns its own multithreaded Tokio runtimes inside the host process, so tunnel I/O never blocks the Android UI thread. Every blocking call is made from a background thread on the Kotlin side.
+- **Telemetry bridge**: metrics, logs and the output of running server commands are polled across the JNI boundary through plain getter calls rather than a push channel, keeping the FFI surface small.
+- **Split tunneling** is per app (Android's `VpnService` allow/deny lists); process-name exclusions do not exist on Android.
 
 ## Desktop GUI
-`ostp-gui` is a Tauri v2 desktop application (Windows-focused today) that drives the same client engine through its own bridge layer, offering system-proxy and TUN modes, share-link import, and exclusion management. See the [GUI Client wiki page](https://github.com/ospab/ostp/wiki/GUI-Client).
+`ostp-gui` is a Tauri v2 desktop application (Windows and Linux) that drives the same client engine in-process for proxy mode and through a helper for TUN mode. It has one dark theme and two buttons in the top bar: the network prober and settings.
 
 ### Privilege separation for TUN
-Creating a TUN adapter requires elevated privileges; running the whole GUI elevated is undesirable. Instead, TUN setup is delegated to `ostp-tun-helper`, a small standalone process the GUI launches and talks to over a local command channel (start/stop with a config + auth token) — only that helper, not the GUI, needs to run elevated. The actual adapter creation code (Windows/Wintun, Linux, macOS) lives in the shared `ostp-tun` crate, used by both the helper and the CLI's own native TUN path (see [`client.md`](client.md)).
+Creating a TUN adapter requires elevated privileges; running the whole GUI elevated is undesirable. Instead, TUN setup is delegated to `ostp-tun-helper`, a small standalone process the GUI launches and talks to over a local command channel (start/stop with a config + auth token) — only that helper, not the GUI, needs to run elevated (UAC on Windows, polkit/pkexec on Linux). The actual adapter creation code lives in the shared `ostp-tun` crate, used by both the helper and the CLI's own native TUN path (see [`client.md`](client.md)).
+
+## Your own server from the apps
+
+Both apps can install OSTP on a VPS and manage it afterwards, for people who have bought a server and do not want to learn Linux. The SSH work is done by the `ostp-ssh` crate, shared by the desktop app (Tauri commands in `ostp-gui/src-tauri/src/servers.rs`) and Android (`serversCall` in `ostp-jni`).
+
+**First run.** When the app has no profiles or subscriptions it opens on *Let's get started*:
+- *I have a link*: an `ostp://` link or a subscription URL (on Android also by QR code).
+- *I have a server*: address, SSH port, login, and a password or a private key (OpenSSH, PEM or PuTTY `.ppk`, with its passphrase). The app connects, checks the system (architecture, systemd, root or sudo), downloads the install script for its own release channel (`master`, `beta` or `alpha`) and runs `install.sh -y`, which installs OSTP, writes a config with one user and starts the service. The first user's links become profiles in the app. Every step and the server's output are shown as it runs.
+
+**Server management** (*Settings → Server management*), per server:
+- *Status*: service state, version, running time, connected sessions, users, OS, load, memory, disk; restart and update OSTP.
+- *Users*: add, rename, revoke; traffic since the service started and who is online; add a user's links to this app; share as a QR code.
+- *Connection*: UDP/TCP port, TLS on 443 with the domain and certificate expiry, getting a certificate (`ostp cert issue`), subscriptions on or off.
+- *Management*: the web panel (turn on with a sign-in, open, turn off), the server log, the SSH host key, rename, reboot, uninstall OSTP, forget the server.
+
+Changes that restart the service are refused while this device's VPN goes through the same server, since the answer would never arrive.
+
+**How it talks to the server.** Everything runs over one SSH connection per server, kept open while the app runs. Commands run as root: directly when signed in as root, otherwise through `sudo -S` with the sign-in password on stdin, so it never appears on a command line. State and changes go through `ostp manage` (JSON, see [`server.md`](server.md#traffic-statistics-and-ostp-manage)); longer operations (install, update, certificate) stream their output line by line.
+
+**Opening the web panel.** The app forwards a local port on `127.0.0.1` to the panel's port on the server's loopback through the SSH connection and opens it in the browser (an in-app browser tab on Android, so the app stays in the foreground and the forward alive). No port has to be opened on the server. The app also shows the panel's address through the VPN, `http://10.1.0.1:<port>/<webpath>/`, which works in any browser on a device connected through that server.
+
+**Security.**
+- The server's SSH host key is pinned by its SHA-256 fingerprint on the first connection; a different key later is refused ("host key changed"), not silently accepted.
+- A password or key is kept only when the user asks. It is sealed with ChaCha20-Poly1305 in `servers.json` under a random 32-byte master key; the master key lives in the system credential store (Windows Credential Manager, Secret Service on Linux, the Android Keystore wraps it on Android). Without a usable store nothing secret is written and the app asks at each connection.
+- The app runs only a fixed set of commands on the server (`ostp manage` subcommands, update, restart, reboot, uninstall, panel, certificate, subscriptions); the page cannot send arbitrary shell.
 
 ## System Interfaces
 On desktop, platform-specific modules handle host integration:
-- **Windows system proxy** (`sysproxy.rs`): writes/restores WinINet proxy registry values for zero-configuration browser proxying.
+- **Windows system proxy** (`sysproxy.rs`): writes/restores WinINet proxy registry values for zero-configuration browser proxying; excluded domains go into its bypass list in both punycode and readable form.
 - **TUN adapters** (`ostp-tun`): Wintun on Windows, native TUN devices on Linux/macOS; a userspace `netstack-smoltcp` stack reconstructs TCP/UDP flows from the raw IP packets the adapter delivers.
-- **Process-based exclusion** (Windows): matches a local TCP connection back to its owning process via `GetExtendedTcpTable`, so per-process bypass rules (§[`client.md`](client.md)) can be enforced without a kernel driver.
+- **Process-based exclusion** (`process_lookup.rs`): finds the program behind a local socket through `GetExtendedTcpTable`/`GetExtendedUdpTable` on Windows and `/proc/net` on Linux, in both TUN and proxy mode, so per-process bypass rules (§[`client.md`](client.md)) work without a kernel driver.

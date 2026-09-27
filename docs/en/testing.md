@@ -19,7 +19,9 @@ Run by CI or by the developer before the manual run.
 | A-02 | `cargo test -p ostp --bin ostp` (nginx/apache/caddy templates, CLI) | green | P1 |
 | A-03 | `cargo test -p ostp-jni` (every Kotlin `external fun` has a JNI export) | green | P1 |
 | A-04 | `flutter analyze lib` | no `error` | P1 |
-| A-05 | `node --check ostp-gui/src/main.js` | no errors | P1 |
+| A-05 | `node --check ostp-gui/src/main.js` and `servers.js` | no errors | P1 |
+| A-05a | `flutter test test/servers_ui_test.dart` (first-run and server screens on a phone-sized view) | green, no overflow errors | P1 |
+| A-05b | `sudo cargo test -p ostp-ssh --test sshd -- --ignored --test-threads=1` on a throwaway machine with sshd (with `OSTP_BIN=target/debug/ostp` for the manager test) | green: key and password sign-in, sudo, host-key change refused, port forward, `ostp manage` over SSH | P2 |
 | A-06 | `cargo tree -i aws-lc-sys` at the root and in `ostp-gui/src-tauri` | empty | P1 |
 | A-07 | Release build on GHA | every job green, 21 files in the release | P1 |
 
@@ -46,6 +48,9 @@ Run by CI or by the developer before the manual run.
 | S-07 | Add a key to `config.json` of a running server | within ~5 s the new key connects, no restart | P1 |
 | S-08 | `ostp links` and `ostp links qr` | TLS/UDP links and SUB (when subscriptions are on) per client; in qr mode one QR on screen: ← → switch SUB / TLS / UDP, ↑ ↓ or Enter switch clients, `q` quits; redirected to a file (`> qr.txt`) every client is printed | P1 |
 | S-09 | Scan a QR from `ostp links qr` with a phone | the app imports the profile or the subscription | P1 |
+| S-09a | `install.sh -y -b beta` on a clean VPS as root | installs without questions, the last line is JSON with one user and its links, the service is active, the port is open in ufw/firewalld if one is on | P1 |
+| S-09b | `ostp manage status`, `users`, `user-add phone`, `user-rename 2 tablet`, `user-remove tablet`, `logs -n 20` | each prints one JSON object; the added user connects within ~5 s without a restart; removing the last user is refused with `{"error": ...}` | P1 |
+| S-09c | `.ostp_stats.json` next to the config after a client moved traffic for a minute | exists, mode 600, the user's bytes grow; `ostp manage users` shows them | P2 |
 
 ### 2.2 Carriers
 
@@ -56,6 +61,7 @@ Run by CI or by the developer before the manual run.
 | S-12 | UoT with junk packets and TCP fragmentation | connects | P2 |
 | S-13 | Relay: `ostp init relay`, client goes through the relay | traffic flows, the relay holds no keys | P2 |
 | S-14 | Client with a wrong key | no connection, the server stays up, no key in clear in the log | P1 |
+| S-15 | A TCP/TLS client that goes silent (kill it with the network, not gracefully) | the server closes its connection within 5 minutes; a normal idle client stays connected | P2 |
 
 ### 2.3 Domain and TLS, built-in frontend
 
@@ -127,9 +133,10 @@ Repeat for nginx, apache (Debian and RHEL) and caddy.
 | S-70 | Routing: change rules, save | applied at once, written to the config; invalid JSON is rejected | P2 |
 | S-71 | Configuration: change and save | file written, restart warning shown; invalid JSON is not saved | P2 |
 | S-72 | Activity | every panel action is listed, Clear works | P2 |
-| S-73 | Switch language and theme, open on a phone | everything translated, the light theme is readable, the narrow layout holds | P2 |
+| S-73 | Switch language and theme, open on a phone (360–414 px wide) | everything translated, the light theme is readable; no page scrolls sideways, users are cards, the top bar is one row of icons | P2 |
+| S-74 | Enable the API in the config without a sign-in (no token, no password), start the server | the panel does not start, the log says how to set a sign-in; with `"token": ""` a request with an empty `Authorization` header is refused | P1 |
 
-## 3. Desktop GUI (Windows)
+## 3. Desktop GUI (Windows, Linux)
 
 | # | Steps | Expected | Prio |
 |---|---|---|---|
@@ -145,13 +152,23 @@ Repeat for nginx, apache (Debian and RHEL) and caddy.
 | G-10 | Remove a subscription | it and its profiles are gone, manual profiles stay | P1 |
 | G-11 | Connect over UDP, UoT, TLS (built-in and through nginx) | connects, traffic flows, speed and RTT shown | P1 |
 | G-12 | TUN mode (with and without wintun.dll) | works with the driver, shows the instructions without it | P1 |
-| G-13 | Kill switch, domain/IP/process exclusions, MUX, MTU | work; changes while connected apply by hot reload | P2 |
+| G-13 | Kill switch, domain/IP exclusions, MUX, MTU | work; changes while connected apply by hot reload | P2 |
+| G-13a | Exclude a program (e.g. `chrome`) in proxy mode and in TUN mode | that program's traffic goes direct (its IP on a what-is-my-IP site is the home one), others go through the tunnel; with debug on the log shows `BYPASS (process …)` | P1 |
+| G-13b | Exclude `госуслуги.рф` | the site goes direct in proxy and TUN mode | P2 |
 | G-14 | Network check → Check server on a UDP profile | address × carrier table with RTT, a verdict line | P1 |
 | G-15 | The same on a TLS profile | only TLS on the profile's port is probed | P1 |
 | G-16 | Path scan (TTL) after the server check | a TTL row with answers marked, and a verdict | P2 |
 | G-17 | Network DPI test | list of checks and a verdict, ~10 s | P1 |
 | G-18 | Checks while the VPN is connected | run, the tunnel stays up | P2 |
-| G-19 | Autostart, auto-connect, tray, themes | work | P2 |
+| G-19 | Autostart, auto-connect, tray | work; the top bar has only the prober and settings buttons, there is no theme switch | P2 |
+| G-20 | First run (no profiles): *I have a link* with an `ostp://` link and with a subscription | the profile or subscription is added, the main screen opens; *Skip* opens it too and the screen does not come back | P1 |
+| G-21 | First run: *I have a server* with a root password on a clean VPS | steps tick off one by one, the server output is visible, the new profile connects | P1 |
+| G-22 | The same with a private key (OpenSSH, with a passphrase) and with a non-root sudo user | installs; a wrong password or key gives a clear error and the server is not saved | P1 |
+| G-23 | Reinstall the VPS (new host key), open the server in the app | refused with "host key changed", nothing runs | P1 |
+| G-24 | *Server management*: Status, Users (add, rename, revoke, add to app, QR), Connection, Management (log) | match `ostp manage` on the server; a revoked key stops connecting | P1 |
+| G-25 | Turn on the panel from the app, *Open the panel* | the panel opens in the browser through SSH, with no port open on the server; the VPN address is shown | P1 |
+| G-26 | Restart, update or reboot while connected through that server | refused with "Disconnect first"; after disconnecting it works | P2 |
+| G-27 | "Remember" off, restart the app, open the server | the password or key is asked for; with it on it is not; `servers.json` holds no secret in clear | P2 |
 
 ## 4. Android
 
@@ -169,6 +186,10 @@ Repeat for nginx, apache (Debian and RHEL) and caddy.
 | M-10 | Prober: server check | results, no "No implementation found" error | P1 |
 | M-11 | Prober: TTL and DPI battery, also while connected | results, the app does not hang | P1 |
 | M-12 | Share a profile | QR and link | P2 |
+| M-13 | First run: link, QR, subscription, and *I have a server* (password and key) | as G-20 – G-22 | P1 |
+| M-14 | *Settings → Server Management*: every tab, as G-24 | works on a 360 dp wide screen, nothing cut off | P1 |
+| M-15 | *Open the panel* | opens in an in-app browser tab through SSH; the VPN address opens in Chrome while connected through the server | P1 |
+| M-16 | Close and reopen the app with a remembered server; clear the app's data | no password asked / the servers list is empty and nothing crashes | P2 |
 
 ## 5. CLI client
 
