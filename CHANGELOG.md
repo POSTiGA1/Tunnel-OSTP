@@ -8,6 +8,8 @@ Older history is on the [Releases](https://github.com/ospab/ostp/releases) page 
 
 ## [Unreleased]
 
+## [0.4.6-beta.6] - 2026-09-27
+
 ### Added
 - `ostp changelog` (`ostp cl`): shows what changed in the installed version; `--all`, `--last N`, `--version X` and `--lang en|ru`.
 - This changelog, `SECURITY.md`, issue and pull request templates, and a documentation index in `docs/README.md`.

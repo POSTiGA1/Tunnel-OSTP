@@ -8,6 +8,8 @@
 
 ## [Не выпущено]
 
+## [0.4.6-beta.6] - 2026-09-27
+
 ### Добавлено
 - `ostp changelog` (`ostp cl`): что изменилось в установленной версии; ключи `--all`, `--last N`, `--version X` и `--lang en|ru`.
 - Этот журнал изменений, `SECURITY.ru.md`, шаблоны issue и pull request, оглавление документации в `docs/README.md`.
