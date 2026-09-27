@@ -168,6 +168,34 @@ impl Store {
             Auth::Key { text, passphrase } => (AuthKind::Key, text.as_str(), passphrase.as_deref()),
         };
         let keep = remember && vault.can_remember();
+
+        // The same login on the same machine is one server: adding it again
+        // (a retried install, the first-run screen after "Add server") updates
+        // the saved sign-in instead of listing it twice. A different host key
+        // is not quietly accepted: either the server was reinstalled or
+        // someone is in the middle, and the user has to decide which.
+        if let Some(existing) = self
+            .servers
+            .iter_mut()
+            .find(|s| s.host.eq_ignore_ascii_case(&target.host) && s.port == target.port && s.user == target.user)
+        {
+            if existing.host_key != host_key {
+                bail!(
+                    "{}@{}:{} is already in the list with a different host key. If the server was reinstalled, \
+                     forget it in the list and add it again",
+                    target.user,
+                    target.host,
+                    target.port
+                );
+            }
+            existing.auth = kind;
+            existing.secret = if keep { vault.seal(secret) } else { None };
+            existing.passphrase = if keep { passphrase.filter(|p| !p.is_empty()).and_then(|p| vault.seal(p)) } else { None };
+            let info = ServerInfo::from(&*existing);
+            self.save()?;
+            return Ok(info);
+        }
+
         let server = Server {
             id: format!("{:016x}", rand::random::<u64>()),
             name: if name.trim().is_empty() { target.host.clone() } else { name.trim().to_string() },
@@ -271,6 +299,31 @@ mod tests {
         assert_eq!(Store::load(&path).unwrap().list()[0].name, "Amsterdam");
         store.remove(&info.id).unwrap();
         assert!(Store::load(&path).unwrap().list().is_empty());
+        std::fs::remove_file(path).unwrap();
+    }
+
+    #[test]
+    fn adding_the_same_login_again_keeps_one_entry() {
+        let path = temp_path();
+        let vault = Vault::new(Some(Vault::random_key()));
+        let mut store = Store::load(&path).unwrap();
+        let first = store.add(&vault, "vps", &target(), &Auth::Password("old".into()), "SHA256:x", true).unwrap();
+        let upper = Target { host: "203.0.113.5".to_uppercase(), ..target() };
+        let again = store.add(&vault, "", &upper, &Auth::Password("new".into()), "SHA256:x", true).unwrap();
+        assert_eq!(first.id, again.id);
+        assert_eq!(store.list().len(), 1);
+        assert_eq!(store.list()[0].name, "vps");
+        assert!(matches!(store.auth(&vault, &first.id, None).unwrap(), Auth::Password(p) if p == "new"));
+
+        // Another login on the same machine is another entry.
+        let admin = Target { user: "admin".into(), ..target() };
+        store.add(&vault, "", &admin, &Auth::Password("p".into()), "SHA256:x", true).unwrap();
+        assert_eq!(store.list().len(), 2);
+
+        // A changed host key is refused, not silently accepted.
+        let err = store.add(&vault, "", &target(), &Auth::Password("p".into()), "SHA256:other", true).unwrap_err();
+        assert!(err.to_string().contains("different host key"), "{err}");
+        assert_eq!(store.list().len(), 2);
         std::fs::remove_file(path).unwrap();
     }
 }

@@ -327,8 +327,14 @@ class _ServerScreenState extends State<ServerScreen> {
       final name = newName.text.trim();
       if (name.isEmpty) return;
       try {
-        await _manage(['user-add', name]);
+        final r = await _manage(['user-add', name]);
         _toast('User $name added');
+        // The new user may be for someone else: "Not now" leaves the app as is.
+        final user = r['user'];
+        if (user is Map<String, dynamic> && mounted) {
+          final n = await ServersApi.addUserToApp(context, widget.prefs, _server['name'] as String, user, cancelLabel: 'Not now');
+          if (n != null && n > 0) _toast('Added $n profile(s)');
+        }
         _refresh();
       } catch (e) {
         _toast(e.toString(), error: true);
@@ -371,8 +377,8 @@ class _ServerScreenState extends State<ServerScreen> {
               tooltip: 'Add to this app',
               icon: const Icon(Icons.download, size: 20),
               onPressed: () async {
-                final n = await ServersApi.importUsers(widget.prefs, _server['name'] as String, [u]);
-                _toast(n > 0 ? 'Added $n profile(s)' : 'Already in the app');
+                final n = await ServersApi.addUserToApp(context, widget.prefs, _server['name'] as String, u);
+                if (n != null) _toast(n > 0 ? 'Added $n profile(s)' : 'Already in the app');
               },
             ),
             IconButton(tooltip: 'Share', icon: const Icon(Icons.qr_code, size: 20), onPressed: () => _share(name, u)),
@@ -592,8 +598,9 @@ class _ServerScreenState extends State<ServerScreen> {
   /// this server opens it, no SSH needed.
   Widget _vpnPanelLink(Map<String, dynamic> panel) {
     final port = (panel['bind'] as String? ?? '').split(':').last;
+    // An empty webpath means /panel/ (servers older than 0.4.6 report it empty).
     final path = (panel['webpath'] as String? ?? '').replaceAll(RegExp(r'^/+|/+$'), '');
-    final url = 'http://10.1.0.1:$port/${path.isEmpty ? '' : '$path/'}';
+    final url = 'http://10.1.0.1:$port/${path.isEmpty ? 'panel' : path}/';
     return Card(
       margin: const EdgeInsets.only(bottom: 4),
       child: ListTile(

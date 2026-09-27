@@ -167,6 +167,17 @@ void main() {
     expect(find.text('http://10.1.0.1:9191/secret/'), findsOneWidget);
   });
 
+  testWidgets('an empty webpath is the default /panel/, not the site root', (tester) async {
+    await phone(tester);
+    panelState = {'enabled': true, 'bind': '127.0.0.1:9090', 'webpath': '', 'login': true};
+    addTearDown(() => panelState = {'enabled': false, 'bind': '127.0.0.1:9090', 'webpath': '', 'login': false});
+    await tester.pumpWidget(MaterialApp(home: ServerScreen(prefs: await prefs(), server: _server)));
+    await tester.pumpAndSettle();
+    await tester.tap(find.widgetWithText(Tab, 'Management'));
+    await tester.pumpAndSettle();
+    expect(find.text('http://10.1.0.1:9090/panel/'), findsOneWidget);
+  });
+
   testWidgets('servers list opens a server', (tester) async {
     await phone(tester);
     await tester.pumpWidget(MaterialApp(home: ServersScreen(prefs: await prefs())));

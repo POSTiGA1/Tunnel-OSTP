@@ -301,7 +301,11 @@ impl Manager {
         }
         let bind = panel["bind"].as_str().unwrap_or("127.0.0.1:9090");
         let remote_port: u16 = bind.rsplit(':').next().and_then(|p| p.parse().ok()).context("the panel has no port")?;
-        let webpath = panel["webpath"].as_str().unwrap_or("").trim_matches('/').to_string();
+        // An empty webpath means /panel/: that is where ostp-server serves it.
+        let webpath = match panel["webpath"].as_str().unwrap_or("").trim_matches('/') {
+            "" => "panel".to_string(),
+            w => w.to_string(),
+        };
         let local = match self.panels.lock().await.get(id).copied() {
             Some(p) => p,
             None => {
@@ -311,7 +315,7 @@ impl Manager {
                 p
             }
         };
-        Ok(if webpath.is_empty() { format!("http://127.0.0.1:{local}/") } else { format!("http://127.0.0.1:{local}/{webpath}/") })
+        Ok(format!("http://127.0.0.1:{local}/{webpath}/"))
     }
 }
 

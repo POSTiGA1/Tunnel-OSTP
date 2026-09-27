@@ -289,7 +289,12 @@ fn status(config_path: &Path) -> Result<Value> {
         "panel": {
             "enabled": api["enabled"].as_bool().unwrap_or(false),
             "bind": str_of("bind"),
-            "webpath": str_of("webpath"),
+            // The path the panel is actually served at: an empty webpath
+            // means /panel/ (ostp-server's api.rs), not the site root.
+            "webpath": match str_of("webpath").trim_matches('/') {
+                "" => "panel".to_string(),
+                w => w.to_string(),
+            },
             "login": !str_of("username").is_empty() && !str_of("password_hash").is_empty(),
         },
         "system": system_info(),

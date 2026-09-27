@@ -943,6 +943,18 @@ textarea.field-input {
 .choice-title { font-size: 0.9rem; font-weight: 700; }
 .choice-hint { font-size: 0.72rem; color: var(--c-txt-2); margin-top: 2px; }
 .choice-actions { display: flex; gap: 8px; justify-content: flex-end; margin-top: 10px; }
+/* Step 1 of the first-run screen and the choice dialog: whole-card buttons */
+.choice-pick {
+  display: flex; align-items: center; gap: 12px; width: 100%;
+  text-align: left; color: var(--c-txt-1); font: inherit; cursor: pointer;
+  transition: border-color .15s, background .15s;
+}
+.choice-pick:hover { border-color: var(--c-txt-2); }
+.choice-pick > svg:first-child { flex-shrink: 0; }
+.choice-body { flex: 1; min-width: 0; }
+.choice-chevron { flex-shrink: 0; color: var(--c-txt-2); }
+.choice-options { display: flex; flex-direction: column; margin-top: 12px; }
+.choice-options .choice-pick { padding: 12px; margin-bottom: 8px; }
 textarea.field-input { resize: vertical; min-height: 38px; line-height: 1.4; padding-top: 9px; padding-bottom: 9px; }
 
 /* SSH form */

@@ -458,8 +458,20 @@ function finishWelcome() {
   showScreen('home');
 }
 
+// Step 1 picks "link" or "server"; step 2 is that page alone.
+function welcomeStep(step) {
+  document.querySelectorAll('#welcome-screen [data-welcome]').forEach(el => {
+    el.style.display = el.dataset.welcome === step ? '' : 'none';
+  });
+  $('btn-welcome-back').style.visibility = step === 'choose' ? 'hidden' : 'visible';
+  if (step === 'link') $('welcome-link').focus();
+}
+
 function setupWelcome() {
   $('btn-welcome-skip').addEventListener('click', finishWelcome);
+  $('btn-welcome-back').addEventListener('click', () => welcomeStep('choose'));
+  document.querySelectorAll('#welcome-screen [data-go]').forEach(b =>
+    b.addEventListener('click', () => welcomeStep(b.dataset.go)));
   $('btn-welcome-paste').addEventListener('click', async () => {
     try { $('welcome-link').value = (await navigator.clipboard.readText()).trim(); }
     catch { showToast('Clipboard is not available; paste with Ctrl+V', 'error'); }
@@ -824,12 +836,18 @@ function applySubscription(sub, doc) {
     return { ...(prev || {}), ...l, id: prev ? prev.id : genId(), sub_id: sub.id,
              name: l.name || `${sub.name} · ${carrierOf(l).toUpperCase()}` };
   });
+  // Profiles added by hand for the same key and carrier are what this
+  // subscription now provides: keep one copy, the subscription's.
+  const covered = p => !p.sub_id && fresh.some(f => f.key === p.key && f.server === p.server && carrierOf(f) === carrierOf(p));
+  const replaced = profiles.find(p => p.id === activeId && covered(p));
+  profiles = profiles.filter(p => !covered(p));
   const at = profiles.findIndex(p => p.sub_id === sub.id);
   profiles = profiles.filter(p => p.sub_id !== sub.id);
   profiles.splice(at >= 0 ? at : profiles.length, 0, ...fresh);
 
-  if (activeOld) {
-    const same = fresh.find(p => carrierOf(p) === carrierOf(activeOld)) || fresh[0];
+  if (activeOld || replaced) {
+    const was = activeOld || replaced;
+    const same = fresh.find(p => carrierOf(p) === carrierOf(was)) || fresh[0];
     activeId = same.id;
   } else if (!activeId || !profiles.some(p => p.id === activeId)) {
     activeId = fresh[0].id;
@@ -1298,7 +1316,15 @@ window.addEventListener('DOMContentLoaded', async () => {
   btnConnect.addEventListener('click', handleToggle);
   btnGoSettings.addEventListener('click', () => showScreen('settings'));
   $('btn-go-servers').addEventListener('click', () => showScreen('servers'));
-  initServers({ invoke, showToast, showScreen, escHtml, importLinks, connectedThrough, showShare });
+  initServers({
+    invoke, showToast, showScreen, escHtml, importLinks, connectedThrough, showShare,
+    // Resolves to the subscription's profile count, 0 when it did not work.
+    addSubscription: async url => {
+      await addSubscription(url);
+      const sub = loadSubs().find(s => s.url === url);
+      return sub ? profiles.filter(p => p.sub_id === sub.id).length : 0;
+    },
+  });
   setupWelcome();
   btnBack.addEventListener('click', () => showScreen('home'));
   $('btn-go-prober').addEventListener('click', () => showScreen('prober'));

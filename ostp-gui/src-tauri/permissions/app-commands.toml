@@ -21,5 +21,14 @@ allow = [
   "run_prober_ttl",
   "run_dpi_battery",
   "app_build_tag",
-  "check_updates"
+  "check_updates",
+  "servers_list",
+  "server_add",
+  "server_rename",
+  "server_remove",
+  "server_probe",
+  "server_install",
+  "server_manage",
+  "server_action",
+  "server_open_panel"
 ]

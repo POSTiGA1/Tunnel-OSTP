@@ -7,6 +7,7 @@ import 'package:shared_preferences/shared_preferences.dart';
 
 import '../models/ostp_profile.dart';
 import '../models/share_link.dart';
+import '../models/subscription.dart';
 
 /// Servers the app installs and manages over SSH. The work is done by the
 /// native core (crate ostp-ssh through ostp-jni's `serversCall`); this is the
@@ -148,6 +149,51 @@ class ServersApi {
     }
     if (added > 0) await prefs.setString('profiles_json', encodeProfiles(profiles));
     return added;
+  }
+
+  /// A choice between whole-card options; null when cancelled.
+  static Future<String?> choose(BuildContext context, String title, String? text,
+      List<(String value, String title, String hint)> options, {String cancelLabel = 'Cancel'}) {
+    return showDialog<String>(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        title: Text(title),
+        content: Column(mainAxisSize: MainAxisSize.min, crossAxisAlignment: CrossAxisAlignment.stretch, children: [
+          if (text != null) Padding(padding: const EdgeInsets.only(bottom: 12), child: Text(text)),
+          for (final o in options)
+            Card(
+              margin: const EdgeInsets.only(bottom: 8),
+              child: ListTile(
+                title: Text(o.$2, style: const TextStyle(fontWeight: FontWeight.w600)),
+                subtitle: Text(o.$3, style: const TextStyle(fontSize: 12)),
+                trailing: const Icon(Icons.chevron_right),
+                onTap: () => Navigator.pop(ctx, o.$1),
+              ),
+            ),
+        ]),
+        actions: [TextButton(onPressed: () => Navigator.pop(ctx), child: Text(cancelLabel))],
+      ),
+    );
+  }
+
+  /// Adds one user to this app: as a subscription (profiles that follow the
+  /// server's changes) or as fixed profiles; asks when both are possible.
+  /// Returns the number of profiles added, or null when the user declined.
+  static Future<int?> addUserToApp(BuildContext context, SharedPreferences prefs, String serverName,
+      Map<String, dynamic> user, {String cancelLabel = 'Cancel'}) async {
+    final sub = user['subscription'] as String?;
+    var how = 'profiles';
+    if (sub != null && sub.isNotEmpty) {
+      final name = (user['name'] as String?)?.isNotEmpty == true ? user['name'] as String : 'user ${user['number']}';
+      final picked = await choose(context, 'Add $name to this app', null, [
+        ('subscription', 'As a subscription', 'Profiles update themselves when the server changes (new domain, TLS, ports)'),
+        ('profiles', 'As profiles', 'Fixed connection profiles; changes on the server need adding them again'),
+      ], cancelLabel: cancelLabel);
+      if (picked == null) return null;
+      how = picked;
+    }
+    if (how == 'subscription') return SubscriptionStore(prefs).add(sub!);
+    return importUsers(prefs, serverName, [user]);
   }
 
   /// Whether the VPN is up through [host]: changes that restart the server

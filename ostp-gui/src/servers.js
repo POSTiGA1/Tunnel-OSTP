@@ -49,6 +49,26 @@ function confirmBox(title, text, okLabel = 'OK', danger = true) {
   });
 }
 
+// options: [{ value, title, hint }] → the chosen value, or null on cancel.
+function choiceBox(title, text, options, cancelLabel = 'Cancel') {
+  return new Promise(resolve => {
+    $('choice-title').textContent = title;
+    $('choice-text').textContent = text || '';
+    $('choice-text').style.display = text ? '' : 'none';
+    const box = $('choice-options');
+    box.innerHTML = options.map((o, i) => `
+      <button type="button" class="choice-card choice-pick" data-i="${i}">
+        <div class="choice-body"><div class="choice-title">${esc(o.title)}</div>
+          ${o.hint ? `<div class="choice-hint">${esc(o.hint)}</div>` : ''}</div>
+      </button>`).join('');
+    const done = v => { $('choice-modal').classList.add('hidden'); resolve(v); };
+    box.querySelectorAll('[data-i]').forEach(b => { b.onclick = () => done(options[+b.dataset.i].value); });
+    $('btn-choice-cancel').textContent = cancelLabel;
+    $('btn-choice-cancel').onclick = () => done(null);
+    $('choice-modal').classList.remove('hidden');
+  });
+}
+
 // fields: [{ name, label, type, value, placeholder }] → { name: value } or null
 function promptBox(title, text, fields) {
   return new Promise(resolve => {
@@ -128,7 +148,7 @@ async function loadServers() {
 
 // ── The SSH form (first-run screen and "Add server") ───────────────────
 // onInstalled(result) runs after OSTP is installed and profiles imported.
-export async function mountSshForm(container, { onInstalled, submitLabel = 'Install OSTP' } = {}) {
+export async function mountSshForm(container, { onInstalled, submitLabel = 'Connect' } = {}) {
   const info = await loadServers().catch(() => ({ can_remember: false }));
   container.innerHTML = `
     <div class="ssh-form">
@@ -240,16 +260,42 @@ async function addAndInstall({ host, port, user, auth, remember }) {
     const probe = await call('server_probe', { id: server.id });
     appendLog(`System: ${probe.os} (${probe.arch}); ${probe.installed ? 'OSTP ' + probe.version + ' is installed' : 'OSTP is not installed'}`);
     if (!probe.systemd) throw new Error('This system has no systemd; OSTP needs it to run as a service');
-    st.done(1); step = 2; st.run(2);
+    st.done(1); step = 2;
 
-    lineSink = { id: server.id, fn: appendLog };
-    const result = await call('server_install', { id: server.id, port: 50000 });
-    lineSink = null;
+    // OSTP already there: nothing on the server changes unless the user says so.
+    let mode = 'install';
+    if (probe.installed) {
+      mode = await choiceBox(`OSTP ${probe.version} is already on this server`,
+        'Nothing on the server changes unless you choose to update it.', [
+          { value: 'keep', title: 'Add it as it is', hint: "OSTP is left untouched; the app takes the users' links from it" },
+          { value: 'install', title: 'Update OSTP', hint: "The newest release of this app's channel; the config and users are kept, the service restarts" },
+        ]);
+      if (!mode) {
+        appendLog('Nothing was changed on the server. It stays in Settings → Servers.');
+        $('install-title').textContent = 'Server added';
+        $('btn-install-close').disabled = false;
+        return null;
+      }
+    }
+    const label = $('install-steps').querySelector('[data-i="2"]');
+    if (mode === 'keep') label.textContent = 'Reading the users';
+    else if (probe.installed) label.textContent = 'Updating OSTP';
+    st.run(2);
+
+    let result;
+    if (mode === 'keep') {
+      result = await call('server_manage', { id: server.id, args: ['users'] });
+    } else {
+      lineSink = { id: server.id, fn: appendLog };
+      result = await call('server_install', { id: server.id, port: 50000 });
+      lineSink = null;
+    }
     st.done(2); step = 3; st.run(3);
 
-    const imported = importUsers(server, result.users || [], 1);
+    const first = (result.users || [])[0];
+    const imported = first ? await addUserToApp(server, first) : 0;
     st.done(3);
-    appendLog(`Added ${imported} connection profile(s).`);
+    appendLog(imported == null ? 'No connection was added to this app.' : `Added ${imported} connection profile(s).`);
     $('install-title').textContent = 'Your server is ready';
     $('btn-install-close').disabled = false;
     return { server, result };
@@ -263,6 +309,22 @@ async function addAndInstall({ host, port, user, auth, remember }) {
     if (server && step === 0) app.invoke('server_remove', { id: server.id }).catch(() => {});
     throw new Error(step === 0 ? msg : 'Installation did not finish; see the server output');
   }
+}
+
+// Adds one user to this app: as a subscription (profiles that follow the
+// server's changes) or as fixed profiles. Asks when both are possible.
+// Returns the number of profiles added, or null when the user declined.
+async function addUserToApp(server, u, { cancelLabel = 'Cancel' } = {}) {
+  let how = 'profiles';
+  if (u.subscription) {
+    how = await choiceBox(`Add ${u.name || 'user ' + u.number} to this app`, '', [
+      { value: 'subscription', title: 'As a subscription', hint: 'Profiles update themselves when the server changes (new domain, TLS, ports)' },
+      { value: 'profiles', title: 'As profiles', hint: 'Fixed connection profiles; changes on the server need adding them again' },
+    ], cancelLabel);
+    if (!how) return null;
+  }
+  if (how === 'subscription') return app.addSubscription(u.subscription);
+  return importUsers(server, [u]);
 }
 
 // Imports a user's links as profiles; `limit` users from the start.
@@ -416,9 +478,9 @@ async function renderUsers(body, id) {
       </div>
       <div class="user-meta">${traffic}${u.limit_bytes ? ` · limit ${fmtBytes(u.limit_bytes)}` : ''}</div>`;
     const who = String(u.number);
-    card.querySelector('[data-a="import"]').onclick = () => {
-      const n = importUsers(server, [u]);
-      app.showToast(n ? `Added ${n} profile(s)` : 'Already in the app', 'ok');
+    card.querySelector('[data-a="import"]').onclick = async () => {
+      const n = await addUserToApp(server, u);
+      if (n != null) app.showToast(n ? `Added ${n} profile(s)` : 'Already in the app', 'ok');
     };
     card.querySelector('[data-a="share"]').onclick = () => {
       const best = u.subscription || u.links?.[0]?.uri;
@@ -442,8 +504,13 @@ async function renderUsers(body, id) {
     if (!name) { $('new-user-name').focus(); return; }
     $('btn-user-add').disabled = true;
     try {
-      await call('server_manage', { id, args: ['user-add', name] });
+      const r = await call('server_manage', { id, args: ['user-add', name] });
       app.showToast(`User ${name} added`, 'ok');
+      // The new user may be for someone else: "Not now" leaves the app as is.
+      if (r?.user) {
+        const n = await addUserToApp(server, r.user, { cancelLabel: 'Not now' });
+        if (n) app.showToast(`Added ${n} profile(s)`, 'ok');
+      }
       renderTab();
     } catch (e) {
       app.showToast(String(e.message || e), 'error');
@@ -573,8 +640,9 @@ async function renderManage(body, id) {
 // The panel inside the tunnel: 10.1.0.1 is the server as clients see it.
 function vpnPanelUrl(panel) {
   const port = String(panel.bind || '').split(':').pop();
-  const path = String(panel.webpath || '').replace(/^\/+|\/+$/g, '');
-  return `http://10.1.0.1:${port}/${path ? path + '/' : ''}`;
+  // An empty webpath means /panel/ (servers older than 0.4.6 report it empty).
+  const path = String(panel.webpath || '').replace(/^\/+|\/+$/g, '') || 'panel';
+  return `http://10.1.0.1:${port}/${path}/`;
 }
 
 // Actions that restart or remove things are refused while this app is

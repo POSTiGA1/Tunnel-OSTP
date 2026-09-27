@@ -209,6 +209,7 @@ class _InstallDialogState extends State<InstallDialog> {
   String? _error;
   bool _finished = false;
   Map<String, dynamic>? _server;
+  String _stepLabel2 = _steps[2];
 
   @override
   void initState() {
@@ -249,6 +250,23 @@ class _InstallDialogState extends State<InstallDialog> {
       _set(1, InstallStep.done);
 
       step = 2;
+      // OSTP already there: nothing on the server changes unless the user says so.
+      var mode = 'install';
+      if (probe['installed'] == true) {
+        if (!mounted) return;
+        final picked = await ServersApi.choose(context, 'OSTP ${probe['version']} is already on this server',
+            'Nothing on the server changes unless you choose to update it.', [
+          ('keep', 'Add it as it is', "OSTP is left untouched; the app takes the users' links from it"),
+          ('install', 'Update OSTP', "The newest release of this app's channel; the config and users are kept, the service restarts"),
+        ]);
+        if (picked == null) {
+          _line('Nothing was changed on the server. It stays in Server management.');
+          setState(() => _finished = true);
+          return;
+        }
+        mode = picked;
+      }
+      setState(() => _stepLabel2 = mode == 'keep' ? 'Reading the users' : (probe['installed'] == true ? 'Updating OSTP' : _steps[2]));
       _set(2, InstallStep.running);
       var since = (await ServersApi.lines(0)).$2;
       poll = Timer.periodic(const Duration(milliseconds: 600), (_) async {
@@ -261,16 +279,19 @@ class _InstallDialogState extends State<InstallDialog> {
         } catch (_) {}
       });
       if (!mounted) return;
-      final result = await ServersApi.call(context, {'op': 'install', 'id': id, 'port': 50000}, server: server)
-          as Map<String, dynamic>;
+      final result = await ServersApi.call(
+          context,
+          mode == 'keep' ? {'op': 'manage', 'id': id, 'args': ['users']} : {'op': 'install', 'id': id, 'port': 50000},
+          server: server) as Map<String, dynamic>;
       poll.cancel();
       _set(2, InstallStep.done);
 
       step = 3;
       _set(3, InstallStep.running);
       final users = (result['users'] as List? ?? const []).cast<Map<String, dynamic>>();
-      final n = await ServersApi.importUsers(widget.prefs, server['name'] as String, users, limit: 1);
-      _line('Added $n connection profile(s).');
+      if (!mounted) return;
+      final n = users.isEmpty ? 0 : await ServersApi.addUserToApp(context, widget.prefs, server['name'] as String, users.first);
+      _line(n == null ? 'No connection was added to this app.' : 'Added $n connection profile(s).');
       _set(3, InstallStep.done);
       setState(() => _finished = true);
     } catch (e) {
@@ -315,7 +336,7 @@ class _InstallDialogState extends State<InstallDialog> {
                 child: Row(children: [
                   _stepIcon(_states[i]),
                   const SizedBox(width: 12),
-                  Expanded(child: Text(_steps[i], style: TextStyle(color: _states[i] == InstallStep.waiting ? Colors.white38 : null))),
+                  Expanded(child: Text(i == 2 ? _stepLabel2 : _steps[i], style: TextStyle(color: _states[i] == InstallStep.waiting ? Colors.white38 : null))),
                 ]),
               ),
             if (_error != null)

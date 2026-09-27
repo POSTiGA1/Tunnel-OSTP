@@ -182,8 +182,17 @@ class SubscriptionStore {
     final profiles = decodeProfiles(prefs.getString(_profilesKey));
     final old = profiles.where((p) => p.subId == sub.id).toList();
     String carrier(bool tls, String mode) => tls ? 'tls' : mode;
-    final activeCarrier = old.where((p) => p.active).map((p) => carrier(p.tls, p.transportMode)).firstOrNull;
-    final hadActive = profiles.any((p) => p.active);
+    // Profiles added by hand for the same key and carrier are what this
+    // subscription now provides: keep one copy, the subscription's.
+    bool covered(OstpProfile p) =>
+        p.subId.isEmpty &&
+        links.any((l) => l.key == p.accessKey && l.server == p.serverAddr && carrier(l.tls, l.transport) == carrier(p.tls, p.transportMode));
+    final activeCarrier = [...old, ...profiles.where(covered)]
+        .where((p) => p.active)
+        .map((p) => carrier(p.tls, p.transportMode))
+        .firstOrNull;
+    profiles.removeWhere(covered);
+    final hadActive = profiles.any((p) => p.active) || activeCarrier != null;
 
     final fresh = <OstpProfile>[];
     for (var i = 0; i < links.length; i++) {

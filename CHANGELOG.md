@@ -16,6 +16,17 @@ The stable 0.4.6: everything from the betas below. In short:
 - A filtering DNS resolver on the server (`ostp dns`) and a new web panel.
 - Wire-compatible with 0.4.5: old clients and servers keep working with new ones.
 
+### Changed
+- First-run screen: first a choice (a link or your own server), then a page for just that.
+- Adding a server that already runs OSTP no longer updates it on its own: the app asks whether to add it as it is or to update it.
+- Adding a user to the app from Server management asks how: as a subscription (follows the server's changes) or as fixed profiles. Right after a user is created the app offers the same, with "Not now" for users meant for someone else.
+
+### Fixed
+- Desktop app: Server management failed with "Command servers_list not allowed by ACL"; the server commands were missing from the app's permissions.
+- The same SSH login added twice (a retried install, the first-run screen after "Add server") no longer shows up twice in the servers list; a changed host key is refused instead of being saved over the old one.
+- A subscription added for a server whose profiles were already in the app no longer leaves duplicates: the hand-added profiles it covers are replaced by the subscription's.
+- The web panel address through the VPN and "Open the panel" missed the path when no webpath was set (`http://10.1.0.1:9090/` instead of `/panel/`). `ostp manage status` now reports the path the panel is served at.
+
 ## [0.4.6-beta.8] - 2026-09-27
 
 ### Added
