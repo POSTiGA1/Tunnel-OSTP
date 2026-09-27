@@ -1,3 +1,5 @@
+import { initServers, renderServers, mountSshForm } from './servers.js';
+
 // ── Tauri invoke shim ─────────────────────────────────────────────────
 let invoke = () => Promise.resolve(null);
 if (window.__TAURI__?.core) {
@@ -431,18 +433,92 @@ async function handleToggle() {
 
 // ── SCREEN NAVIGATION ─────────────────────────────────────────────────
 function showScreen(name) {
-  const prober = $('prober-screen');
-  [homeScreen, settingsScreen, prober].forEach(s => s.classList.remove('active'));
+  const screens = {
+    home: homeScreen, settings: settingsScreen, prober: $('prober-screen'),
+    welcome: $('welcome-screen'), servers: $('servers-screen'), server: $('server-screen'),
+  };
+  Object.values(screens).forEach(s => s.classList.remove('active'));
   if (name === 'settings') {
     loadSettingsIntoForm();
     renderSubs();
-    settingsScreen.classList.add('active');
   } else if (name === 'prober') {
     fillProberProfiles();
-    prober.classList.add('active');
-  } else {
-    homeScreen.classList.add('active');
+  } else if (name === 'servers') {
+    renderServers();
   }
+  (screens[name] || homeScreen).classList.add('active');
+}
+
+// ── FIRST RUN ─────────────────────────────────────────────────────────
+// Shown until the app has a profile or a subscription, or is skipped.
+const WELCOMED_KEY = 'ostp_welcomed';
+
+function finishWelcome() {
+  localStorage.setItem(WELCOMED_KEY, '1');
+  showScreen('home');
+}
+
+function setupWelcome() {
+  $('btn-welcome-skip').addEventListener('click', finishWelcome);
+  $('btn-welcome-paste').addEventListener('click', async () => {
+    try { $('welcome-link').value = (await navigator.clipboard.readText()).trim(); }
+    catch { showToast('Clipboard is not available; paste with Ctrl+V', 'error'); }
+  });
+  $('btn-welcome-link').addEventListener('click', async () => {
+    const raw = $('welcome-link').value.trim();
+    if (!raw) { $('welcome-link').focus(); return; }
+    if (isSubscriptionUrl(raw)) {
+      await addSubscription(raw);
+      if (loadSubs().some(s => s.url === raw)) finishWelcome();
+      return;
+    }
+    try {
+      parseOstpLink(raw);
+      importLinks([raw], {});
+      showToast('Profile added', 'ok');
+      finishWelcome();
+    } catch (e) {
+      showToast(e.message, 'error');
+    }
+  });
+  mountSshForm($('welcome-ssh-form'), { onInstalled: finishWelcome });
+  const firstRun = !localStorage.getItem(WELCOMED_KEY) && !profiles.length && !loadSubs().length;
+  if (firstRun) showScreen('welcome');
+}
+
+// Adds profiles from ostp:// links, skipping ones already in the app.
+// Returns how many were added. The first one becomes active when nothing is.
+function importLinks(links, { baseName = '', serverId = null } = {}) {
+  let added = 0;
+  for (const raw of links) {
+    let l;
+    try { l = parseOstpLink(raw); } catch { continue; }
+    const dup = profiles.some(p => p.key === l.key && p.server === l.server && carrierOf(p) === carrierOf(l));
+    if (dup) continue;
+    const name = baseName ? `${baseName} · ${carrierOf(l).toUpperCase()}` : (l.name || l.server);
+    const p = { ...l, id: genId(), name };
+    if (serverId) p.server_id = serverId;
+    profiles.push(p);
+    if (!activeId || !profiles.some(x => x.id === activeId)) activeId = p.id;
+    added++;
+  }
+  if (added) {
+    saveProfiles(profiles);
+    saveActiveId(activeId);
+    renderProfiles();
+    const cfg = buildConfig();
+    if (cfg) invoke('save_config', { jsonContent: JSON.stringify(cfg, null, 2) }).catch(() => {});
+  }
+  return added;
+}
+
+// Whether the tunnel is up through this host (a server being managed).
+function connectedThrough(host) {
+  if (appState === 'disconnected') return false;
+  const p = profiles.find(x => x.id === activeId);
+  if (!p) return false;
+  const h = String(p.server).replace(/:\d+$/, '').replace(/^\[|\]$/g, '');
+  return h === host;
 }
 
 // ── PROFILE RENDERING ─────────────────────────────────────────────────
@@ -1221,6 +1297,9 @@ window.addEventListener('DOMContentLoaded', async () => {
 
   btnConnect.addEventListener('click', handleToggle);
   btnGoSettings.addEventListener('click', () => showScreen('settings'));
+  $('btn-go-servers').addEventListener('click', () => showScreen('servers'));
+  initServers({ invoke, showToast, showScreen, escHtml, importLinks, connectedThrough, showShare });
+  setupWelcome();
   btnBack.addEventListener('click', () => showScreen('home'));
   $('btn-go-prober').addEventListener('click', () => showScreen('prober'));
   $('btn-prober-back').addEventListener('click', () => showScreen('home'));

@@ -359,6 +359,11 @@
 
         </div> <!-- client-settings-card -->
         
+        <button id="btn-go-servers" class="wide-btn" type="button">
+          <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="2" y="3" width="20" height="7" rx="2"/><rect x="2" y="14" width="20" height="7" rx="2"/><line x1="6" y1="6.5" x2="6.01" y2="6.5"/><line x1="6" y1="17.5" x2="6.01" y2="17.5"/></svg>
+          Server management
+        </button>
+
         <div class="app-version">
           <span id="app-version">OSTP GUI</span>
           <button id="btn-check-updates" class="btn secondary compact-btn" type="button">Check for updates</button>
@@ -392,6 +397,71 @@
         <div id="pr-status" class="prober-status"></div>
         <div id="pr-results" class="prober-results"></div>
       </div>
+    </div>
+
+
+    <!-- ── WELCOME (first run) ──────────────────────────────── -->
+    <div id="welcome-screen" class="screen">
+      <header class="topbar">
+        <div class="brand"><div class="brand-dot"></div><span class="brand-name">OSTP</span></div>
+        <button id="btn-welcome-skip" class="btn secondary compact-btn" type="button">Skip</button>
+      </header>
+      <div class="settings-body">
+        <h1 class="welcome-title">Let's get started</h1>
+        <p class="welcome-sub">Connect with a link you were given, or set up your own server: all it takes is a VPS and its SSH login.</p>
+
+        <div class="choice-card" id="welcome-link-card">
+          <div class="choice-head">
+            <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M10 13a5 5 0 0 0 7.54.54l3-3a5 5 0 0 0-7.07-7.07l-1.72 1.71"/><path d="M14 11a5 5 0 0 0-7.54-.54l-3 3a5 5 0 0 0 7.07 7.07l1.71-1.71"/></svg>
+            <div><div class="choice-title">I have a link</div><div class="choice-hint">An ostp:// link or a subscription URL</div></div>
+          </div>
+          <textarea id="welcome-link" class="field-input mono" rows="3" placeholder="ostp://… or https://…/sub/…"></textarea>
+          <div class="choice-actions">
+            <button id="btn-welcome-paste" class="btn secondary" type="button">Paste</button>
+            <button id="btn-welcome-link" class="btn primary" type="button">Add</button>
+          </div>
+        </div>
+
+        <div class="choice-card">
+          <div class="choice-head">
+            <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="2" y="3" width="20" height="7" rx="2"/><rect x="2" y="14" width="20" height="7" rx="2"/><line x1="6" y1="6.5" x2="6.01" y2="6.5"/><line x1="6" y1="17.5" x2="6.01" y2="17.5"/></svg>
+            <div><div class="choice-title">I have a server</div><div class="choice-hint">OSTP is installed over SSH; no Linux knowledge needed</div></div>
+          </div>
+          <div id="welcome-ssh-form"></div>
+        </div>
+      </div>
+    </div>
+
+    <!-- ── SERVERS ──────────────────────────────────────────── -->
+    <div id="servers-screen" class="screen">
+      <header class="topbar">
+        <button id="btn-servers-back" class="icon-btn" aria-label="Back"><svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><path d="M19 12H5M12 19l-7-7 7-7"/></svg></button>
+        <span class="topbar-title">Servers</span>
+        <button id="btn-servers-add" class="icon-btn add-btn" aria-label="Add server">
+          <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><line x1="12" y1="5" x2="12" y2="19"/><line x1="5" y1="12" x2="19" y2="12"/></svg>
+        </button>
+      </header>
+      <div class="settings-body">
+        <div id="servers-list" class="profile-list"></div>
+      </div>
+    </div>
+
+    <!-- ── ONE SERVER ───────────────────────────────────────── -->
+    <div id="server-screen" class="screen">
+      <header class="topbar">
+        <button id="btn-server-back" class="icon-btn" aria-label="Back"><svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><path d="M19 12H5M12 19l-7-7 7-7"/></svg></button>
+        <span class="topbar-title" id="server-title">Server</span>
+        <button id="btn-server-refresh" class="icon-btn" aria-label="Refresh" title="Refresh">
+          <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><polyline points="23 4 23 10 17 10"/><polyline points="1 20 1 14 7 14"/><path d="M3.51 9a9 9 0 0 1 14.85-3.36L23 10M1 14l4.64 4.36A9 9 0 0 0 20.49 15"/></svg>
+        </button>
+      </header>
+      <div class="tabs" id="server-tabs">
+        <button class="tab active" data-tab="status">Status</button>
+        <button class="tab" data-tab="users">Users</button>
+        <button class="tab" data-tab="connection">Connection</button>
+        <button class="tab" data-tab="manage">Management</button>
+      </div>
+      <div class="settings-body" id="server-body"></div>
     </div>
 
     <!-- ── ADD PROFILE DROPDOWN ─────────────────────────────── -->
@@ -599,6 +669,63 @@
     <div id="toast" class="toast" role="status" aria-live="polite"></div>
 
   </div>
+
+    <!-- ── SERVER MODALS ────────────────────────────────────── -->
+    <div id="ssh-modal" class="modal-overlay hidden">
+      <div class="modal-content">
+        <h3 class="modal-title">Add a server</h3>
+        <div id="modal-ssh-form"></div>
+      </div>
+    </div>
+
+    <div id="install-modal" class="modal-overlay hidden">
+      <div class="modal-content wide">
+        <h3 class="modal-title" id="install-title">Installing OSTP</h3>
+        <ol class="step-list" id="install-steps"></ol>
+        <details class="install-log"><summary>Server output</summary><pre id="install-log"></pre></details>
+        <p class="field-hint is-error" id="install-error"></p>
+        <div class="modal-actions">
+          <button id="btn-install-close" class="btn secondary" disabled>Close</button>
+        </div>
+      </div>
+    </div>
+
+    <div id="secret-modal" class="modal-overlay hidden">
+      <div class="modal-content compact">
+        <h3 class="modal-title" id="secret-title">Sign in</h3>
+        <p class="modal-text" id="secret-text"></p>
+        <textarea id="secret-input" class="field-input mono" rows="1"></textarea>
+        <input id="secret-passphrase" class="field-input" type="password" placeholder="Key passphrase (if any)" style="margin-top:8px;display:none;" />
+        <div class="modal-actions">
+          <button id="btn-secret-cancel" class="btn secondary">Cancel</button>
+          <button id="btn-secret-ok" class="btn primary">Sign in</button>
+        </div>
+      </div>
+    </div>
+
+    <div id="confirm-modal" class="modal-overlay hidden">
+      <div class="modal-content compact">
+        <h3 class="modal-title" id="confirm-title"></h3>
+        <p class="modal-text" id="confirm-text"></p>
+        <div class="modal-actions">
+          <button id="btn-confirm-cancel" class="btn secondary">Cancel</button>
+          <button id="btn-confirm-ok" class="btn danger">OK</button>
+        </div>
+      </div>
+    </div>
+
+    <div id="prompt-modal" class="modal-overlay hidden">
+      <div class="modal-content compact">
+        <h3 class="modal-title" id="prompt-title"></h3>
+        <p class="modal-text" id="prompt-text"></p>
+        <div id="prompt-fields"></div>
+        <div class="modal-actions">
+          <button id="btn-prompt-cancel" class="btn secondary">Cancel</button>
+          <button id="btn-prompt-ok" class="btn primary">OK</button>
+        </div>
+      </div>
+    </div>
+
   <script type="module" src="main.js"></script>
 </body>
 </html>

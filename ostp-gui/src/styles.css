@@ -927,3 +927,109 @@ textarea.field-input {
 .app-version { display: flex; align-items: center; justify-content: center; gap: 10px; flex-wrap: wrap; }
 .compact-btn { padding: 5px 10px; font-size: 0.72rem; }
 .update-warning { color: var(--c-amber); }
+
+/* ── Welcome (first run) ─────────────────────────────────────────────── */
+.welcome-title { font-size: 1.35rem; font-weight: 800; color: var(--c-txt-1); margin: 10px 0 6px; }
+.welcome-sub { font-size: 0.8rem; color: var(--c-txt-2); line-height: 1.55; margin-bottom: 18px; }
+.choice-card {
+  border: 1px solid var(--c-card-border);
+  background: var(--c-card);
+  border-radius: var(--r-lg);
+  padding: 14px;
+  margin-bottom: 12px;
+}
+.choice-head { display: flex; gap: 12px; align-items: flex-start; margin-bottom: 12px; color: var(--c-txt-1); }
+.choice-head svg { flex-shrink: 0; margin-top: 2px; }
+.choice-title { font-size: 0.9rem; font-weight: 700; }
+.choice-hint { font-size: 0.72rem; color: var(--c-txt-2); margin-top: 2px; }
+.choice-actions { display: flex; gap: 8px; justify-content: flex-end; margin-top: 10px; }
+textarea.field-input { resize: vertical; min-height: 38px; line-height: 1.4; padding-top: 9px; padding-bottom: 9px; }
+
+/* SSH form */
+.ssh-form .field-group { margin-bottom: 10px; }
+.ssh-row { display: flex; gap: 8px; }
+.ssh-row > .field-group { flex: 1; min-width: 0; }
+.ssh-row > .field-group.port { flex: 0 0 84px; }
+.segmented {
+  display: flex; gap: 4px; padding: 3px; margin-bottom: 10px;
+  border: 1px solid var(--c-card-border); border-radius: var(--r-sm);
+}
+.segmented button {
+  flex: 1; height: 28px; border-radius: 7px; border: none; background: transparent;
+  color: var(--c-txt-2); font-size: 0.75rem; font-weight: 600; cursor: pointer;
+}
+.segmented button.active { background: rgba(var(--c-fg-rgb),0.1); color: var(--c-txt-1); }
+.check-row { display: flex; align-items: center; gap: 8px; font-size: 0.75rem; color: var(--c-txt-2); margin: 4px 0 2px; cursor: pointer; }
+.check-row input { accent-color: #fff; }
+.link-btn { background: none; border: none; color: var(--c-txt-2); font-size: 0.72rem; text-decoration: underline; cursor: pointer; padding: 0; }
+.link-btn:hover { color: var(--c-txt-1); }
+
+/* Wide settings button (the Android app's style) */
+.wide-btn {
+  width: 100%; height: 44px; margin-top: 14px;
+  display: flex; align-items: center; justify-content: center; gap: 10px;
+  border-radius: var(--r-md); border: 1px solid var(--c-card-border);
+  background: var(--c-card); color: var(--c-txt-1);
+  font-size: 0.82rem; font-weight: 600; cursor: pointer; transition: all var(--t-fast);
+}
+.wide-btn:hover { background: var(--c-card-hover); border-color: rgba(var(--c-fg-rgb),0.16); }
+
+/* Install progress */
+.modal-content.wide { max-width: 440px; }
+.step-list { list-style: none; padding: 0; margin: 0 0 12px; display: flex; flex-direction: column; gap: 8px; }
+.step-list li { display: flex; align-items: center; gap: 10px; font-size: 0.8rem; color: var(--c-txt-2); }
+.step-list li::before {
+  content: ''; width: 14px; height: 14px; flex-shrink: 0; border-radius: 50%;
+  border: 1.5px solid var(--c-txt-3);
+}
+.step-list li.running { color: var(--c-txt-1); }
+.step-list li.running::before { border-color: var(--c-txt-1); border-top-color: transparent; animation: spin 0.8s linear infinite; }
+.step-list li.done { color: var(--c-txt-1); }
+.step-list li.done::before { border-color: var(--c-green); background: var(--c-green); box-shadow: inset 0 0 0 3px #111; }
+.step-list li.failed { color: var(--c-red); }
+.step-list li.failed::before { border-color: var(--c-red); background: var(--c-red); box-shadow: inset 0 0 0 3px #111; }
+.install-log summary { font-size: 0.72rem; color: var(--c-txt-2); cursor: pointer; margin-bottom: 6px; }
+.install-log pre, .log-view {
+  max-height: 220px; overflow: auto; margin: 0;
+  background: #0b0b0b; border: 1px solid var(--c-card-border); border-radius: var(--r-sm);
+  padding: 8px 10px; font-family: 'JetBrains Mono', monospace; font-size: 0.66rem; line-height: 1.5;
+  color: #bdbdbd; white-space: pre-wrap; word-break: break-all;
+}
+.log-view { max-height: 360px; }
+
+/* Server screen */
+.tabs { display: flex; gap: 4px; margin-bottom: 12px; flex-shrink: 0; overflow-x: auto; scrollbar-width: none; }
+.tab {
+  flex: 1; height: 30px; padding: 0 10px; white-space: nowrap;
+  border-radius: var(--r-full); border: 1px solid var(--c-card-border);
+  background: transparent; color: var(--c-txt-2); font-size: 0.72rem; font-weight: 600; cursor: pointer;
+}
+.tab.active { background: var(--c-accent); color: #000; border-color: var(--c-accent); }
+.kv-card { border: 1px solid var(--c-card-border); background: var(--c-card); border-radius: var(--r-lg); overflow: hidden; margin-bottom: 12px; }
+.kv-row { display: flex; justify-content: space-between; gap: 12px; padding: 11px 14px; border-top: 1px solid rgba(var(--c-fg-rgb),0.04); font-size: 0.8rem; }
+.kv-row:first-child { border-top: none; }
+.kv-row .k { color: var(--c-txt-2); flex-shrink: 0; }
+.kv-row .v { color: var(--c-txt-1); text-align: right; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.kv-row .v.mono { font-family: 'JetBrains Mono', monospace; font-size: 0.7rem; }
+.pill { font-size: 0.66rem; font-weight: 700; letter-spacing: 0.4px; text-transform: uppercase; padding: 2px 8px; border-radius: var(--r-full); }
+.pill.ok { color: var(--c-green); background: var(--c-green-dim); }
+.pill.bad { color: var(--c-red); background: rgba(255,95,95,0.12); }
+.pill.warn { color: var(--c-amber); background: rgba(240,184,64,0.12); }
+.meter { height: 4px; border-radius: var(--r-full); background: rgba(var(--c-fg-rgb),0.08); margin-top: 6px; overflow: hidden; }
+.meter > div { height: 100%; background: var(--c-txt-1); }
+.btn-row { display: flex; flex-wrap: wrap; gap: 8px; margin-bottom: 12px; }
+.btn-row .btn { flex: 1 1 130px; }
+.card-note { font-size: 0.72rem; color: var(--c-txt-2); line-height: 1.5; margin: -4px 2px 12px; }
+.server-card .profile-server { font-family: 'JetBrains Mono', monospace; font-size: 0.68rem; }
+.user-card { border: 1px solid var(--c-card-border); background: var(--c-card); border-radius: var(--r-md); padding: 11px 12px 11px 14px; margin-bottom: 8px; }
+.user-head { display: flex; align-items: center; gap: 8px; }
+.user-name { flex: 1; font-weight: 600; font-size: 0.86rem; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.online-dot { width: 7px; height: 7px; border-radius: 50%; background: var(--c-txt-3); flex-shrink: 0; }
+.online-dot.on { background: var(--c-green); box-shadow: 0 0 8px var(--c-green-glow); }
+.user-meta { font-size: 0.7rem; color: var(--c-txt-2); margin-top: 5px; }
+.inline-add { display: flex; gap: 8px; margin-bottom: 12px; }
+.inline-add .field-input { flex: 1; }
+.empty-note { font-size: 0.78rem; color: var(--c-txt-2); text-align: center; padding: 28px 0; }
+.loading-note { font-size: 0.78rem; color: var(--c-txt-2); padding: 20px 2px; }
+.loading-note::before { content: ''; display: inline-block; width: 10px; height: 10px; margin-right: 8px; vertical-align: -1px; border-radius: 50%; border: 1.5px solid var(--c-txt-2); border-top-color: transparent; animation: spin 0.8s linear infinite; }
+.btn-row .btn { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
