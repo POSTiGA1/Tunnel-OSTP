@@ -34,3 +34,6 @@ netstack-smoltcp = "0.2.2"
 futures = "0.3.32"
 libc = "0.2.186"
 winapi = { version = "0.3.9", features = ["iphlpapi", "tcpmib", "processthreadsapi", "psapi", "handleapi", "winerror", "minwindef", "winnt", "iptypes", "ws2def"] }
+
+[dev-dependencies]
+rcgen = { version = "0.14", default-features = false, features = ["crypto", "pem", "ring"] }

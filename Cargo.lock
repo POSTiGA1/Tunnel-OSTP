@@ -1658,6 +1658,7 @@ dependencies = [
  "ostp-tun",
  "portable-atomic",
  "rand 0.8.5",
+ "rcgen",
  "rustls",
  "serde",
  "serde_json",

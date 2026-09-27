@@ -195,6 +195,14 @@ where
             }
             if write_half.flush().await.is_err() { break; }
         }
+        // The transport was dropped (or the stream failed): close our side.
+        // Dropping a plain TCP write half already sends FIN, but a write half
+        // of a split TLS stream closes nothing while the read half is alive,
+        // and the peer may never send anything that would end the reader.
+        // shutdown() sends close_notify and FIN, so the server (or the web
+        // server in front of it) closes the connection instead of keeping it
+        // open forever.
+        let _ = write_half.shutdown().await;
     });
 
     // Reader: reads whatever is available and only pulls a frame out once the
@@ -222,7 +230,14 @@ where
                     continue;
                 }
             }
-            match read_half.read(&mut chunk).await {
+            // Stop as soon as the transport is dropped rather than waiting
+            // for bytes a silent peer may never send: this task owns the read
+            // half, and with TLS that keeps the whole connection alive.
+            let read = tokio::select! {
+                read = read_half.read(&mut chunk) => read,
+                _ = tx_in_clone.closed() => break,
+            };
+            match read {
                 Ok(0) => {
                     if !acc.is_empty() {
                         let _ = foreign_tx.send(format!(
@@ -333,5 +348,99 @@ impl Transport {
             let _ = sock.send(d).await;
         }
         let _ = sock.set_ttl(restore);
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::sync::Arc;
+    use tokio::io::AsyncReadExt;
+    use tokio::net::TcpListener;
+
+    fn tls_acceptor() -> tokio_rustls::TlsAcceptor {
+        let cert = rcgen::generate_simple_self_signed(vec!["localhost".to_string()]).unwrap();
+        let chain = vec![cert.cert.der().clone()];
+        let key = rustls::pki_types::PrivateKeyDer::Pkcs8(cert.signing_key.serialize_der().into());
+        let config = rustls::ServerConfig::builder_with_provider(Arc::new(rustls::crypto::ring::default_provider()))
+            .with_safe_default_protocol_versions()
+            .unwrap()
+            .with_no_client_auth()
+            .with_single_cert(chain, key)
+            .unwrap();
+        tokio_rustls::TlsAcceptor::from(Arc::new(config))
+    }
+
+    fn options(tls: bool) -> UotOptions {
+        UotOptions {
+            tcp_fragmentation: false,
+            frag_chunk: 2,
+            frag_sleep: 0,
+            junk_pc: [0, 0],
+            junk_ps: [0, 0],
+            access_key: Bytes::from_static(b"k"),
+            ttl: None,
+            connect_timeout: Duration::from_secs(2),
+            tls: tls.then(|| TlsClientOptions { sni: "localhost".to_string(), insecure: true }),
+            ws_path: None,
+            http_host: "localhost".to_string(),
+        }
+    }
+
+    /// A dropped transport must close its connection even when the server
+    /// never sends anything. Inside TLS it did not: the reader task kept the
+    /// stream open waiting for data, and every failed handshake or reconnect
+    /// left one TLS connection behind. Through a web server each costs two of
+    /// its worker connections, so a client retrying for a while exhausted
+    /// nginx and every request, subscriptions included, got a 500.
+    #[tokio::test]
+    async fn dropped_tls_transport_closes_its_connection() {
+        let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let addr = listener.local_addr().unwrap();
+        let acceptor = tls_acceptor();
+        let server = tokio::spawn(async move {
+            let (tcp, _) = listener.accept().await.unwrap();
+            let mut tls = acceptor.accept(tcp).await.unwrap();
+            let mut buf = [0u8; 256];
+            // Silent server: read until the client goes away.
+            loop {
+                match tls.read(&mut buf).await {
+                    Ok(0) | Err(_) => return,
+                    Ok(_) => {}
+                }
+            }
+        });
+
+        let (transport, _foreign) = connect_uot(addr.ip(), addr.port(), options(true)).await.unwrap();
+        drop(transport);
+
+        tokio::time::timeout(Duration::from_secs(3), server)
+            .await
+            .expect("the TLS connection stayed open after the transport was dropped")
+            .unwrap();
+    }
+
+    #[tokio::test]
+    async fn dropped_tcp_transport_closes_its_connection() {
+        let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let addr = listener.local_addr().unwrap();
+        let server = tokio::spawn(async move {
+            let (mut tcp, _) = listener.accept().await.unwrap();
+            let mut buf = [0u8; 256];
+            loop {
+                match tcp.read(&mut buf).await {
+                    Ok(0) | Err(_) => return,
+                    Ok(_) => {}
+                }
+            }
+        });
+
+        let (transport, _foreign) = connect_uot(addr.ip(), addr.port(), options(false)).await.unwrap();
+        drop(transport);
+
+        tokio::time::timeout(Duration::from_secs(3), server)
+            .await
+            .expect("the TCP connection stayed open after the transport was dropped")
+            .unwrap();
     }
 }
