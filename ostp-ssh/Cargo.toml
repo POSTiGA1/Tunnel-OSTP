@@ -1,0 +1,15 @@
+[package]
+name = "ostp-ssh"
+description = "SSH client used by the OSTP desktop app to install and manage a server"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+
+[dependencies]
+anyhow.workspace = true
+tokio = { workspace = true }
+tracing.workspace = true
+# ring, not aws-lc-rs: the same crypto backend as the rest of the project,
+# and no cmake/nasm needed to build the desktop app on Windows.
+russh = { version = "0.63", default-features = false, features = ["ring", "rsa", "flate2"] }
