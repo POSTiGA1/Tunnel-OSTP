@@ -8,12 +8,14 @@ Older history is on the [Releases](https://github.com/ospab/ostp/releases) page 
 
 ## [Unreleased]
 
-The stable 0.4.6: everything from the betas below, plus the fixes listed here. In short:
+The stable 0.4.6: everything from the betas below. In short:
 - TLS on port 443, directly or behind nginx, Apache or Caddy, with `ostp cert` for the domain and certificate.
 - Subscriptions in the CLI, the desktop app and Android.
 - Seamless roaming: a network change no longer drops the session.
 - A filtering DNS resolver on the server (`ostp dns`) and a new web panel.
 - Wire-compatible with 0.4.5: old clients and servers keep working with new ones.
+
+## [0.4.6-beta.7] - 2026-09-27
 
 ### Changed
 - The management API and web panel do not start without a sign-in (a name and password, or an API token). Before, a config without one served an open panel, and loopback was no protection: every client reaches the server's 127.0.0.1 through the tunnel. Set one with `ostp panel on`.
