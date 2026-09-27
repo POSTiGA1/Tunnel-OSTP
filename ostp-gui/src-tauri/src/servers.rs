@@ -142,8 +142,7 @@ pub async fn server_install(app: tauri::AppHandle, id: String, auth: Option<Auth
 /// `["user-remove", who]`, `["user-rename", who, name]`, `["logs", "-n", "300"]`.
 #[tauri::command]
 pub async fn server_manage(id: String, auth: Option<AuthIn>, args: Vec<String>) -> Result<Value, String> {
-    const ALLOWED: &[&str] = &["status", "users", "user-add", "user-remove", "user-rename", "logs", "restart"];
-    if !args.first().is_some_and(|a| ALLOWED.contains(&a.as_str())) {
+    if !args.first().is_some_and(|a| ostp_ssh::manager::MANAGE_COMMANDS.contains(&a.as_str())) {
         return Err("unknown server command".into());
     }
     let args: Vec<&str> = args.iter().map(String::as_str).collect();
@@ -153,32 +152,7 @@ pub async fn server_manage(id: String, auth: Option<AuthIn>, args: Vec<String>) 
 /// A change with plain-text output, streamed as `server-line` events.
 #[tauri::command]
 pub async fn server_action(app: tauri::AppHandle, id: String, auth: Option<AuthIn>, action: String, params: Option<Value>) -> Result<String, String> {
-    let p = params.unwrap_or(Value::Null);
-    let text = |k: &str| p[k].as_str().unwrap_or_default().trim().to_string();
-    let action = match action.as_str() {
-        "update" => Action::Update(channel()),
-        "restart" => Action::Restart,
-        "reboot" => Action::Reboot,
-        "uninstall" => Action::Uninstall,
-        "panel-enable" => {
-            let (user, password) = (text("user"), p["password"].as_str().unwrap_or_default().to_string());
-            if password.chars().count() < 8 {
-                return Err("the panel password must be at least 8 characters".into());
-            }
-            Action::PanelEnable { user: if user.is_empty() { "admin".into() } else { user }, password }
-        }
-        "panel-disable" => Action::PanelDisable,
-        "cert-issue" => {
-            let domain = text("domain");
-            if domain.is_empty() {
-                return Err("enter the domain".into());
-            }
-            Action::CertIssue { domain, email: Some(text("email")).filter(|e| !e.is_empty()) }
-        }
-        "sub-enable" => Action::SubEnable,
-        "sub-disable" => Action::SubDisable,
-        other => return Err(format!("unknown action {other}")),
-    };
+    let action = Action::parse(&action, &params.unwrap_or(Value::Null), channel()).map_err(err)?;
     let m = manager().await?;
     let out = m.action(&id, self::auth(auth)?, action, line_sink(&app, &id)).await.map_err(err)?;
     Ok(out.stdout)

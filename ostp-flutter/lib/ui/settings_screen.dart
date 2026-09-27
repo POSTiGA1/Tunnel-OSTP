@@ -4,6 +4,7 @@ import 'package:shared_preferences/shared_preferences.dart';
 import 'app_routing_screen.dart';
 import 'logs_screen.dart';
 import 'qr_scanner_screen.dart';
+import 'servers_screen.dart';
 import 'package:qr_flutter/qr_flutter.dart';
 import '../models/ostp_profile.dart';
 import '../models/share_link.dart';
@@ -1053,6 +1054,19 @@ class _SettingsScreenState extends State<SettingsScreen> {
                     label: const Text('View Logs'),
                     onPressed: () {
                       Navigator.push(context, MaterialPageRoute(builder: (context) => const LogsScreen()));
+                    },
+                  ),
+                ),
+                const SizedBox(height: 16),
+                SizedBox(
+                  width: double.infinity,
+                  child: ElevatedButton.icon(
+                    icon: const Icon(Icons.dns),
+                    label: const Text('Server Management'),
+                    onPressed: () async {
+                      await Navigator.push(context, MaterialPageRoute(builder: (context) => ServersScreen(prefs: widget.prefs)));
+                      // Users added to the app from a server become profiles.
+                      _reloadProfilesAndSubs();
                     },
                   ),
                 ),

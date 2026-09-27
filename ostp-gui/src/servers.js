@@ -107,7 +107,7 @@ async function call(cmd, args) {
       return await app.invoke(cmd, { ...args, auth: typedAuth.get(id) || null });
     } catch (e) {
       const msg = String(e?.message || e);
-      const needsSecret = msg.includes('SECRET_NEEDED') || msg.includes('credential store');
+      const needsSecret = msg.includes('SECRET_NEEDED') || msg.includes('credential store') || msg.includes('cannot be opened');
       const rejected = /did not accept the (password|key)|cannot read the private key|passphrase/.test(msg) && typedAuth.has(id);
       if (!needsSecret && !rejected) throw new Error(msg);
       typedAuth.delete(id);
@@ -502,7 +502,9 @@ async function renderManage(body, id) {
       ${panel.enabled ? '<button class="btn primary" id="btn-panel-open">Open the panel</button><button class="btn secondary" id="btn-panel-off">Turn off</button>'
                       : '<button class="btn primary" id="btn-panel-on">Turn on the panel</button>'}
     </div>
-    <p class="card-note">The panel opens in your browser through this SSH connection; it does not need an open port.</p>
+    ${panel.enabled ? `<div class="kv-card">${kv('Through the VPN', esc(vpnPanelUrl(panel)), 'mono')}</div>` : ''}
+    <p class="card-note">"Open the panel" goes through this SSH connection and needs no open port.
+      The VPN address works in any browser on a device connected through this server, phones included.</p>
 
     <div class="section-divider"><span>Server log</span></div>
     <div class="btn-row"><button class="btn secondary" id="btn-logs">Show the last 300 lines</button></div>
@@ -566,6 +568,13 @@ async function renderManage(body, id) {
     currentId = null;
     app.showScreen('servers');
   };
+}
+
+// The panel inside the tunnel: 10.1.0.1 is the server as clients see it.
+function vpnPanelUrl(panel) {
+  const port = String(panel.bind || '').split(':').pop();
+  const path = String(panel.webpath || '').replace(/^\/+|\/+$/g, '');
+  return `http://10.1.0.1:${port}/${path ? path + '/' : ''}`;
 }
 
 // Actions that restart or remove things are refused while this app is

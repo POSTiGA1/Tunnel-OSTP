@@ -8,6 +8,7 @@ import 'package:shared_preferences/shared_preferences.dart';
 import 'package:mobile_scanner/mobile_scanner.dart';
 
 import 'ui/home_screen.dart';
+import 'ui/welcome_screen.dart';
 
 void main() async {
   WidgetsFlutterBinding.ensureInitialized();
@@ -35,7 +36,7 @@ class OstpApp extends StatelessWidget {
         fontFamily: 'Inter',
         useMaterial3: true,
       ),
-      home: HomeScreen(prefs: prefs),
+      home: needsWelcome(prefs) ? WelcomeScreen(prefs: prefs) : HomeScreen(prefs: prefs),
     );
   }
 }

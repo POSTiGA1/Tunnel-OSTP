@@ -67,6 +67,36 @@ pub enum Action {
 }
 
 impl Action {
+    /// From the name and parameters the apps send.
+    pub fn parse(name: &str, params: &Value, channel: Channel) -> Result<Action> {
+        let text = |k: &str| params[k].as_str().unwrap_or_default().trim().to_string();
+        Ok(match name {
+            "update" => Action::Update(channel),
+            "restart" => Action::Restart,
+            "reboot" => Action::Reboot,
+            "uninstall" => Action::Uninstall,
+            "panel-enable" => {
+                let password = params["password"].as_str().unwrap_or_default().to_string();
+                if password.chars().count() < 8 {
+                    bail!("the panel password must be at least 8 characters");
+                }
+                let user = text("user");
+                Action::PanelEnable { user: if user.is_empty() { "admin".into() } else { user }, password }
+            }
+            "panel-disable" => Action::PanelDisable,
+            "cert-issue" => {
+                let domain = text("domain");
+                if domain.is_empty() {
+                    bail!("enter the domain");
+                }
+                Action::CertIssue { domain, email: Some(text("email")).filter(|e| !e.is_empty()) }
+            }
+            "sub-enable" => Action::SubEnable,
+            "sub-disable" => Action::SubDisable,
+            other => bail!("unknown action {other}"),
+        })
+    }
+
     /// The command and what it reads on stdin.
     fn command(&self) -> (String, Option<String>) {
         match self {
@@ -91,6 +121,26 @@ impl Action {
             Action::SubDisable => (format!("{OSTP} sub disable"), None),
         }
     }
+}
+
+/// `ostp manage` subcommands the apps may run.
+pub const MANAGE_COMMANDS: &[&str] = &["status", "users", "user-add", "user-remove", "user-rename", "logs", "restart"];
+
+/// A password or key typed in the app, as JSON:
+/// `{"kind": "password"|"key", "secret": "...", "passphrase": "..."}`.
+pub fn auth_from_json(v: &Value) -> Result<Option<Auth>> {
+    if v.is_null() {
+        return Ok(None);
+    }
+    let secret = v["secret"].as_str().unwrap_or_default().to_string();
+    if secret.is_empty() {
+        bail!("enter the password or the private key");
+    }
+    Ok(Some(match v["kind"].as_str() {
+        Some("password") => Auth::Password(secret),
+        Some("key") => Auth::Key { text: secret, passphrase: v["passphrase"].as_str().filter(|p| !p.is_empty()).map(str::to_string) },
+        other => bail!("unknown sign-in kind {other:?}"),
+    }))
 }
 
 pub struct Manager {
@@ -265,6 +315,59 @@ impl Manager {
     }
 }
 
+impl Manager {
+    /// One request from an app as JSON, `{"op": ..., ...}`; the answer as
+    /// JSON. The Android app talks to the manager only through this.
+    ///
+    /// Ops: `list`; `add` {name, host, port, user, auth, remember};
+    /// `rename` {id, name}; `remove` {id}; `probe` {id}; `install` {id, port};
+    /// `manage` {id, args}; `action` {id, action, params};
+    /// `panel_url` {id} (the panel through an SSH forward on this device).
+    /// Every op with an id takes an optional `auth` for servers whose secret
+    /// is not remembered.
+    pub async fn handle(&self, req: &Value, channel: Channel, on_line: impl FnMut(&str)) -> Result<Value> {
+        let id = req["id"].as_str().unwrap_or_default();
+        let auth = || auth_from_json(&req["auth"]);
+        let text = |k: &str| req[k].as_str().unwrap_or_default().to_string();
+        match req["op"].as_str().unwrap_or_default() {
+            "list" => Ok(serde_json::json!({ "servers": self.list().await, "can_remember": self.can_remember() })),
+            "add" => {
+                let host = text("host").trim().to_string();
+                let user = text("user").trim().to_string();
+                if host.is_empty() || user.is_empty() {
+                    bail!("enter the server's address and the login");
+                }
+                let port = req["port"].as_u64().and_then(|p| u16::try_from(p).ok()).unwrap_or(22);
+                let auth = auth()?.ok_or_else(|| anyhow!("enter the password or the private key"))?;
+                let info = self.add(&text("name"), Target { host, port, user }, auth, req["remember"].as_bool().unwrap_or(false)).await?;
+                Ok(serde_json::to_value(info)?)
+            }
+            "rename" => self.rename(id, &text("name")).await.map(|_| Value::Null),
+            "remove" => self.remove(id).await.map(|_| Value::Null),
+            "probe" => self.probe(id, auth()?).await,
+            "install" => {
+                let port = req["port"].as_u64().and_then(|p| u16::try_from(p).ok()).unwrap_or(50000);
+                self.install(id, auth()?, channel, port, on_line).await
+            }
+            "manage" => {
+                let args: Vec<String> = serde_json::from_value(req["args"].clone()).unwrap_or_default();
+                if !args.first().is_some_and(|a| MANAGE_COMMANDS.contains(&a.as_str())) {
+                    bail!("unknown server command");
+                }
+                let args: Vec<&str> = args.iter().map(String::as_str).collect();
+                self.manage(id, auth()?, &args).await
+            }
+            "action" => {
+                let action = Action::parse(&text("action"), &req["params"], channel)?;
+                let out = self.action(id, auth()?, action, on_line).await?;
+                Ok(serde_json::json!({ "output": out.stdout }))
+            }
+            "panel_url" => Ok(serde_json::json!({ "url": self.open_panel(id, auth()?).await? })),
+            other => bail!("unknown op {other}"),
+        }
+    }
+}
+
 fn first_line(out: &Output) -> String {
     let text = if out.stderr.trim().is_empty() { &out.stdout } else { &out.stderr };
     text.lines().rev().find(|l| !l.trim().is_empty()).unwrap_or("the command failed").trim().to_string()
@@ -302,6 +405,33 @@ mod tests {
         let (cmd, stdin) = Action::PanelEnable { user: "ad'min".into(), password: "p w".into() }.command();
         assert_eq!(cmd, "/usr/local/bin/ostp panel enable --user 'ad'\\''min'");
         assert_eq!(stdin.as_deref(), Some("p w\n"));
+    }
+
+    #[test]
+    fn actions_and_auth_from_the_apps() {
+        let p = serde_json::json!({ "user": "", "password": "12345678" });
+        assert!(matches!(Action::parse("panel-enable", &p, Channel::Beta).unwrap(), Action::PanelEnable { ref user, .. } if user == "admin"));
+        assert!(Action::parse("panel-enable", &serde_json::json!({ "password": "short" }), Channel::Beta).is_err());
+        assert!(matches!(Action::parse("update", &Value::Null, Channel::Beta).unwrap(), Action::Update(Channel::Beta)));
+        assert!(Action::parse("rm -rf", &Value::Null, Channel::Beta).is_err());
+        assert!(auth_from_json(&Value::Null).unwrap().is_none());
+        let key = auth_from_json(&serde_json::json!({ "kind": "key", "secret": "k", "passphrase": "" })).unwrap().unwrap();
+        assert!(matches!(key, Auth::Key { passphrase: None, .. }));
+        assert!(auth_from_json(&serde_json::json!({ "kind": "password", "secret": "" })).is_err());
+    }
+
+    #[tokio::test]
+    async fn requests_are_checked_before_anything_runs() {
+        let file = std::env::temp_dir().join(format!("ostp-mgr-{}.json", rand::random::<u32>()));
+        let m = Manager::new(&file, None).unwrap();
+        let list = m.handle(&serde_json::json!({ "op": "list" }), Channel::Stable, |_| {}).await.unwrap();
+        assert_eq!(list["servers"], serde_json::json!([]));
+        assert_eq!(list["can_remember"], false);
+        let err = |req: Value| async move { m.handle(&req, Channel::Stable, |_| {}).await.unwrap_err().to_string() };
+        assert!(err(serde_json::json!({ "op": "manage", "id": "x", "args": ["reboot"] })).await.contains("unknown server command"));
+        let m = Manager::new(&file, None).unwrap();
+        assert!(m.handle(&serde_json::json!({ "op": "add", "host": "", "user": "root" }), Channel::Stable, |_| {}).await.is_err());
+        assert!(m.handle(&serde_json::json!({ "op": "nope" }), Channel::Stable, |_| {}).await.is_err());
     }
 
     #[test]

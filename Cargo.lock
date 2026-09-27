@@ -2283,6 +2283,7 @@ dependencies = [
  "jni 0.21.1",
  "ostp-client",
  "ostp-core",
+ "ostp-ssh",
  "portable-atomic",
  "serde",
  "serde_json",

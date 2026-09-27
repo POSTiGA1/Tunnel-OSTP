@@ -645,3 +645,130 @@ mod tests {
         assert!(checked >= 5, "found only {checked} external declarations; did the Kotlin file move?");
     }
 }
+
+// ── Servers over SSH ─────────────────────────────────────────────────────────
+// The app installs and manages its own servers through ostp_ssh's manager,
+// which keeps SSH connections open between calls: one manager and one
+// runtime for the life of the process.
+
+static SERVERS_RT: std::sync::OnceLock<Runtime> = std::sync::OnceLock::new();
+static SERVERS: tokio::sync::OnceCell<ostp_ssh::manager::Manager> = tokio::sync::OnceCell::const_new();
+/// Output of running installs and actions, `(seq, server id, line)`, read by
+/// the app with the `lines` op while a call is still running.
+static SERVER_LINES: std::sync::Mutex<(u64, VecDeque<(u64, String, String)>)> = std::sync::Mutex::new((0, VecDeque::new()));
+
+fn push_server_line(id: &str, line: &str) {
+    if let Ok(mut g) = SERVER_LINES.lock() {
+        g.0 += 1;
+        let seq = g.0;
+        if g.1.len() >= 2000 {
+            g.1.pop_front();
+        }
+        g.1.push_back((seq, id.to_string(), line.to_string()));
+    }
+}
+
+fn server_lines_since(since: u64) -> serde_json::Value {
+    let g = SERVER_LINES.lock().unwrap_or_else(|e| e.into_inner());
+    let lines: Vec<_> = g
+        .1
+        .iter()
+        .filter(|(seq, _, _)| *seq > since)
+        .map(|(seq, id, line)| serde_json::json!({ "seq": seq, "id": id, "line": line }))
+        .collect();
+    serde_json::json!({ "lines": lines, "next": g.0 })
+}
+
+fn decode_master_key(hex: &str) -> Option<[u8; 32]> {
+    let hex = hex.trim();
+    if hex.len() != 64 {
+        return None;
+    }
+    let bytes: Option<Vec<u8>> = (0..64).step_by(2).map(|i| u8::from_str_radix(&hex[i..i + 2], 16).ok()).collect();
+    bytes?.try_into().ok()
+}
+
+/// One request to the server manager as JSON (see
+/// `ostp_ssh::manager::Manager::handle`), plus `{"op": "lines", "since": N}`
+/// for the output of running calls. `data_dir` holds servers.json;
+/// `master_key` (64 hex chars, from the Android Keystore) seals saved
+/// secrets, empty when there is none. Returns `{"ok": ...}` or
+/// `{"error": ...}`. Blocking: call off the UI thread.
+#[no_mangle]
+pub extern "system" fn Java_net_ostp_client_OstpClientSdk_serversCall(
+    mut env: JNIEnv,
+    _class: JClass,
+    data_dir: JString,
+    master_key: JString,
+    request: JString,
+) -> jstring {
+    let get = |env: &mut JNIEnv, s: &JString| -> String { env.get_string(s).map(Into::into).unwrap_or_default() };
+    let (dir, key, req) = (get(&mut env, &data_dir), get(&mut env, &master_key), get(&mut env, &request));
+    let reply = servers_call(&dir, &key, &req);
+    match env.new_string(reply.to_string().replace('\0', "")) {
+        Ok(s) => s.into_raw(),
+        Err(_) => std::ptr::null_mut(),
+    }
+}
+
+fn servers_call(dir: &str, key: &str, req: &str) -> serde_json::Value {
+    let req: serde_json::Value = match serde_json::from_str(req) {
+        Ok(v) => v,
+        Err(e) => return serde_json::json!({ "error": format!("bad request: {e}") }),
+    };
+    if req["op"] == "lines" {
+        return serde_json::json!({ "ok": server_lines_since(req["since"].as_u64().unwrap_or(0)) });
+    }
+    let rt = SERVERS_RT.get_or_init(|| {
+        tokio::runtime::Builder::new_multi_thread()
+            .worker_threads(2)
+            .enable_all()
+            .build()
+            .expect("tokio runtime for servers")
+    });
+    let file = std::path::Path::new(dir).join("servers.json");
+    let result = rt.block_on(async {
+        let manager = SERVERS
+            .get_or_try_init(|| async { ostp_ssh::manager::Manager::new(&file, decode_master_key(key)) })
+            .await?;
+        let id = req["id"].as_str().unwrap_or_default().to_string();
+        let channel = ostp_ssh::manager::Channel::of_version(&ostp_client::updates::build_tag());
+        manager.handle(&req, channel, |line| push_server_line(&id, line)).await
+    });
+    match result {
+        Ok(v) => serde_json::json!({ "ok": v }),
+        Err(e) => serde_json::json!({ "error": format!("{e:#}") }),
+    }
+}
+
+#[cfg(test)]
+mod servers_tests {
+    use super::*;
+
+    #[test]
+    fn lines_are_read_in_order_from_a_point() {
+        push_server_line("a", "one");
+        let mark = server_lines_since(0)["next"].as_u64().unwrap();
+        push_server_line("a", "two");
+        push_server_line("b", "three");
+        let got = server_lines_since(mark);
+        let lines: Vec<&str> = got["lines"].as_array().unwrap().iter().map(|l| l["line"].as_str().unwrap()).collect();
+        assert_eq!(lines, vec!["two", "three"]);
+        assert_eq!(got["next"].as_u64().unwrap(), mark + 2);
+    }
+
+    #[test]
+    fn requests_go_to_the_manager() {
+        let dir = std::env::temp_dir().join(format!("ostp-jni-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let dir = dir.to_str().unwrap();
+        let key = "11".repeat(32);
+        assert_eq!(decode_master_key(&key), Some([0x11; 32]));
+        assert_eq!(decode_master_key("abc"), None);
+        let list = servers_call(dir, &key, r#"{"op":"list"}"#);
+        assert_eq!(list["ok"]["servers"], serde_json::json!([]));
+        assert_eq!(list["ok"]["can_remember"], true);
+        assert!(servers_call(dir, &key, r#"{"op":"remove","id":"nope"}"#)["error"].is_string());
+        assert!(servers_call(dir, &key, "not json")["error"].as_str().unwrap().starts_with("bad request"));
+    }
+}

@@ -77,4 +77,12 @@ object OstpClientSdk {
     @Keep
     @JvmStatic
     external fun checkForUpdates(): String
+
+    /**
+     * One request to the SSH server manager as JSON; `{"ok": ...}` or
+     * `{"error": ...}`. Blocking (it can install a server): call off the UI thread.
+     */
+    @Keep
+    @JvmStatic
+    external fun serversCall(dataDir: String, masterKey: String, requestJson: String): String
 }

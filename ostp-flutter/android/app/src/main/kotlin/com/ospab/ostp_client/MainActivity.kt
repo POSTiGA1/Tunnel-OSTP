@@ -141,6 +141,20 @@ class MainActivity : FlutterActivity() {
                     } catch (_: Throwable) {}
                     result.success(null)
                 }
+                "serversCall" -> {
+                    // SSH round trips, and an install takes minutes: never on the UI thread.
+                    val requestJson = call.argument<String>("requestJson") ?: "{}"
+                    val dataDir = filesDir.absolutePath
+                    Thread {
+                        try {
+                            val key = ServerVault.masterKeyHex(applicationContext)
+                            val reply = net.ostp.client.OstpClientSdk.serversCall(dataDir, key, requestJson)
+                            runOnUiThread { result.success(reply) }
+                        } catch (e: Throwable) {
+                            runOnUiThread { result.error("ERROR", e.message, null) }
+                        }
+                    }.start()
+                }
                 "fetchSubscription" -> {
                     // A network round trip with a TLS handshake: never on the UI thread.
                     val url = call.argument<String>("url") ?: ""
