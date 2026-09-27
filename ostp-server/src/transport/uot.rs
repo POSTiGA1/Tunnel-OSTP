@@ -4,13 +4,35 @@ use std::collections::HashMap;
 use std::net::SocketAddr;
 use std::sync::Arc;
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
+use std::time::Duration;
 use tokio::sync::{mpsc, RwLock};
+
+/// A connection that delivers no datagram for this long is closed. Clients
+/// send a keepalive every few seconds (5 s by default), so only a dead or
+/// abandoned connection gets here; before, one stayed open until the kernel
+/// noticed, holding a task and, behind a web server, one of its connections.
+/// Sessions themselves survive: they time out separately and a client can
+/// carry on over a new connection.
+pub const IDLE_TIMEOUT: Duration = Duration::from_secs(300);
 
 pub async fn handle_tcp_connection<S>(
     stream: S,
     peer_addr: SocketAddr,
     tcp_map: Arc<RwLock<HashMap<SocketAddr, mpsc::Sender<Bytes>>>>,
     udp_tx: mpsc::Sender<(Bytes, SocketAddr)>,
+) -> Result<()>
+where
+    S: tokio::io::AsyncRead + tokio::io::AsyncWrite + Unpin + Send + 'static,
+{
+    handle_tcp_connection_with_idle(stream, peer_addr, tcp_map, udp_tx, IDLE_TIMEOUT).await
+}
+
+async fn handle_tcp_connection_with_idle<S>(
+    stream: S,
+    peer_addr: SocketAddr,
+    tcp_map: Arc<RwLock<HashMap<SocketAddr, mpsc::Sender<Bytes>>>>,
+    udp_tx: mpsc::Sender<(Bytes, SocketAddr)>,
+    idle: Duration,
 ) -> Result<()>
 where
     S: tokio::io::AsyncRead + tokio::io::AsyncWrite + Unpin + Send + 'static,
@@ -41,10 +63,23 @@ where
     let reader = async move {
         let mut len_buf = [0u8; 2];
         loop {
-            if read_half.read_exact(&mut len_buf).await.is_err() { break; }
-            let len = u16::from_be_bytes(len_buf) as usize;
-            let mut data = vec![0u8; len];
-            if read_half.read_exact(&mut data).await.is_err() { break; }
+            // The whole frame must arrive within `idle`: a peer that stops
+            // halfway through one is as dead as one that sends nothing.
+            let frame = tokio::time::timeout(idle, async {
+                read_half.read_exact(&mut len_buf).await?;
+                let mut data = vec![0u8; u16::from_be_bytes(len_buf) as usize];
+                read_half.read_exact(&mut data).await?;
+                Ok::<_, std::io::Error>(data)
+            })
+            .await;
+            let data = match frame {
+                Ok(Ok(data)) => data,
+                Ok(Err(_)) => break,
+                Err(_) => {
+                    tracing::debug!("UoT client {} idle for {:?}, closing", peer_addr, idle);
+                    break;
+                }
+            };
             if udp_tx.send((Bytes::from(data), peer_addr)).await.is_err() { break; }
         }
     };
@@ -133,5 +168,37 @@ mod tests {
         drop(client);
         let _ = handle.await;
         assert!(!tcp_map.read().await.contains_key(&peer()), "tcp_map entry must be removed on close");
+    }
+
+    /// A connection that goes quiet is closed and unregistered, while one
+    /// that keeps sending stays open past the same interval.
+    #[tokio::test]
+    async fn an_idle_connection_is_closed() {
+        let idle = std::time::Duration::from_millis(200);
+        let (mut client, server) = tokio::io::duplex(64 * 1024);
+        let tcp_map: Arc<RwLock<HashMap<SocketAddr, mpsc::Sender<Bytes>>>> =
+            Arc::new(RwLock::new(HashMap::new()));
+        let (udp_tx, mut udp_rx) = mpsc::channel(16);
+        let handle = tokio::spawn(handle_tcp_connection_with_idle(server, peer(), tcp_map.clone(), udp_tx, idle));
+
+        // Keepalives every 100 ms for 500 ms: longer than `idle` in total.
+        for _ in 0..5 {
+            client.write_all(&[0, 1, 7]).await.unwrap();
+            assert_eq!(udp_rx.recv().await.unwrap().0.as_ref(), &[7]);
+            tokio::time::sleep(std::time::Duration::from_millis(100)).await;
+        }
+        assert!(!handle.is_finished(), "an active connection must stay open");
+
+        // Half a frame, then silence.
+        client.write_all(&[0, 10, 1, 2]).await.unwrap();
+        tokio::time::timeout(std::time::Duration::from_secs(2), handle)
+            .await
+            .expect("an idle connection must be closed")
+            .unwrap()
+            .unwrap();
+        assert!(!tcp_map.read().await.contains_key(&peer()));
+        // The server side is gone, so the client sees the end of the stream.
+        let mut buf = [0u8; 1];
+        assert_eq!(client.read(&mut buf).await.unwrap(), 0);
     }
 }

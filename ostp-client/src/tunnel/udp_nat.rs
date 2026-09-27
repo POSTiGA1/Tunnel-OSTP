@@ -36,33 +36,20 @@ pub async fn run_udp_nat(
                             let proxy_addr_clone = proxy_addr.clone();
                             let tx_clone = tx.clone();
                             
+                            let current = matcher.read().await.clone();
                             let mut should_bypass = false;
-                            {
-                                let matcher_guard = matcher.read().await;
-                                if matcher_guard.match_ip(&dst.ip()) {
-                                    should_bypass = true;
-                                    if debug {
-                                        tracing::info!("TUN UDP BYPASS (IP match): {} → {}", src, dst);
-                                    }
+                            if current.match_ip(&dst.ip()) {
+                                should_bypass = true;
+                                if debug {
+                                    tracing::info!("TUN UDP BYPASS (IP match): {} → {}", src, dst);
                                 }
-
-                                #[cfg(target_os = "windows")]
-                                if !should_bypass {
-                                    if let Some(proc_name) = crate::tunnel::process_lookup::get_process_name_from_port_udp(src.port()) {
-                                        if debug {
-                                            tracing::debug!("TUN UDP lookup: port {} -> process {}", src.port(), proc_name);
-                                        }
-                                        if matcher_guard.match_process(&proc_name) {
-                                            should_bypass = true;
-                                            if debug {
-                                                tracing::debug!("TUN UDP BYPASS (Process match): {} ({} → {})", proc_name, src, dst);
-                                            }
-                                        }
-                                    } else {
-                                        if debug {
-                                            tracing::debug!("TUN UDP lookup: port {} -> no process found", src.port());
-                                        }
-                                    }
+                            } else if let Some(name) = current
+                                .excluded_process(crate::tunnel::process_lookup::Proto::Udp, src)
+                                .await
+                            {
+                                should_bypass = true;
+                                if debug {
+                                    tracing::info!("TUN UDP BYPASS (process {name}): {src} → {dst}");
                                 }
                             }
 

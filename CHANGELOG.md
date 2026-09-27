@@ -8,6 +8,25 @@ Older history is on the [Releases](https://github.com/ospab/ostp/releases) page 
 
 ## [Unreleased]
 
+The stable 0.4.6: everything from the betas below, plus the fixes listed here. In short:
+- TLS on port 443, directly or behind nginx, Apache or Caddy, with `ostp cert` for the domain and certificate.
+- Subscriptions in the CLI, the desktop app and Android.
+- Seamless roaming: a network change no longer drops the session.
+- A filtering DNS resolver on the server (`ostp dns`) and a new web panel.
+- Wire-compatible with 0.4.5: old clients and servers keep working with new ones.
+
+### Changed
+- The management API and web panel do not start without a sign-in (a name and password, or an API token). Before, a config without one served an open panel, and loopback was no protection: every client reaches the server's 127.0.0.1 through the tunnel. Set one with `ostp panel on`.
+- The desktop app has one dark theme; the light theme and its switch are gone.
+- The desktop app no longer has the "auto-connect" button that tried transports and MTUs one after another; pick them in the profile.
+- TLS through a web server: nginx and Apache close a connection after 5 minutes of silence instead of a day.
+
+### Fixed
+- Security: an empty `api.token` (what `ostp init server` writes) let a request with an empty `Authorization` header use the API.
+- Excluded programs work: in proxy mode (they were never checked there), in TUN mode on Linux (only Windows checked them), on Windows for IPv6 connections and for programs the old lookup could not open.
+- Excluded domains with non-Latin names (`пример.рф`) match: they are compared in punycode, as DNS, TLS and browsers send them.
+- Server: a TCP or TLS connection that sends nothing for 5 minutes is closed. Dead connections used to stay open until the kernel noticed.
+
 ## [0.4.6-beta.6] - 2026-09-27
 
 ### Added

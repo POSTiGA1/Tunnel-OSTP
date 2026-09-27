@@ -31,11 +31,12 @@ webpki-roots = "1"
 rustls = { version = "0.23", default-features = false, features = ["ring", "std", "tls12", "logging"] }
 tokio-rustls = { version = "0.26", default-features = false, features = ["ring", "tls12", "logging"] }
 httparse = "1"
+idna = "1"
 tun = { version = "0.8.9", features = ["async"] }
 netstack-smoltcp = "0.2.2"
 futures = "0.3.32"
 libc = "0.2.186"
-winapi = { version = "0.3.9", features = ["iphlpapi", "tcpmib", "processthreadsapi", "psapi", "handleapi", "winerror", "minwindef", "winnt", "iptypes", "ws2def"] }
+winapi = { version = "0.3.9", features = ["iphlpapi", "tcpmib", "udpmib", "winbase", "processthreadsapi", "psapi", "handleapi", "winerror", "minwindef", "winnt", "iptypes", "ws2def"] }
 
 [dev-dependencies]
 rcgen = { version = "0.14", default-features = false, features = ["crypto", "pem", "ring"] }

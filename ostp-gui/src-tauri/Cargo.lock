@@ -2675,6 +2675,7 @@ dependencies = [
  "futures-util",
  "hmac",
  "httparse",
+ "idna",
  "json_comments",
  "libc",
  "netstack-smoltcp",

@@ -119,8 +119,15 @@ fn update_proxy_bypass_list_windows(domains: &[String], ips: &[String]) {
 
     // Add excluded domains: both exact and wildcard subdomain form
     for d in domains {
-        let d = d.trim().trim_start_matches('.').to_lowercase();
+        let original = d.trim().trim_start_matches(['.', '*']).to_lowercase();
+        let d = crate::tunnel::exclusion::normalize_domain(&original);
         if d.is_empty() { continue; }
+        // Browsers compare the list with the punycode name; keep the
+        // readable form too for programs that pass it as typed.
+        if original.trim_end_matches('.') != d {
+            parts.push(format!("*.{}", original.trim_end_matches('.')));
+            parts.push(original.trim_end_matches('.').to_string());
+        }
         parts.push(d.clone());
         parts.push(format!("*.{}", d));
     }

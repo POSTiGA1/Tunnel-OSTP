@@ -4,11 +4,6 @@ if (window.__TAURI__?.core) {
   invoke = window.__TAURI__.core.invoke;
 }
 
-// ── Theme: apply saved theme ASAP (before first paint) to avoid a flash ─
-if (localStorage.getItem('ostp_theme') === 'light') {
-  document.documentElement.classList.add('light');
-}
-
 // ── PROFILE STORE ─────────────────────────────────────────────────────
 // Profiles are stored in localStorage only — the core never knows about them.
 // Only the active profile is compiled into a config and passed to Tauri.
@@ -89,7 +84,6 @@ const metricUp       = $('metric-up');
 const toast          = $('toast');
 
 const btnGoSettings  = $('btn-go-settings');
-const btnAutoConnect = $('btn-auto-connect');
 const btnBack        = $('btn-back');
 
 const btnAddProfile  = $('btn-add-profile');
@@ -433,50 +427,6 @@ async function handleToggle() {
       showToast(msg, 'error');
     }
   }
-}
-
-// ── AUTO-CONNECT ──────────────────────────────────────────────────────
-async function handleAutoConnect() {
-  if (appState !== 'disconnected') {
-    showToast('Disconnect first', 'error'); return;
-  }
-  if (!activeId || !profiles.find(p => p.id === activeId)) {
-    showToast('Select a profile first', 'error'); return;
-  }
-
-  const modes = ['udp', 'uot'];
-  const mtus  = [1500, 1350, 1280];
-
-  showToast('Auto-connect: scanning…');
-
-  for (const transport of modes) {
-    for (const mtu of mtus) {
-      showToast(`Testing ${transport.toUpperCase()} · MTU ${mtu}`);
-      const active = profiles.find(p => p.id === activeId);
-      const tmpCfg = buildConfig();
-      if (!tmpCfg) return;
-      tmpCfg.transport.mode = transport;
-      tmpCfg.mtu = mtu;
-
-      try {
-        await invoke('save_config', { jsonContent: JSON.stringify(tmpCfg, null, 2) });
-        setState('connecting');
-        const ok = await invoke('start_tunnel');
-        if (ok) {
-          await new Promise(r => setTimeout(r, 3000));
-          const metrics = await invoke('get_metrics');
-          if (metrics?.rtt_ms > 0) {
-            startPolling();
-            showToast(`✓ ${transport.toUpperCase()} · MTU ${mtu}`, 'ok');
-            return;
-          }
-          await invoke('stop_tunnel');
-          setState('disconnected');
-        }
-      } catch { setState('disconnected'); }
-    }
-  }
-  showToast('No working config found', 'error');
 }
 
 // ── SCREEN NAVIGATION ─────────────────────────────────────────────────
@@ -1270,7 +1220,6 @@ window.addEventListener('DOMContentLoaded', async () => {
   // ── Event wiring ──────────────────────────────────────────────────
 
   btnConnect.addEventListener('click', handleToggle);
-  btnAutoConnect.addEventListener('click', handleAutoConnect);
   btnGoSettings.addEventListener('click', () => showScreen('settings'));
   btnBack.addEventListener('click', () => showScreen('home'));
   $('btn-go-prober').addEventListener('click', () => showScreen('prober'));
@@ -1279,13 +1228,6 @@ window.addEventListener('DOMContentLoaded', async () => {
   $('btn-pr-ttl').addEventListener('click', runTtl);
   $('btn-pr-dpi').addEventListener('click', runDpi);
   $('pr-profile').addEventListener('change', () => { lastMatrix = null; setProberBusy(false); });
-
-  // Theme toggle (dark ⇄ light), persisted in localStorage
-  const btnTheme = $('btn-theme');
-  if (btnTheme) btnTheme.addEventListener('click', () => {
-    const isLight = document.documentElement.classList.toggle('light');
-    localStorage.setItem('ostp_theme', isLight ? 'light' : 'dark');
-  });
 
   // GUI version shown at the bottom of Settings
   const appVersionEl = $('app-version');

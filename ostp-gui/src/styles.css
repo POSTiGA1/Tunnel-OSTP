@@ -46,38 +46,6 @@
   color: var(--c-txt-1);
 }
 
-/* ── Light theme (inverted monochrome) ──────────────────────────────── */
-:root.light {
-  --c-bg:          #f4f4f5;
-  --c-surface:     #ffffff;
-  --c-card:        rgba(0,0,0,0.03);
-  --c-card-border: rgba(0,0,0,0.10);
-  --c-card-hover:  rgba(0,0,0,0.05);
-  --c-fg-rgb:      0, 0, 0;
-  --c-accent:      #18181b;
-  --c-accent-dim:  rgba(0,0,0,0.08);
-  --c-accent-glow: rgba(0,0,0,0.14);
-  /* Deeper green so it stays legible against the light background. */
-  --c-green-rgb:   22, 163, 74;
-  --c-green:       #16a34a;
-  --c-green-glow:  rgba(var(--c-green-rgb),0.22);
-  --c-green-dim:   rgba(var(--c-green-rgb),0.08);
-  --c-red:         #dc2626;
-  --c-amber:       #d97706;
-  --c-txt-1:       #18181b;
-  --c-txt-2:       #71717a;
-  --c-txt-3:       #c4c4cc;
-  color: var(--c-txt-1);
-}
-/* Eagle watermark is a light asset — invert it so it stays visible on light bg */
-:root.light .watermark img { filter: invert(1); }
-
-/* Theme toggle: show the icon of the theme you'd switch TO */
-#icon-moon { display: none; }
-#icon-sun  { display: block; }
-:root.light #icon-moon { display: block; }
-:root.light #icon-sun  { display: none; }
-
 /* GUI version footer at the bottom of Settings */
 .app-version {
   text-align: center;
@@ -631,7 +599,6 @@ a { text-decoration: none; }
   background: transparent;
 }
 .gear-btn:hover { color: var(--c-txt-1); background: rgba(var(--c-fg-rgb),0.07); }
-:root.light .gear-btn:hover { background: rgba(0,0,0,0.05); }
 
 /* ── Inline field (label + input on one line) ────────────────────────── */
 .inline-field {

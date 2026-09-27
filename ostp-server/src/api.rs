@@ -341,12 +341,24 @@ pub async fn start_api_server(
     dns_server: std::sync::Arc<crate::dns::DnsServer>,
     router: std::sync::Arc<crate::router::Router>,
 ) {
+    // An empty token in the config means no token, not one that an empty
+    // Authorization header matches.
+    let api_token = config.token.clone().filter(|t| !t.trim().is_empty());
+    if !has_credentials(&config.username, &config.password_hash, api_token.as_deref()) {
+        // Loopback is no protection: every client of this server reaches
+        // 127.0.0.1 through the tunnel as 10.1.0.1.
+        tracing::error!(
+            "Management API not started: no sign-in is configured, and the panel controls the server. \
+             Set one with `ostp panel on` (or api.username and api.password_hash, or api.token) and restart."
+        );
+        return;
+    }
     let state = ApiState {
         access_keys,
         user_stats,
         start_time: Instant::now(),
         session_token: Arc::new(RwLock::new(None)),
-        api_token: config.token.clone(),
+        api_token,
         webpath: config.webpath.clone(),
         username: config.username.clone(),
         password_hash: config.password_hash.clone(),
@@ -391,14 +403,16 @@ fn secure_eq(a: &str, b: &str) -> bool {
     a.as_bytes().ct_eq(b.as_bytes()).into()
 }
 
+/// Whether anyone can sign in at all: a name and password for the panel, or
+/// a static token for relays. Without either the API does not run.
+fn has_credentials(username: &str, password_hash: &str, token: Option<&str>) -> bool {
+    (!username.is_empty() && !password_hash.is_empty()) || token.is_some_and(|t| !t.trim().is_empty())
+}
+
 fn check_token(state: &ApiState, headers: &axum::http::HeaderMap) -> bool {
     // Both session token (for web UI) and static API token (for relays) are checked
     let mut allowed = false;
-
-    // If no credentials configured, panel is open (unsafe but possible)
-    if state.username.is_empty() && state.password_hash.is_empty() && state.api_token.is_none() {
-        return true;
-    }
+    let api_token = state.api_token.as_deref().filter(|t| !t.is_empty());
 
     if let Some(value) = headers.get("authorization") {
         if let Ok(val) = value.to_str() {
@@ -410,13 +424,13 @@ fn check_token(state: &ApiState, headers: &axum::http::HeaderMap) -> bool {
                     }
                 }
 
-                if let Some(ref api_tok) = state.api_token {
+                if let Some(api_tok) = api_token {
                     if secure_eq(token, api_tok) {
                         allowed = true;
                     }
                 }
             } else {
-                if let Some(ref api_tok) = state.api_token {
+                if let Some(api_tok) = api_token {
                     if secure_eq(val, api_tok) {
                         allowed = true;
                     }
@@ -1127,15 +1141,61 @@ mod tests {
     }
 
     #[test]
-    fn test_check_token_open_when_no_credentials_configured() {
+    fn test_check_token_refuses_everyone_without_credentials() {
         let mut state = make_test_state("panel");
         state.api_token = None;
         state.username.clear();
         state.password_hash.clear();
-        // Documented "unsafe but possible" open-panel mode: no credentials
-        // configured at all means every request passes, including with no
-        // Authorization header.
-        assert!(check_token(&state, &axum::http::HeaderMap::new()));
+        // There is no open-panel mode: the panel controls the server and
+        // loopback is reachable through the tunnel.
+        assert!(!check_token(&state, &axum::http::HeaderMap::new()));
+        assert!(!has_credentials("", "", None));
+        assert!(!has_credentials("admin", "", Some("  ")));
+        assert!(has_credentials("admin", "hash", None));
+        assert!(has_credentials("", "", Some("relay-token")));
+    }
+
+    /// `"token": ""` is what `ostp init server` writes. It must not let an
+    /// empty Authorization header through.
+    #[test]
+    fn test_check_token_empty_token_is_no_token() {
+        let mut state = make_test_state("panel");
+        state.api_token = Some(String::new());
+        let mut headers = axum::http::HeaderMap::new();
+        headers.insert("authorization", axum::http::HeaderValue::from_static(""));
+        assert!(!check_token(&state, &headers));
+        assert!(!check_token(&state, &headers_with_bearer("")));
+    }
+
+    /// The server does not serve the API at all without a way to sign in.
+    #[tokio::test]
+    async fn test_api_is_not_started_without_credentials() {
+        let port = std::net::TcpListener::bind("127.0.0.1:0").unwrap().local_addr().unwrap().port();
+        let config = ApiConfig {
+            enabled: true,
+            bind: format!("127.0.0.1:{port}"),
+            token: Some(String::new()),
+            ..Default::default()
+        };
+        let state = make_test_state("");
+        tokio::time::timeout(
+            std::time::Duration::from_secs(5),
+            start_api_server(
+                config,
+                state.access_keys,
+                state.user_stats,
+                String::new(),
+                0,
+                None,
+                None,
+                None,
+                state.dns_server,
+                state.router,
+            ),
+        )
+        .await
+        .expect("start_api_server must return instead of serving");
+        assert!(tokio::net::TcpStream::connect(("127.0.0.1", port)).await.is_err());
     }
 }
 

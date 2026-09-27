@@ -178,7 +178,7 @@ ssl_certificate {cert};\n    ssl_certificate_key {key};\n    ssl_protocols TLSv1
 location = {ws_path} {{\n        proxy_pass http://127.0.0.1:{port};\n        proxy_http_version 1.1;\n        \
 proxy_set_header Upgrade $http_upgrade;\n        proxy_set_header Connection \"upgrade\";\n        proxy_set_header Host $host;\n        \
 proxy_set_header X-Real-IP $remote_addr;\n        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;\n        \
-proxy_buffering off;\n        proxy_read_timeout 1d;\n        proxy_send_timeout 1d;\n    }}\n\
+proxy_buffering off;\n        proxy_read_timeout 5m;\n        proxy_send_timeout 5m;\n    }}\n\
 {sub}{panel}    location / {{\n        return 404;\n    }}\n}}\n",
         v6_80 = v6("80", ""),
         v6_443 = v6("443", " ssl"),
@@ -195,9 +195,9 @@ proxy_buffering off;\n        proxy_read_timeout 1d;\n        proxy_send_timeout
 /// through mod_proxy_wstunnel with a ws:// target instead.
 pub fn apache_vhost(p: &VhostParams, modern: bool) -> String {
     let ws = if modern {
-        format!("    ProxyPass {0} http://127.0.0.1:{1}{0} upgrade=websocket timeout=86400\n", p.ws_path, p.ostp_port)
+        format!("    ProxyPass {0} http://127.0.0.1:{1}{0} upgrade=websocket timeout=300\n", p.ws_path, p.ostp_port)
     } else {
-        format!("    ProxyPass {0} ws://127.0.0.1:{1}{0} timeout=86400\n", p.ws_path, p.ostp_port)
+        format!("    ProxyPass {0} ws://127.0.0.1:{1}{0} timeout=300\n", p.ws_path, p.ostp_port)
     };
     let panel = p
         .panel

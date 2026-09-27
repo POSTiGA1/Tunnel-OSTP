@@ -590,10 +590,24 @@ async fn handle_proxy_client(
     close_tx: mpsc::Sender<u16>,
     connect_timeout: Duration,
     debug: bool,
-    matcher: ExclusionMatcher,
+    mut matcher: ExclusionMatcher,
     max_chunk: usize,
 ) -> Result<()> {
     let _guard = StreamGuard { stream_id, close_tx: close_tx.clone() };
+
+    // A program on this machine is known by its end of the connection. An
+    // excluded one goes direct whatever it asks for.
+    if let Ok(peer) = client.peer_addr() {
+        if peer.ip().is_loopback() {
+            if let Some(name) = matcher
+                .excluded_process(crate::tunnel::process_lookup::Proto::Tcp, peer)
+                .await
+            {
+                tracing::debug!("proxy BYPASS (process {name}) stream_id={stream_id}");
+                matcher.bypass_all = true;
+            }
+        }
+    }
 
     // Peek the first byte to distinguish SOCKS5 (0x05) from HTTP (any printable ASCII)
     let mut first_byte = [0_u8; 1];

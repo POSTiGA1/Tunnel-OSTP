@@ -478,7 +478,7 @@ async fn get_config() -> Result<String, String> {
     "kill_switch": false
   },
   
-  "_comment_exclude": "Bypass tunnel for these domains/IPs (only works in proxy mode)",
+  "_comment_exclude": "Bypass the tunnel for these domains, IPs and programs (proxy and TUN mode)",
   "exclude": {
     "domains": ["localhost", "127.0.0.1"],
     "ips": [],

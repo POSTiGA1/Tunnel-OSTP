@@ -72,6 +72,7 @@ pub async fn run_native_tunnel(
     }
 
     for domain in &config.exclusions.domains {
+        let domain = crate::tunnel::exclusion::normalize_domain(domain.trim_start_matches(['.', '*']));
         match tokio::net::lookup_host((domain.as_str(), 443u16)).await {
             Ok(addrs) => {
                 for addr in addrs {
@@ -81,7 +82,7 @@ pub async fn run_native_tunnel(
             Err(e) => {
                 tracing::warn!("Failed to pre-resolve excluded domain {domain}: {e}");
             }
-        }
+        };
     }
 
 
@@ -256,24 +257,15 @@ pub async fn run_native_tunnel(
                 // ── Decide: bypass or tunnel? ─────────────────────────────────
                 let mut should_bypass = false;
 
-                // 1. Process match via OS Extended TCP Table (Windows)
-                #[cfg(target_os = "windows")]
-                if !should_bypass {
-                    if let Some(proc_name) = crate::tunnel::process_lookup::get_process_name_from_port(local.port()) {
-                        if debug {
-                            tracing::debug!("TUN TCP lookup: port {} -> process {}", local.port(), proc_name);
-                        }
-                        if matcher.match_process(&proc_name) {
-                            if debug {
-                                tracing::debug!("TUN TCP BYPASS (Process match): {} → {remote}", proc_name);
-                            }
-                            should_bypass = true;
-                        }
-                    } else {
-                        if debug {
-                            tracing::debug!("TUN TCP lookup: port {} -> no process found", local.port());
-                        }
+                // 1. The program that opened the connection.
+                if let Some(name) = matcher
+                    .excluded_process(crate::tunnel::process_lookup::Proto::Tcp, local)
+                    .await
+                {
+                    if debug {
+                        tracing::info!("TUN TCP BYPASS (process {name}): {local} → {remote}");
                     }
+                    should_bypass = true;
                 }
 
                 // 2. SNI domain check (belt-and-suspenders for CDNs / late-resolved IPs)
@@ -645,18 +637,14 @@ pub async fn run_native_tunnel_from_fd(
                     }
                 }
 
-                // 2. Process (Android: /proc/net lookup)
-                if !should_bypass {
-                    if let Some(exe) =
-                        crate::tunnel::process_lookup::get_process_name_from_port(local.port())
-                    {
-                        if true {
-                            tracing::debug!("Android TUN port {} → EXE: {}", local.port(), exe);
-                        }
-                        if matcher.match_process(&exe) {
-                            should_bypass = true;
-                        }
-                    }
+                // 2. The program that opened the connection.
+                if !should_bypass
+                    && matcher
+                        .excluded_process(crate::tunnel::process_lookup::Proto::Tcp, local)
+                        .await
+                        .is_some()
+                {
+                    should_bypass = true;
                 }
 
                 // 3. IP CIDR
