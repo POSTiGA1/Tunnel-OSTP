@@ -2340,7 +2340,12 @@ name = "ostp-ssh"
 version = "0.4.6"
 dependencies = [
  "anyhow",
+ "base64 0.22.1",
+ "chacha20poly1305",
+ "rand 0.8.5",
  "russh",
+ "serde",
+ "serde_json",
  "tokio",
  "tracing",
 ]

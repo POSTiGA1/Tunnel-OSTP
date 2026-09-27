@@ -169,3 +169,50 @@ async fn a_local_port_reaches_the_servers_loopback() {
         assert_eq!(&buf, b"panel");
     }
 }
+
+/// The manager end to end: add the server, see what is installed, read and
+/// change users through the real `ostp manage`. Needs the built binary:
+/// `OSTP_BIN=target/debug/ostp`. It is copied to /usr/local/bin/ostp and
+/// uses /etc/ostp/config.json, so run it only on a throwaway machine.
+#[tokio::test]
+#[ignore]
+async fn the_manager_drives_a_real_ostp() {
+    let Ok(bin) = std::env::var("OSTP_BIN") else {
+        eprintln!("OSTP_BIN not set; skipped");
+        return;
+    };
+    std::fs::copy(bin, "/usr/local/bin/ostp").unwrap();
+    std::fs::create_dir_all("/etc/ostp").unwrap();
+    std::fs::write(
+        "/etc/ostp/config.json",
+        r#"{"mode":"server","config_version":3,"listen":"0.0.0.0:50000","access_keys":[{"access_key":"00112233445566778899aabbccddeeff","name":"me"}]}"#,
+    )
+    .unwrap();
+    std::fs::write("/etc/ostp/.ostp_public_ip", "198.51.100.9\n").unwrap();
+
+    let sshd = start_sshd();
+    let file = sshd.dir.join("servers.json");
+    let m = ostp_ssh::manager::Manager::new(&file, Some(ostp_ssh::store::Vault::random_key())).unwrap();
+    let info = m.add("test", target(&sshd, USER), Auth::Password(PASSWORD.into()), true).await.unwrap();
+    assert!(info.remembered);
+
+    // A fresh manager (the app restarted) signs in with the remembered password.
+    drop(m);
+    let m = ostp_ssh::manager::Manager::new(&file, None).unwrap();
+    assert!(m.probe(&info.id, None).await.unwrap_err().to_string().contains("credential store"));
+    let m = ostp_ssh::manager::Manager::new(&file, Some(ostp_ssh::store::Vault::random_key())).unwrap();
+    assert!(m.probe(&info.id, None).await.is_err(), "another master key cannot open the password");
+    let probe = m.probe(&info.id, Some(Auth::Password(PASSWORD.into()))).await.unwrap();
+    assert_eq!(probe["installed"], true, "{probe}");
+
+    let users = m.manage(&info.id, None, &["users"]).await.unwrap();
+    assert_eq!(users["users"][0]["name"], "me");
+    assert!(users["users"][0]["links"][0]["uri"].as_str().unwrap().contains("198.51.100.9:50000"));
+    let added = m.manage(&info.id, None, &["user-add", "phone with 'quote"]).await.unwrap();
+    assert_eq!(added["user"]["name"], "phone with 'quote");
+    let err = m.manage(&info.id, None, &["user-remove", "nobody"]).await.unwrap_err();
+    assert_eq!(err.to_string(), "no user matches nobody");
+    let status = m.manage(&info.id, None, &["status"]).await.unwrap();
+    assert_eq!(status["users"], 2);
+    assert_eq!(m.open_panel(&info.id, None).await.unwrap_err().to_string(), "PANEL_OFF");
+}

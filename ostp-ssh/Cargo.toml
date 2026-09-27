@@ -13,3 +13,8 @@ tracing.workspace = true
 # ring, not aws-lc-rs: the same crypto backend as the rest of the project,
 # and no cmake/nasm needed to build the desktop app on Windows.
 russh = { version = "0.63", default-features = false, features = ["ring", "rsa", "flate2"] }
+chacha20poly1305.workspace = true
+rand.workspace = true
+serde = { version = "1.0", features = ["derive"] }
+serde_json = "1.0"
+base64 = "0.22"

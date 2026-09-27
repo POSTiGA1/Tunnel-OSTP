@@ -2,6 +2,9 @@
 //! it: connect with a password or a private key, check the server's host key,
 //! run commands as root, and forward a local port to the server's web panel.
 
+pub mod manager;
+pub mod store;
+
 use anyhow::{anyhow, bail, Context, Result};
 use russh::client::{self, Handle};
 use russh::keys::{HashAlg, PrivateKeyWithHashAlg};
