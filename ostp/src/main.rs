@@ -9,6 +9,7 @@ mod sub_cmd;
 mod panel_cmd;
 mod dns_cmd;
 mod changelog_cmd;
+mod manage_cmd;
 mod webserver;
 
 #[derive(Parser, Debug)]
@@ -109,6 +110,12 @@ enum Commands {
     Dns {
         #[command(subcommand)]
         action: dns_cmd::DnsAction,
+    },
+    /// Server state and everyday changes as JSON, for the desktop app (server only)
+    #[command(hide = true)]
+    Manage {
+        #[command(subcommand)]
+        action: manage_cmd::ManageAction,
     },
     /// What changed: the installed version by default (alias: cl)
     #[command(name = "changelog", alias = "cl")]
@@ -1415,6 +1422,7 @@ async fn run_app() -> Result<()> {
             Commands::Cert { action } => return cert_cmd::run(action, &args.config).await,
             Commands::Sub { action } => return sub_cmd::run(action, &args.config),
             Commands::Panel { action } => return panel_cmd::run(action, &args.config),
+            Commands::Manage { action } => manage_cmd::run(action, &args.config),
             Commands::Dns { action } => return dns_cmd::run(action, &args.config).await,
             Commands::Changelog { all, last, version, lang } => {
                 return changelog_cmd::run(changelog_cmd::Options { all, last, version, lang });

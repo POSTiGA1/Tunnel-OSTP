@@ -88,8 +88,20 @@ echo "Platform: linux/$ARCH"
 # -- Parse arguments ----------------------------------------------------
 TARGET_VERSION=""
 TARGET_BRANCH="stable"
+# -y: no questions at all, for the desktop app installing over SSH. A first
+# install then runs `ostp manage install`, which prints one JSON line.
+ASSUME_YES=0
+MANAGE_ARGS=()
 while [[ $# -gt 0 ]]; do
   case $1 in
+    -y|--yes)
+      ASSUME_YES=1
+      shift
+      ;;
+    --port|--host|--user)
+      MANAGE_ARGS+=("$1" "$2")
+      shift 2
+      ;;
     -v|--version)
       TARGET_VERSION="$2"
       shift 2
@@ -131,6 +143,11 @@ else
         echo "Fetching latest stable release..."
         LATEST_RELEASE=$(curl -s "https://api.github.com/repos/${GITHUB_REPO}/releases/latest" | grep '"tag_name":' | sed -E 's/.*"([^"]+)".*/\1/')
     fi
+fi
+
+if { [ -z "$LATEST_RELEASE" ] || [[ "$LATEST_RELEASE" == *"null"* ]]; } && [ "$ASSUME_YES" -eq 1 ]; then
+    echo "[error] Could not determine the latest ${TARGET_BRANCH} release (is GitHub reachable from this server?)."
+    exit 1
 fi
 
 if [ -z "$LATEST_RELEASE" ] || [[ "$LATEST_RELEASE" == *"null"* ]]; then
@@ -244,4 +261,7 @@ echo "No configuration found. Launching setup wizard..."
 echo ""
 
 cd "$INSTALL_DIR"
+if [ "$ASSUME_YES" -eq 1 ]; then
+    exec ./ostp manage install --config "$CONFIG_FILE" "${MANAGE_ARGS[@]}"
+fi
 exec ./ostp setup --config "$CONFIG_FILE"

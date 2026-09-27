@@ -59,7 +59,7 @@ impl UserStats {
 }
 
 /// Snapshot of user stats for API responses.
-#[derive(Debug, Clone, serde::Serialize)]
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 pub struct UserStatsSnapshot {
     pub access_key: String,
     pub name: Option<String>,

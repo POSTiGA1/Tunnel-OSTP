@@ -35,6 +35,7 @@ pub use subscription::SubscriptionSettings;
 
 pub use outbound::{OutboundAction, OutboundConfig, OutboundRule};
 pub use api::ApiConfig;
+pub use dispatcher::UserStatsSnapshot;
 pub use fallback::FallbackConfig;
 pub use relay_node::RelayConfig;
 
@@ -451,8 +452,9 @@ pub async fn run_server(params: ServerParams) -> Result<()> {
     let key_count = shared_keys.read().unwrap_or_else(|e| e.into_inner()).len();
     tracing::info!(listeners = bind_addrs.len(), keys = key_count, "server started");
     tracing::info!("ARQ config: max_reorder=16384, reorder_buf=8192, sent_history=32768, rto=100ms");
+    let stats_file = config_path.as_ref().and_then(|p| p.parent()).map(|d| d.join(STATS_FILE));
     tokio::select! {
-        res = run_server_loop(sniff, sockets, dispatcher, ui_cmd_rx, ui_event_tx, shared_keys, router) => {
+        res = run_server_loop(sniff, sockets, dispatcher, ui_cmd_rx, ui_event_tx, shared_keys, router, stats_file) => {
             if let Err(e) = res {
                 tracing::error!("Server error: {e}");
             }
@@ -545,6 +547,7 @@ fn prepare_tls(t: &tls::TlsSettings) -> Option<(tokio_rustls::TlsAcceptor, Arc<t
     }
 }
 
+#[allow(clippy::too_many_arguments)]
 async fn run_server_loop(
     sniff: SniffSettings,
     sockets: Vec<std::sync::Arc<UdpSocket>>,
@@ -553,6 +556,7 @@ async fn run_server_loop(
     ui_event_tx: mpsc::UnboundedSender<UiEvent>,
     shared_keys: std::sync::Arc<std::sync::RwLock<HashMap<String, crate::api::UserMeta>>>,
     router: std::sync::Arc<crate::router::Router>,
+    stats_file: Option<std::path::PathBuf>,
 ) -> Result<()> {
     let mut remotes: HashMap<(u32, u16), RemoteState> = HashMap::new();
     let (stream_tx, mut stream_rx) = mpsc::unbounded_channel::<(u32, u16, Vec<u8>)>();
@@ -678,9 +682,25 @@ async fn run_server_loop(
     let mut peer_last_seen: HashMap<IpAddr, Instant> = HashMap::new();
     let mut peer_available: HashMap<IpAddr, bool> = HashMap::new();
     let session_backpressure: SessionBackpressure = Arc::new(RwLock::new(HashMap::new()));
+    let started_at = std::time::SystemTime::now();
+    let mut stats_tick = interval(STATS_INTERVAL);
 
     loop {
         tokio::select! {
+            _ = stats_tick.tick(), if stats_file.is_some() => {
+                let snapshot = StatsFile {
+                    written_at: unix_secs(std::time::SystemTime::now()),
+                    started_at: unix_secs(started_at),
+                    sessions: dispatcher.active_sessions(),
+                    users: dispatcher.snapshot_all_users(),
+                };
+                let path = stats_file.clone().unwrap();
+                tokio::task::spawn_blocking(move || {
+                    if let Err(e) = write_stats_file(&path, &snapshot) {
+                        tracing::debug!("could not write {}: {e}", path.display());
+                    }
+                });
+            }
             cmd = ui_cmd_rx.recv() => {
                 match cmd {
                     Some(UiCommand::CreateClientKey) => {
@@ -754,6 +774,37 @@ async fn run_server_loop(
     }
 
     Ok(())
+}
+
+/// Traffic per user, written next to the config every `STATS_INTERVAL` so
+/// that `ostp manage` (what the desktop app runs over SSH) can show it without
+/// the management API. Counters start from zero when the service starts.
+pub const STATS_FILE: &str = ".ostp_stats.json";
+const STATS_INTERVAL: Duration = Duration::from_secs(30);
+
+#[derive(serde::Serialize, serde::Deserialize)]
+pub struct StatsFile {
+    pub written_at: u64,
+    pub started_at: u64,
+    pub sessions: usize,
+    pub users: Vec<dispatcher::UserStatsSnapshot>,
+}
+
+fn unix_secs(t: std::time::SystemTime) -> u64 {
+    t.duration_since(std::time::UNIX_EPOCH).map(|d| d.as_secs()).unwrap_or(0)
+}
+
+/// Written to a temporary file and renamed, so a reader never sees half of it.
+/// Only root can read it: it holds the access keys.
+fn write_stats_file(path: &std::path::Path, stats: &StatsFile) -> std::io::Result<()> {
+    let tmp = path.with_extension("json.tmp");
+    let body = serde_json::to_vec(stats).map_err(std::io::Error::other)?;
+    let mut opts = std::fs::OpenOptions::new();
+    opts.write(true).create(true).truncate(true);
+    #[cfg(unix)]
+    std::os::unix::fs::OpenOptionsExt::mode(&mut opts, 0o600);
+    std::io::Write::write_all(&mut opts.open(&tmp)?, &body)?;
+    std::fs::rename(&tmp, path)
 }
 
 async fn handle_udp_packet(
