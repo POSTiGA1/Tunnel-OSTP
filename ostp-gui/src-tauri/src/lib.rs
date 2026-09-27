@@ -1,3 +1,4 @@
+mod servers;
 use std::path::PathBuf;
 use std::sync::Arc;
 use tokio::sync::{watch, Mutex};
@@ -1407,7 +1408,7 @@ pub fn run() {
             }
             _ => {}
         })
-        .invoke_handler(tauri::generate_handler![start_tunnel, stop_tunnel, reload_tunnel, get_tunnel_status, get_metrics, get_config, save_config, get_wintun_install_path, set_autostart, get_autostart, list_running_processes, generate_qr, fetch_subscription, run_prober_matrix, run_prober_ttl, run_dpi_battery, app_build_tag, check_updates])
+        .invoke_handler(tauri::generate_handler![start_tunnel, stop_tunnel, reload_tunnel, get_tunnel_status, get_metrics, get_config, save_config, get_wintun_install_path, set_autostart, get_autostart, list_running_processes, generate_qr, fetch_subscription, run_prober_matrix, run_prober_ttl, run_dpi_battery, app_build_tag, check_updates, servers::servers_list, servers::server_add, servers::server_rename, servers::server_remove, servers::server_probe, servers::server_install, servers::server_manage, servers::server_action, servers::server_open_panel])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");
 }
