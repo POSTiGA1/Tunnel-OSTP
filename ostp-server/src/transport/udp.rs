@@ -27,7 +27,10 @@ pub struct UdpSockets {
 
 impl UdpSockets {
     pub fn new(sockets: Vec<Arc<UdpSocket>>) -> Self {
-        Self { sockets, reply_via: Mutex::new(HashMap::new()) }
+        Self {
+            sockets,
+            reply_via: Mutex::new(HashMap::new()),
+        }
     }
 
     pub fn sockets(&self) -> &[Arc<UdpSocket>] {
@@ -55,9 +58,15 @@ impl UdpSockets {
     }
 
     fn socket_for(&self, peer: SocketAddr) -> Option<usize> {
-        let remembered = self.reply_via.lock().unwrap_or_else(|e| e.into_inner()).get(&peer).copied();
+        let remembered = self
+            .reply_via
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .get(&peer)
+            .copied();
         remembered.or_else(|| {
-            let locals: Vec<Option<SocketAddr>> = self.sockets.iter().map(|s| s.local_addr().ok()).collect();
+            let locals: Vec<Option<SocketAddr>> =
+                self.sockets.iter().map(|s| s.local_addr().ok()).collect();
             pick_socket(&locals, peer)
         })
     }
@@ -72,7 +81,9 @@ fn pick_socket(locals: &[Option<SocketAddr>], peer: SocketAddr) -> Option<usize>
         local.is_ipv4() == peer_ip.is_ipv4()
             && (local_ip.is_unspecified() || local_ip.is_loopback() == peer_ip.is_loopback())
     };
-    locals.iter().position(|l| l.as_ref().is_some_and(can_reach))
+    locals
+        .iter()
+        .position(|l| l.as_ref().is_some_and(can_reach))
 }
 
 #[cfg(test)]
@@ -99,7 +110,10 @@ mod tests {
         let locals = addrs(&["127.0.0.1:50000", "[::]:50000", "0.0.0.0:50000"]);
         assert_eq!(pick_socket(&locals, peer("[2001:db8::1]:1000")), Some(1));
         assert_eq!(pick_socket(&locals, peer("198.51.100.7:1000")), Some(2));
-        assert_eq!(pick_socket(&addrs(&["127.0.0.1:50000"]), peer("198.51.100.7:1000")), None);
+        assert_eq!(
+            pick_socket(&addrs(&["127.0.0.1:50000"]), peer("198.51.100.7:1000")),
+            None
+        );
     }
 
     #[tokio::test]

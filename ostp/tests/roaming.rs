@@ -4,7 +4,6 @@
 //! server (one that does not know the session).
 
 use std::net::SocketAddr;
-use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
@@ -46,7 +45,13 @@ async fn start_server_on(binds: Vec<SocketAddr>) -> SocketAddr {
         bind_addrs: binds.iter().map(|a| a.to_string()).collect(),
         server_public_ip: None,
         bind_ip: None,
-        access_keys: vec![(KEY.to_string(), ostp_server::api::UserMeta { name: None, limit_bytes: None })],
+        access_keys: vec![(
+            KEY.to_string(),
+            ostp_server::api::UserMeta {
+                name: None,
+                limit_bytes: None,
+            },
+        )],
         outbound: None,
         api_config: None,
         fallback_config: None,
@@ -95,11 +100,13 @@ async fn start_echo() -> SocketAddr {
     addr
 }
 
+/// UDP flows through the relay: (client, upstream) -> socket towards upstream.
+type UdpFlows = Arc<Mutex<std::collections::HashMap<(SocketAddr, SocketAddr), Arc<UdpSocket>>>>;
+
 /// UDP and TCP forwarder on one port, towards a switchable upstream.
 struct Relay {
     addr: SocketAddr,
     upstream: Arc<Mutex<SocketAddr>>,
-    block_udp: Arc<AtomicBool>,
     tcp_conns: Arc<Mutex<Vec<tokio::task::AbortHandle>>>,
 }
 
@@ -117,22 +124,17 @@ async fn start_relay(upstream: SocketAddr) -> Relay {
     let port = free_port();
     let addr: SocketAddr = format!("127.0.0.1:{port}").parse().unwrap();
     let upstream = Arc::new(Mutex::new(upstream));
-    let block_udp = Arc::new(AtomicBool::new(false));
 
     // UDP: one upstream socket per (client address, upstream).
     let front = Arc::new(UdpSocket::bind(addr).await.unwrap());
     {
         let front = front.clone();
         let upstream = upstream.clone();
-        let block_udp = block_udp.clone();
         tokio::spawn(async move {
-            let flows: Arc<Mutex<std::collections::HashMap<(SocketAddr, SocketAddr), Arc<UdpSocket>>>> = Default::default();
+            let flows: UdpFlows = Default::default();
             let mut buf = vec![0u8; 65535];
             loop {
                 let (n, client) = front.recv_from(&mut buf).await.unwrap();
-                if block_udp.load(Ordering::SeqCst) {
-                    continue;
-                }
                 let target = *upstream.lock().unwrap();
                 let existing = flows.lock().unwrap().get(&(client, target)).cloned();
                 let back = match existing {
@@ -141,13 +143,11 @@ async fn start_relay(upstream: SocketAddr) -> Relay {
                         let sock = Arc::new(UdpSocket::bind("127.0.0.1:0").await.unwrap());
                         sock.connect(target).await.unwrap();
                         flows.lock().unwrap().insert((client, target), sock.clone());
-                        let (sock2, front2, block2) = (sock.clone(), front.clone(), block_udp.clone());
+                        let (sock2, front2) = (sock.clone(), front.clone());
                         tokio::spawn(async move {
                             let mut b = vec![0u8; 65535];
                             while let Ok(n) = sock2.recv(&mut b).await {
-                                if !block2.load(Ordering::SeqCst) {
-                                    let _ = front2.send_to(&b[..n], client).await;
-                                }
+                                let _ = front2.send_to(&b[..n], client).await;
                             }
                         });
                         sock
@@ -178,7 +178,11 @@ async fn start_relay(upstream: SocketAddr) -> Relay {
         });
     }
 
-    Relay { addr, upstream, block_udp, tcp_conns }
+    Relay {
+        addr,
+        upstream,
+        tcp_conns,
+    }
 }
 
 struct Client {
@@ -224,9 +228,17 @@ impl Client {
             });
         }
 
-        let client = Client { cmd: cmd_tx, proxy_ev: proxy_ev_tx, to_app: to_app_rx, logs, _shutdown: shutdown_tx };
+        let client = Client {
+            cmd: cmd_tx,
+            proxy_ev: proxy_ev_tx,
+            to_app: to_app_rx,
+            logs,
+            _shutdown: shutdown_tx,
+        };
         client.cmd.send(BridgeCommand::ToggleTunnel).await.unwrap();
-        client.wait_log("Connection established", Duration::from_secs(10)).await;
+        client
+            .wait_log("Connection established", Duration::from_secs(10))
+            .await;
         client
     }
 
@@ -242,17 +254,26 @@ impl Client {
             }
             tokio::time::sleep(Duration::from_millis(20)).await;
         }
-        panic!("no log line containing {needle:?}; log:\n{}", self.logs.lock().unwrap().join("\n"));
+        panic!(
+            "no log line containing {needle:?}; log:\n{}",
+            self.logs.lock().unwrap().join("\n")
+        );
     }
 
     async fn open_stream(&mut self, target: SocketAddr) {
         self.proxy_ev
-            .send(ProxyEvent::NewStream { stream_id: STREAM, target: target.to_string() })
+            .send(ProxyEvent::NewStream {
+                stream_id: STREAM,
+                target: target.to_string(),
+            })
             .await
             .unwrap();
         match timeout(Duration::from_secs(5), self.to_app.recv()).await {
             Ok(Some((STREAM, ProxyToClientMsg::ConnectOk))) => {}
-            other => panic!("expected ConnectOk, got {:?}", other.map(|o| o.map(|(id, m)| (id, describe(&m))))),
+            other => panic!(
+                "expected ConnectOk, got {:?}",
+                other.map(|o| o.map(|(id, m)| (id, describe(&m))))
+            ),
         }
     }
 
@@ -260,7 +281,10 @@ impl Client {
     /// in between means the stream did not survive.
     async fn echo(&mut self, data: &'static [u8], within: Duration) {
         self.proxy_ev
-            .send(ProxyEvent::Data { stream_id: STREAM, payload: Bytes::from_static(data) })
+            .send(ProxyEvent::Data {
+                stream_id: STREAM,
+                payload: Bytes::from_static(data),
+            })
             .await
             .unwrap();
         let mut got = Vec::new();
@@ -274,7 +298,10 @@ impl Client {
                     describe(&msg),
                     self.logs.lock().unwrap().join("\n")
                 ),
-                _ => panic!("no echo within {within:?}; log:\n{}", self.logs.lock().unwrap().join("\n")),
+                _ => panic!(
+                    "no echo within {within:?}; log:\n{}",
+                    self.logs.lock().unwrap().join("\n")
+                ),
             }
         }
         assert_eq!(got, data);
@@ -282,7 +309,13 @@ impl Client {
 }
 
 fn client_handshakes(client: &Client) -> usize {
-    client.logs.lock().unwrap().iter().filter(|l| l.contains("Connecting to remote server:")).count()
+    client
+        .logs
+        .lock()
+        .unwrap()
+        .iter()
+        .filter(|l| l.contains("Connecting to remote server:"))
+        .count()
 }
 
 fn describe(msg: &ProxyToClientMsg) -> String {
@@ -300,13 +333,26 @@ async fn roams_on_network_change(mode: &str) {
     let echo = start_echo().await;
     let mut client = Client::start(server, mode).await;
     client.open_stream(echo).await;
-    client.echo(b"before the move", Duration::from_secs(5)).await;
+    client
+        .echo(b"before the move", Duration::from_secs(5))
+        .await;
 
-    client.cmd.send(BridgeCommand::NetworkChanged).await.unwrap();
-    client.wait_log("Session moved to the new path", Duration::from_secs(10)).await;
-    client.echo(b"after the move, same stream", Duration::from_secs(5)).await;
+    client
+        .cmd
+        .send(BridgeCommand::NetworkChanged)
+        .await
+        .unwrap();
+    client
+        .wait_log("Session moved to the new path", Duration::from_secs(10))
+        .await;
+    client
+        .echo(b"after the move, same stream", Duration::from_secs(5))
+        .await;
 
-    assert!(!client.has_log("reconnect successful"), "a full reconnect happened instead of a move");
+    assert!(
+        !client.has_log("reconnect successful"),
+        "a full reconnect happened instead of a move"
+    );
 }
 
 #[tokio::test(flavor = "multi_thread")]
@@ -332,14 +378,30 @@ async fn unanswered_move_is_reported_and_starts_nothing_else() {
 
     // The path now leads to a server that has never seen this session.
     *relay.upstream.lock().unwrap() = second;
-    client.cmd.send(BridgeCommand::NetworkChanged).await.unwrap();
-    client.wait_log("did not answer on the new path", Duration::from_secs(10)).await;
+    client
+        .cmd
+        .send(BridgeCommand::NetworkChanged)
+        .await
+        .unwrap();
+    client
+        .wait_log("did not answer on the new path", Duration::from_secs(10))
+        .await;
 
     // No automatic transport switch or reconnect follows the failed move.
     tokio::time::sleep(Duration::from_secs(3)).await;
-    assert!(!client.has_log("reconnect successful"), "a reconnect was started automatically");
-    assert_eq!(client_handshakes(&client), before, "a handshake was started automatically");
-    assert!(client.to_app.try_recv().is_err(), "the apps' streams were touched");
+    assert!(
+        !client.has_log("reconnect successful"),
+        "a reconnect was started automatically"
+    );
+    assert_eq!(
+        client_handshakes(&client),
+        before,
+        "a handshake was started automatically"
+    );
+    assert!(
+        client.to_app.try_recv().is_err(),
+        "the apps' streams were touched"
+    );
 }
 
 #[tokio::test(flavor = "multi_thread")]
@@ -349,11 +411,17 @@ async fn closed_uot_connection_is_replaced_without_dropping_streams() {
     let echo = start_echo().await;
     let mut client = Client::start(relay.addr, "uot").await;
     client.open_stream(echo).await;
-    client.echo(b"before the reset", Duration::from_secs(5)).await;
+    client
+        .echo(b"before the reset", Duration::from_secs(5))
+        .await;
 
     relay.reset_tcp();
-    client.wait_log("Session moved to the new path", Duration::from_secs(10)).await;
-    client.echo(b"same stream after the reset", Duration::from_secs(5)).await;
+    client
+        .wait_log("Session moved to the new path", Duration::from_secs(10))
+        .await;
+    client
+        .echo(b"same stream after the reset", Duration::from_secs(5))
+        .await;
 }
 
 /// This machine's address on its outbound interface, if it has one that is
@@ -389,5 +457,7 @@ async fn udp_is_answered_when_loopback_is_listed_first() {
     let echo = start_echo().await;
     let mut client = Client::start(public, "udp").await;
     client.open_stream(echo).await;
-    client.echo(b"answered from the public address", Duration::from_secs(5)).await;
+    client
+        .echo(b"answered from the public address", Duration::from_secs(5))
+        .await;
 }
