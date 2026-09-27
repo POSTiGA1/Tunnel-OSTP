@@ -3,6 +3,8 @@ name = "ostp-client"
 version.workspace = true
 edition.workspace = true
 license.workspace = true
+description = "OSTP client: local SOCKS5/HTTP proxy, TUN mode, UDP/UoT/TLS transports, roaming, network prober"
+repository.workspace = true
 
 [dependencies]
 anyhow.workspace = true

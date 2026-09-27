@@ -1,0 +1,8 @@
+blank_issues_enabled: true
+contact_links:
+  - name: Security vulnerability / Уязвимость
+    url: https://github.com/ospab/ostp/blob/alpha/SECURITY.md
+    about: Report privately, not in a public issue / Сообщите закрыто, не в публичном issue
+  - name: Questions / Вопросы (Telegram)
+    url: https://t.me/ospab0
+    about: Setup help and questions / Помощь с настройкой и вопросы

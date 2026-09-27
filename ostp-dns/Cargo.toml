@@ -3,6 +3,7 @@ name = "ostp-dns"
 version.workspace = true
 edition.workspace = true
 license.workspace = true
+repository.workspace = true
 description = "Filtering DNS resolver for OSTP servers: block lists, rules, rewrites, cache, query log"
 
 [dependencies]

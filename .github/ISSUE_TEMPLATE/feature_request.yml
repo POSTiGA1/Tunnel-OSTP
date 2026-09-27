@@ -1,0 +1,19 @@
+name: Feature request / Предложение
+description: Something OSTP should do / Что OSTP стоило бы уметь
+labels: [enhancement]
+body:
+  - type: textarea
+    id: problem
+    attributes:
+      label: The problem / Проблема
+      description: What you are trying to do and what gets in the way / Что вы пытаетесь сделать и что мешает
+    validations:
+      required: true
+  - type: textarea
+    id: idea
+    attributes:
+      label: Your idea / Ваше предложение
+  - type: textarea
+    id: alternatives
+    attributes:
+      label: What you do now instead / Как вы обходитесь сейчас

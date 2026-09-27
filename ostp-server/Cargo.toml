@@ -3,6 +3,8 @@ name = "ostp-server"
 version.workspace = true
 edition.workspace = true
 license.workspace = true
+description = "OSTP server: session dispatcher, relay, TCP sniffing with TLS and HTTP upgrade, certificates, subscriptions, web panel and API"
+repository.workspace = true
 
 [dependencies]
 anyhow.workspace = true

@@ -3,6 +3,8 @@ name = "ostp"
 edition.workspace = true
 license.workspace = true
 version.workspace = true
+description = "The ostp command: CLI, setup wizard and the client/server daemon of the Ospab Stealth Transport Protocol"
+repository.workspace = true
 
 [dependencies]
 ostp-client = { path = "../ostp-client" }

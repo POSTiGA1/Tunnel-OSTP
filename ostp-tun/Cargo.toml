@@ -3,6 +3,8 @@ name = "ostp-tun"
 version.workspace = true
 edition.workspace = true
 license.workspace = true
+description = "TUN device and routing for the OSTP client (Wintun on Windows)"
+repository.workspace = true
 
 [dependencies]
 anyhow.workspace = true

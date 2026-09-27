@@ -1,0 +1,65 @@
+name: Bug report / Ошибка
+description: Something does not work as described / Что-то работает не так, как описано
+labels: [bug]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Security problems go by email, not here: see SECURITY.md. / Уязвимости — не сюда, а на почту: см. SECURITY.ru.md.
+        **Remove access keys, tokens and passwords from everything you paste.** / **Уберите ключи доступа, токены и пароли из всего, что вставляете.**
+  - type: input
+    id: version
+    attributes:
+      label: Version / Версия
+      description: "`ostp --version`, or the app's About screen / или экран «О программе»"
+      placeholder: 0.4.6-beta.5
+    validations:
+      required: true
+  - type: dropdown
+    id: component
+    attributes:
+      label: Where / Где
+      options:
+        - Server / Сервер
+        - CLI client / Клиент командной строки
+        - Desktop app (Windows) / Десктопное приложение (Windows)
+        - Desktop app (Linux or macOS) / Десктопное приложение (Linux или macOS)
+        - Android app / Android-приложение
+        - Web panel / Веб-панель
+    validations:
+      required: true
+  - type: dropdown
+    id: transport
+    attributes:
+      label: Transport / Транспорт
+      options:
+        - UDP
+        - UoT (TCP)
+        - TLS
+        - Not related / Не связано
+    validations:
+      required: true
+  - type: textarea
+    id: what
+    attributes:
+      label: What happened, and what you expected / Что произошло и что вы ожидали
+    validations:
+      required: true
+  - type: textarea
+    id: steps
+    attributes:
+      label: Steps to reproduce / Как повторить
+      placeholder: |
+        1.
+        2.
+  - type: textarea
+    id: network
+    attributes:
+      label: Network / Сеть
+      description: Provider or mobile operator, country, whether it works on another network / Провайдер или оператор, страна, работает ли в другой сети
+  - type: textarea
+    id: logs
+    attributes:
+      label: Logs / Логи
+      description: Client log (ostp.log) and, if you run the server, `journalctl -u ostp` for the same minutes / Лог клиента и, если сервер ваш, `journalctl -u ostp` за те же минуты
+      render: text

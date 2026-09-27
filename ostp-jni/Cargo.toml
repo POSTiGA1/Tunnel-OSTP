@@ -3,6 +3,8 @@ name = "ostp-jni"
 version = "0.1.0"
 edition = "2021"
 license = "AGPL-3.0"
+description = "JNI bindings of the OSTP client for the Android app"
+repository = "https://github.com/ospab/ostp"
 
 [lib]
 name = "ostp_jni"

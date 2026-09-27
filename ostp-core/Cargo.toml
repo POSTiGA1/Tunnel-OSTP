@@ -3,6 +3,8 @@ name = "ostp-core"
 version.workspace = true
 edition.workspace = true
 license.workspace = true
+description = "OSTP protocol core: Noise handshake, header obfuscation, framing, ARQ, congestion control, share links"
+repository.workspace = true
 
 [dependencies]
 anyhow.workspace = true
