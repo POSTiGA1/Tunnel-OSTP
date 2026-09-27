@@ -16,6 +16,8 @@ The stable 0.4.6: everything from the betas below. In short:
 - A filtering DNS resolver on the server (`ostp dns`) and a new web panel.
 - Wire-compatible with 0.4.5: old clients and servers keep working with new ones.
 
+## [0.4.6-beta.8] - 2026-09-27
+
 ### Added
 - Desktop app: a first-run screen. Add a link or subscription, or install OSTP on your own VPS over SSH (password or private key) with live progress; the new server's connection is added to the app.
 - Desktop app: *Settings → Server management*. Per server: status (service, sessions, load, memory, disk; restart, update), users (add, rename, revoke, traffic, add to the app, share as QR), connection (TLS domain and certificate, subscriptions), management (web panel opened through the SSH connection, server log, reboot, uninstall).
