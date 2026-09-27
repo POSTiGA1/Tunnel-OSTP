@@ -102,7 +102,7 @@ Because the sampled payload is itself cryptographically random (AEAD ciphertext,
 
 ### 6.1 Secret Derivation (Kerckhoffs's Principle)
 
-Every protocol secret is derived from the shared `access_key` via HKDF-SHA256 (RFC 5869), with **no hardcoded strings or magic constants** anywhere in the derivation:
+Every protocol secret is derived from the shared `access_key` via HKDF-SHA256 (RFC 5869). The access key is the only secret input; everything else here, the version byte included, is public (see [Kerckhoffs's principle](obfuscation.md#kerckhoffss-principle-what-is-public-and-what-is-secret)):
 
 ```
 key_hash = SHA-256(access_key)

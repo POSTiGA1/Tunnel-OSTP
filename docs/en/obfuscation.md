@@ -5,6 +5,33 @@ Traditional tunneling protocols (such as TLS, OpenVPN, and WireGuard) exhibit di
 
 ---
 
+## Kerckhoffs's principle: what is public and what is secret
+
+OSTP is designed so that it stays secure when everything about it is known: this document, the source code, every constant in it, and the protocol version. The only secrets are per deployment and never appear in the code:
+
+| Secret | Where it lives | What it protects |
+|---|---|---|
+| The user's access key (128 random bits) | Server config, the user's link | Everything below: the Noise PSK, the header-masking key, padding and junk markers are derived from it (see *Secret derivation*) |
+| Noise ephemeral keys | Memory, per session | Forward secrecy of each session's traffic keys |
+| The upgrade path (`ws_path`) | Server config, the user's link | Only hides the OSTP endpoint on a web server from scanners; the connection behind it is still authenticated by the access key |
+| Panel login, API token, subscription tokens | Server config | Access to management, not to traffic |
+
+Public by design, and published here on purpose:
+
+- **Algorithms:** Noise `NNpsk0_25519_ChaChaPoly_BLAKE2s`, ChaCha20-Poly1305 (RFC 8439), HKDF-SHA256 (RFC 5869), HMAC-SHA256 (RFC 2104), TLS 1.2/1.3 through rustls.
+- **Constants:** the protocol version, frame layouts, padding ranges, timers. The string `258EAFA5-E914-47DA-95CA-C5AB0DC85B11` in `ostp-core/src/http_upgrade.rs` is the WebSocket GUID from RFC 6455 §1.3. Every browser and web server has it; the WebSocket handshake through nginx, Apache or Caddy does not work without it. It is not a key and hides nothing.
+- **Code paths:** how the server tells OSTP apart from other traffic, how junk packets and fragmentation work, how the prober probes.
+
+What follows for someone who knows all of the above but not an access key:
+
+- They cannot decrypt traffic, forge packets or complete a handshake. The Noise handshake needs the PSK, and the PSK comes only from the access key.
+- They cannot unmask headers. The header mask is keyed by a value derived from the access key.
+- What they *can* do is statistical: packet sizes, timings, and the fact that there is traffic at all. Padding, junk packets and the TLS carrier make that harder; they do not make it impossible, and this documentation does not claim otherwise.
+
+Obscurity is used only on top of real security, never instead of it: the secret upgrade path and the panel's `webpath` keep scanners away from endpoints that are authenticated anyway.
+
+---
+
 ## Secret Derivation
 
 Every protocol secret — the obfuscation key, the Noise PSK, the handshake padding range, and the per-key junk marker (see below) — is derived from the shared `access_key` via a single HKDF-SHA256 pass, domain-separated by a trailing info byte per output:

@@ -89,9 +89,9 @@ pub fn derive_all_secrets(access_key: &[u8]) -> DerivedSecrets {
 /// current `PROTOCOL_VERSION`; this form exists so tests can prove that a
 /// different version yields incompatible secrets (the version gate).
 pub(crate) fn derive_all_secrets_versioned(access_key: &[u8], version: u8) -> DerivedSecrets {
-    // Split the key hash into two halves for salt/info separation.
-    // This avoids using any hardcoded strings while still providing
-    // domain separation between the derived values.
+    // Split the key hash into two halves for salt/info separation; a
+    // trailing byte per output separates the derived values. Public labels
+    // would do the same job: the access key is the only secret here.
     use sha2::Digest;
     let key_hash = sha2::Sha256::digest(access_key);
     let salt = &key_hash[..16];
