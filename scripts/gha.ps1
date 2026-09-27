@@ -212,6 +212,27 @@ if ($pubspecText -match 'version: [0-9]+\.[0-9]+\.[0-9]+\+([0-9]+)') {
     Fail "Version pattern not found in ostp-flutter/pubspec.yaml."
 }
 
+# -- Changelog: what is under "Unreleased" now belongs to this release. -------
+# -- A version heading goes right below the unreleased one, which stays (now  -
+# -- empty) for the next round. The unreleased heading is matched as "the    -
+# -- first ## [...] that does not start with a digit", so one pattern fits  -
+# -- both the English and the Russian heading.                               -
+# -- ReadAllText/WriteAllText: Get-Content in Windows PowerShell 5 would read  -
+# -- UTF-8 without a BOM as ANSI and mangle the Russian file.                 -
+$Released = $Tag.TrimStart('v')
+$Today = Get-Date -Format 'yyyy-MM-dd'
+$Utf8NoBom = New-Object System.Text.UTF8Encoding $false
+foreach ($name in @('CHANGELOG.md', 'CHANGELOG.ru.md')) {
+    $path = Join-Path $RepoRoot $name
+    if (-not (Test-Path $path)) { continue }
+    $text = [System.IO.File]::ReadAllText($path, $Utf8NoBom)
+    $unreleased = [regex]::Match($text, '(?m)^## \[[^\]0-9][^\]]*\][^\r\n]*')
+    if (-not $unreleased.Success) { Fail "No unreleased section in $name." }
+    $insertAt = $unreleased.Index + $unreleased.Length
+    $text = $text.Insert($insertAt, "`n`n## [$Released] - $Today")
+    [System.IO.File]::WriteAllText($path, $text, $Utf8NoBom)
+}
+
 # -- Persist the new state ---------------------------------------------------
 [PSCustomObject]@{
     target_version  = $TargetVersion
@@ -225,7 +246,7 @@ $commitMsg = "chore: release $Tag on $ResolvedBranch"
 Write-Step "Committing: $commitMsg"
 git add Cargo.toml Cargo.lock ostp-gui/src-tauri/Cargo.toml ostp-gui/src-tauri/Cargo.lock `
     ostp-gui/src-tauri/tauri.conf.json ostp-gui/package.json ostp-flutter/pubspec.yaml `
-    .release-state.json
+    CHANGELOG.md CHANGELOG.ru.md .release-state.json
 git commit -m $commitMsg | Out-Null
 
 # -- Push. release.yml triggers ONLY on "v*" tag pushes (no branch trigger), -

@@ -1,0 +1,101 @@
+# Changelog
+
+What changed in each release, newest first. Russian version: [CHANGELOG.ru.md](CHANGELOG.ru.md).
+The same text is built into the binary: `ostp changelog` (or `ostp cl`) shows the installed version's changes, `ostp cl --all` shows everything.
+
+Versions are `X.Y.Z` for stable releases and `X.Y.Z-beta.N` / `X.Y.Z-alpha.N` for pre-releases (see [CONTRIBUTING.md](CONTRIBUTING.md#branch-strategy)).
+Older history is on the [Releases](https://github.com/ospab/ostp/releases) page and in `git log`.
+
+## [Unreleased]
+
+### Added
+- `ostp changelog` (`ostp cl`): shows what changed in the installed version; `--all`, `--last N`, `--version X` and `--lang en|ru`.
+- This changelog, `SECURITY.md`, issue and pull request templates, and a documentation index in `docs/README.md`.
+
+### Changed
+- README (English and Russian) rewritten to match what the code actually does, with the current command list.
+- CONTRIBUTING: real project structure, no references to files on a developer's disk.
+
+### Fixed
+- `ostp.wiki` is a proper submodule again (`.gitmodules` was missing).
+
+## [0.4.6-beta.5] - 2026-09-27
+
+### Added
+- Seamless roaming: on a network change, after 10 s without an answer, or when the TCP connection is reset, the client moves the session to a new socket of the same transport. No new handshake, and the apps' connections stay open. A move that gets no answer is reported in the log; the transport is never switched on its own.
+- `ostp panel status` shows the panel's address through the tunnel.
+- `ostp.log` keeps the previous connection's log next to the current one.
+
+### Fixed
+- TLS: with an empty `tls_sni`, the server's name from the address is used for SNI and the `Host` header instead of the resolved IP. The IP made the certificate check fail ("certificate not valid for name") and the web server answer with its default site ("HTTP 200 OK, not an OSTP upgrade answer").
+- TLS: a dropped connection is now closed. Every failed handshake or reconnect used to leave one TLS connection open; behind nginx this exhausted its worker connections and every request, subscriptions included, got HTTP 500.
+- UDP: the server answers from the socket the client reached. With `127.0.0.1` listed first in `listen` (for a web server in front) every UDP handshake was accepted and never answered.
+- Server: a session moves to a new client address only on an authenticated packet with a fresh nonce. A replayed or forged packet from another address used to redirect the session's traffic.
+- Client: only an authenticated packet counts as a sign of life, so garbage or duplicates no longer hide a dead connection.
+- Client: stops after the first failed session and tells a UDP drop apart from a dead server.
+- The server's own tunnel address (10.1.0.1) always connects directly.
+- DNS: encrypted DNS to public resolvers' addresses is refused, so it cannot bypass the server's DNS filtering.
+
+## [0.4.6-beta.4] - 2026-09-25
+
+### Added
+- `ostp-dns`: a filtering DNS resolver on the server with block lists, rules, rewrites and a cache; managed with `ostp dns` and on a new panel page. Connections by name go through it too.
+- The panel generates an access key when a user is added.
+
+### Fixed
+- The web-server manifest lost the site when it was rewritten.
+
+## [0.4.6-beta.3] - 2026-09-24
+
+### Added
+- Update check for the stable and beta channels, on app start (can be turned off in the Android settings).
+- Android: share a subscription as a QR code or link.
+- `ostp panel`: turn the web panel and API on or off, set its address, path, sign-in and API token.
+- Subscription page for people who open a subscription link in a browser; it picks the language and theme on its own.
+- Apps group subscription profiles under their subscription and show the SNI.
+- Network prober: locates censorship equipment by TTL; checks for foreign-hosting blocks, freezes, QUIC and the path.
+- `ostp cert issue` and `ostp sub` restart the running service.
+
+### Fixed
+- Windows TUN: looking up the interface by name always failed.
+- The nginx site file is named `ostp-<domain>.conf`.
+
+## [0.4.6-beta.2] - 2026-09-24
+
+### Added
+- `ostp sub` manages subscriptions separately; `ostp cert issue` no longer turns them on.
+
+### Fixed
+- TLS through a web server: a clear diagnosis for 502, rate limiting, fragmentation.
+- Debian: the nginx site goes to `sites-available` with a link in `sites-enabled`.
+
+## [0.4.6-beta.1] - 2026-09-24
+
+### Added
+- TLS and HTTP-upgrade carrier: OSTP can be reached over real TLS on port 443, directly or through nginx, Apache or Caddy on a secret path.
+- `ostp cert issue|status|renew`: a domain and a Let's Encrypt certificate with automatic renewal and web-server integration; a built-in HTTPS frontend when no web server is used.
+- Subscriptions: per-user subscription URLs on the server, import in the CLI, desktop and Android apps; `ostp links qr`.
+- A new built-in web panel.
+- Versioned config schema and a real migrator (`ostp migrate`).
+- Share links carry the TLS settings; the apps have TLS profile options.
+- The network prober checks TLS profiles.
+
+### Fixed
+- The per-IP UoT connection limiter is pruned.
+- The relay no longer panics when a new UDP session dies before its first send.
+
+## [0.4.5] - 2026-09-23
+
+### Added
+- Network prober (CLI and Android): tries every transport against the server and locates DPI/TSPU by TTL; a generic DPI fingerprint battery.
+- Opt-in TTL-desync decoys on the UDP handshake, with automatic hop calibration; switches in the desktop and Android apps.
+- Multi-address egress on the server: a global source IP and per-rule `send_from`; the setup wizard offers the server's addresses.
+- SOCKS5 username and password for the upstream proxy.
+- The config migrator normalizes any config to a clean, canonical form.
+- Debug mode shows non-OSTP bytes received, to diagnose DPI interference.
+
+### Fixed
+- Android: asks for a battery-optimization exemption so Doze cannot freeze the VPN.
+- TUN: IPv4 fragments are reassembled, so large UDP packets (games) are not dropped; routing no longer fails on connect under load.
+- More resilient UDP handshake on lossy mobile links.
+- Windows: installer and helper-task fixes (permissions, config location).

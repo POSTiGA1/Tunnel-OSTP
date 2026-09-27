@@ -8,6 +8,7 @@ mod cert_cmd;
 mod sub_cmd;
 mod panel_cmd;
 mod dns_cmd;
+mod changelog_cmd;
 mod webserver;
 
 #[derive(Parser, Debug)]
@@ -108,6 +109,22 @@ enum Commands {
     Dns {
         #[command(subcommand)]
         action: dns_cmd::DnsAction,
+    },
+    /// What changed: the installed version by default (alias: cl)
+    #[command(name = "changelog", alias = "cl")]
+    Changelog {
+        /// Every version
+        #[arg(short, long)]
+        all: bool,
+        /// The N most recent versions
+        #[arg(short = 'n', long, value_name = "N", conflicts_with = "all")]
+        last: Option<usize>,
+        /// One version, e.g. 0.4.5 or 0.4.6-beta.5 (0.4.6 means all of its betas)
+        #[arg(short, long, value_name = "VERSION", conflicts_with_all = ["all", "last"])]
+        version: Option<String>,
+        /// Language: en or ru (default: the system language)
+        #[arg(short, long)]
+        lang: Option<String>,
     },
     /// Upgrade the configuration file to the current schema. This is the
     /// ONLY place config migration ever runs - never automatically at
@@ -1399,6 +1416,9 @@ async fn run_app() -> Result<()> {
             Commands::Sub { action } => return sub_cmd::run(action, &args.config),
             Commands::Panel { action } => return panel_cmd::run(action, &args.config),
             Commands::Dns { action } => return dns_cmd::run(action, &args.config).await,
+            Commands::Changelog { all, last, version, lang } => {
+                return changelog_cmd::run(changelog_cmd::Options { all, last, version, lang });
+            }
         }
     }
 
