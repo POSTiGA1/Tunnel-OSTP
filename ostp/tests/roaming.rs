@@ -36,8 +36,14 @@ fn free_port() -> u16 {
 async fn start_server() -> SocketAddr {
     let port = free_port();
     let addr: SocketAddr = format!("127.0.0.1:{port}").parse().unwrap();
+    start_server_on(vec![addr]).await
+}
+
+/// Starts a server listening on every address in `binds`; returns the last.
+async fn start_server_on(binds: Vec<SocketAddr>) -> SocketAddr {
+    let addr = *binds.last().unwrap();
     let params = ostp_server::ServerParams {
-        bind_addrs: vec![addr.to_string()],
+        bind_addrs: binds.iter().map(|a| a.to_string()).collect(),
         server_public_ip: None,
         bind_ip: None,
         access_keys: vec![(KEY.to_string(), ostp_server::api::UserMeta { name: None, limit_bytes: None })],
@@ -348,4 +354,40 @@ async fn closed_uot_connection_is_replaced_without_dropping_streams() {
     relay.reset_tcp();
     client.wait_log("Session moved to the new path", Duration::from_secs(10)).await;
     client.echo(b"same stream after the reset", Duration::from_secs(5)).await;
+}
+
+/// This machine's address on its outbound interface, if it has one that is
+/// not loopback (no packet is sent: connect() on UDP only picks a route).
+fn non_loopback_ip() -> Option<std::net::IpAddr> {
+    let probe = std::net::UdpSocket::bind("0.0.0.0:0").ok()?;
+    probe.connect("192.0.2.1:9").ok()?;
+    let ip = probe.local_addr().ok()?.ip();
+    (!ip.is_loopback() && !ip.is_unspecified()).then_some(ip)
+}
+
+/// A server whose first listen address is loopback (for a web server in
+/// front) must still answer UDP clients on its public address. It used to
+/// reply through the first socket, which the kernel refuses to send from to a
+/// non-loopback peer (EINVAL): every UDP handshake was accepted and none was
+/// answered.
+#[tokio::test(flavor = "multi_thread")]
+async fn udp_is_answered_when_loopback_is_listed_first() {
+    let Some(ip) = non_loopback_ip() else {
+        eprintln!("skipped: no non-loopback address on this machine");
+        return;
+    };
+    let port = free_port();
+    let public = SocketAddr::new(ip, port);
+    let loopback: SocketAddr = format!("127.0.0.1:{port}").parse().unwrap();
+    if std::net::UdpSocket::bind(public).is_err() {
+        eprintln!("skipped: cannot bind {public}");
+        return;
+    }
+    let server = start_server_on(vec![loopback, public]).await;
+    assert_eq!(server, public);
+
+    let echo = start_echo().await;
+    let mut client = Client::start(public, "udp").await;
+    client.open_stream(echo).await;
+    client.echo(b"answered from the public address", Duration::from_secs(5)).await;
 }

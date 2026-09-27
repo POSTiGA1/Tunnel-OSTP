@@ -125,7 +125,6 @@ pub async fn run_server(params: ServerParams) -> Result<()> {
         sockets.push(std::sync::Arc::new(udp_sock));
     }
     if sockets.is_empty() { anyhow::bail!("no bind addresses specified"); }
-    let primary_socket = sockets[0].clone();
 
     use ostp_core::{NoiseRole, PaddingStrategy, ProtocolConfig};
     let protocol_config = ProtocolConfig {
@@ -453,7 +452,7 @@ pub async fn run_server(params: ServerParams) -> Result<()> {
     tracing::info!(listeners = bind_addrs.len(), keys = key_count, "server started");
     tracing::info!("ARQ config: max_reorder=16384, reorder_buf=8192, sent_history=32768, rto=100ms");
     tokio::select! {
-        res = run_server_loop(sniff, primary_socket, sockets, dispatcher, ui_cmd_rx, ui_event_tx, shared_keys, router) => {
+        res = run_server_loop(sniff, sockets, dispatcher, ui_cmd_rx, ui_event_tx, shared_keys, router) => {
             if let Err(e) = res {
                 tracing::error!("Server error: {e}");
             }
@@ -548,7 +547,6 @@ fn prepare_tls(t: &tls::TlsSettings) -> Option<(tokio_rustls::TlsAcceptor, Arc<t
 
 async fn run_server_loop(
     sniff: SniffSettings,
-    primary_socket: std::sync::Arc<UdpSocket>,
     sockets: Vec<std::sync::Arc<UdpSocket>>,
     mut dispatcher: Dispatcher,
     mut ui_cmd_rx: mpsc::UnboundedReceiver<UiCommand>,
@@ -563,17 +561,21 @@ async fn run_server_loop(
 
     let tcp_map = std::sync::Arc::new(tokio::sync::RwLock::new(HashMap::new()));
 
-    let socket = primary_socket;
+    // Replies go out of the socket the client reached us on (see
+    // transport::udp), not a fixed "primary" one.
+    let socket = std::sync::Arc::new(transport::udp::UdpSockets::new(sockets));
     // Spawn a recv task for each socket, all feeding into the same channel
     let (udp_tx, mut udp_rx) = mpsc::channel(100000);
-    for sock in &sockets {
+    for (index, sock) in socket.sockets().iter().enumerate() {
         let sock_clone = sock.clone();
+        let sockets = socket.clone();
         let tx = udp_tx.clone();
         tokio::spawn(async move {
             let mut buf = vec![0_u8; 65535];
             loop {
                 match sock_clone.recv_from(&mut buf).await {
                     Ok((size, peer)) => {
+                        sockets.received(index, peer);
                         let packet = Bytes::copy_from_slice(&buf[..size]);
                         if tx.send((packet, peer)).await.is_err() {
                             break;
@@ -759,7 +761,7 @@ async fn handle_udp_packet(
     peer: std::net::SocketAddr,
     dispatcher: &mut Dispatcher,
     tcp_map: &std::sync::Arc<tokio::sync::RwLock<HashMap<std::net::SocketAddr, tokio::sync::mpsc::Sender<Bytes>>>>,
-    socket: &std::sync::Arc<UdpSocket>,
+    socket: &transport::udp::UdpSockets,
     remotes: &mut HashMap<(u32, u16), RemoteState>,
     ui_event_tx: &mpsc::UnboundedSender<UiEvent>,
     stream_tx: mpsc::UnboundedSender<(u32, u16, Vec<u8>)>,
@@ -846,7 +848,7 @@ async fn handle_udp_packet(
 async fn handle_tick(
     dispatcher: &mut Dispatcher,
     tcp_map: &std::sync::Arc<tokio::sync::RwLock<HashMap<std::net::SocketAddr, tokio::sync::mpsc::Sender<Bytes>>>>,
-    socket: &std::sync::Arc<UdpSocket>,
+    socket: &transport::udp::UdpSockets,
     remotes: &mut HashMap<(u32, u16), RemoteState>,
     ui_event_tx: &mpsc::UnboundedSender<UiEvent>,
     peer_last_seen: &mut HashMap<IpAddr, Instant>,

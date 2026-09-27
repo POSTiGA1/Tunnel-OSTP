@@ -6,7 +6,6 @@ use std::sync::Arc;
 
 use ostp_core::relay::RelayMessage;
 use tokio::io::AsyncReadExt;
-use tokio::net::UdpSocket;
 use tokio::sync::mpsc;
 
 use crate::dispatcher::Dispatcher;
@@ -44,7 +43,7 @@ pub async fn handle_relay_message(
     stream_id: u16,
     payload: Bytes,
     dispatcher: &mut Dispatcher,
-    socket: &UdpSocket,
+    socket: &crate::transport::udp::UdpSockets,
     remotes: &mut HashMap<(u32, u16), RemoteState>,
     ui_event_tx: &mpsc::UnboundedSender<UiEvent>,
     stream_tx: mpsc::UnboundedSender<(u32, u16, Vec<u8>)>,
@@ -311,7 +310,7 @@ pub async fn send_relay_to_stream(
     stream_id: u16,
     msg: RelayMessage,
     dispatcher: &mut Dispatcher,
-    socket: &UdpSocket,
+    socket: &crate::transport::udp::UdpSockets,
     ui_event_tx: &mpsc::UnboundedSender<UiEvent>,
     tcp_map: &std::sync::Arc<tokio::sync::RwLock<HashMap<std::net::SocketAddr, tokio::sync::mpsc::Sender<Bytes>>>>,
 ) -> Result<()> {
