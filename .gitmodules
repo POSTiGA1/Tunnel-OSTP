@@ -1,0 +1,3 @@
+[submodule "ostp.wiki"]
+	path = ostp.wiki
+	url = https://github.com/ospab/ostp.wiki.git

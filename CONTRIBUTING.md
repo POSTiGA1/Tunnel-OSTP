@@ -2,7 +2,7 @@
 
 Thank you for your interest in contributing to **OSTP (Ospab Stealth Transport Protocol)**! We welcome contributions from developers, security researchers, testers, and documentation writers of all skill levels.
 
-By contributing to this project, you agree to abide by our code of conduct and license terms.
+By contributing to this project, you agree that your contribution is licensed under the project's license (AGPL-3.0).
 
 ---
 
@@ -23,9 +23,10 @@ By contributing to this project, you agree to abide by our code of conduct and l
 
 To build and test OSTP locally, you will need:
 
-*   **Rust Toolchain (1.75+)**: Install via [rustup](https://rustup.rs/).
-*   **Node.js (18+) & npm**: Required to build the frontend control panel (`ostp-control`) and compile Tauri GUI resources.
-*   **Git**: For version control.
+*   **Rust** (current stable): install via [rustup](https://rustup.rs/).
+*   **Git**.
+*   Only for the desktop GUI: **Node.js 18+** and the [Tauri prerequisites](https://tauri.app/start/prerequisites/).
+*   Only for the Android app: **Flutter** and the Android NDK.
 
 ### Building the Project
 
@@ -39,13 +40,8 @@ To build and test OSTP locally, you will need:
     ```bash
     cargo build
     ```
-    `ostp-control` (the web panel) is only needed if you're working on it
-    specifically - the server build embeds a dummy `dist/` via `rust-embed`
-    otherwise, so this step is not required for day-to-day core/client/server
-    work. If you *are* touching the panel:
-    ```bash
-    cd ostp-control && npm install && npm run build && cd ..
-    ```
+    The web panel (`ostp-server/panel/`) is plain HTML/CSS/JS embedded into
+    the server binary: there is no separate build step.
 
 3.  **Run tests**:
     ```bash
@@ -56,14 +52,21 @@ To build and test OSTP locally, you will need:
 
 ## Project Structure
 
-The repository is organized as a Cargo workspace containing the following crates:
+The repository is a Cargo workspace plus two app projects:
 
-*   [`ostp-core/`](file:///d:/ospab-projects/ostp/ostp-core): Core protocol logic, including packet formatting, serialization, selective ACK/NACK (ARQ) state machine, and the Noise protocol (`Noise_NNpsk0_25519_ChaChaPoly_BLAKE2s`) handshake.
-*   [`ostp-client/`](file:///d:/ospab-projects/ostp/ostp-client): Client implementations, including SOCKS5/HTTP local proxies, the native OSTP TUN interface routing, and split-tunneling bypass mechanisms.
-*   [`ostp-server/`](file:///d:/ospab-projects/ostp/ostp-server): Server logic, session dispatcher, anti-probing fallback server proxying, access key database, and the REST API for control panel communication.
-*   [`ostp-control/`](file:///d:/ospab-projects/ostp/ostp-control): A modern web dashboard for server administration (user management, real-time metrics, bandwidth limits).
-*   [`ostp-gui/`](file:///d:/ospab-projects/ostp/ostp-gui): Tauri-based desktop GUI application for Windows and Linux.
-*   [`ostp-flutter/`](file:///d:/ospab-projects/ostp/ostp-flutter): Mobile client code for Android platforms.
+| Path | What it is |
+|---|---|
+| [`ostp/`](ostp) | The `ostp` binary: CLI, setup wizard, `cert`/`sub`/`panel`/`dns` commands, runs client or server from the config. |
+| [`ostp-core/`](ostp-core) | The protocol: Noise handshake, header obfuscation, framing and padding, ARQ, congestion control, relay messages, share links. |
+| [`ostp-client/`](ostp-client) | Client: local SOCKS5/HTTP proxy, TUN mode, exclusions, UDP/UoT/TLS transports, session roaming, network prober. |
+| [`ostp-server/`](ostp-server) | Server: session dispatcher, relay to the internet, TCP sniffing (UoT, TLS, HTTP upgrade, decoy), certificates, subscriptions, web panel and API. |
+| [`ostp-dns/`](ostp-dns) | Filtering DNS resolver for the server: block lists, rules, rewrites, cache. |
+| [`ostp-tun/`](ostp-tun) | Platform TUN device and routing (Wintun on Windows). |
+| [`ostp-tun-helper/`](ostp-tun-helper) | Privileged helper that runs the tunnel for the desktop GUI on Windows. |
+| [`ostp-jni/`](ostp-jni) | JNI bindings used by the Android app. |
+| [`ostp-gui/`](ostp-gui) | Desktop client (Tauri) for Windows and Linux; not part of the Cargo workspace. |
+| [`ostp-flutter/`](ostp-flutter) | Android client (Flutter). |
+| [`docs/`](docs) | Documentation in English and Russian, see [`docs/README.md`](docs/README.md). |
 
 ---
 
@@ -92,18 +95,18 @@ The repository runs three long-lived branches, in increasing order of stability:
     git checkout -b feat/your-feature-name
     ```
 3.  **Implement your changes**, ensuring you write appropriate unit or integration tests.
-4.  **Format your code**:
+4.  **Format the files you changed** with `rustfmt`. The tree is not fully
+    formatted yet, so do not run `cargo fmt --all` in a feature branch: it
+    would bury your change in unrelated reformatting.
+5.  **Run clippy** and do not add new warnings:
     ```bash
-    cargo fmt --all
-    ```
-5.  **Run linter checks**:
-    ```bash
-    cargo clippy --workspace --all-targets -- -D warnings
+    cargo clippy --workspace --all-targets
     ```
 6.  **Ensure all tests pass**:
     ```bash
     cargo test --workspace
     ```
+7.  **Add a line to [`CHANGELOG.md`](CHANGELOG.md)** (and [`CHANGELOG.ru.md`](CHANGELOG.ru.md)) under *Unreleased* for anything a user would notice.
 
 ---
 
@@ -156,4 +159,4 @@ Multiple unrelated changes belong in separate commits, not one bundled commit - 
 
 ## Security Vulnerabilities
 
-If you discover a security-related vulnerability, please do **not** open a public issue. Instead, report it privately by emailing the core maintainers at [gvoprgrg@gmail.com](mailto:gvoprgrg@gmail.com). We will coordinate a swift disclosure and fix.
+If you discover a security vulnerability, please do **not** open a public issue. See [SECURITY.md](SECURITY.md) for how to report it privately.
