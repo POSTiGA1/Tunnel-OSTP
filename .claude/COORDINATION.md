@@ -21,4 +21,3 @@ on what. Keep it short and current.
 
 | Session / branch | Area (files) | What | Status |
 |---|---|---|---|
-| claude/ostp-cert-validation-gr1dis | ostp-gui/**, ostp-server/panel/**, ostp/src/main.rs (setup), new ostp/src/manage_cmd.rs, scripts/install.sh | SSH onboarding, server management in the desktop app, mobile panel layout | in progress |

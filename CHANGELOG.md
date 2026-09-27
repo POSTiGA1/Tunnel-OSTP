@@ -12,8 +12,18 @@ The stable 0.4.6: everything from the betas below. In short:
 - TLS on port 443, directly or behind nginx, Apache or Caddy, with `ostp cert` for the domain and certificate.
 - Subscriptions in the CLI, the desktop app and Android.
 - Seamless roaming: a network change no longer drops the session.
+- Your own server from the desktop app: installed and managed over SSH, no Linux knowledge needed.
 - A filtering DNS resolver on the server (`ostp dns`) and a new web panel.
 - Wire-compatible with 0.4.5: old clients and servers keep working with new ones.
+
+### Added
+- Desktop app: a first-run screen. Add a link or subscription, or install OSTP on your own VPS over SSH (password or private key) with live progress; the new server's connection is added to the app.
+- Desktop app: *Settings → Server management*. Per server: status (service, sessions, load, memory, disk; restart, update), users (add, rename, revoke, traffic, add to the app, share as QR), connection (TLS domain and certificate, subscriptions), management (web panel opened through the SSH connection, server log, reboot, uninstall).
+- `ostp manage`: server state and user changes as JSON, what the app runs over SSH. `install.sh -y` installs without questions.
+- The server writes per-user traffic to `.ostp_stats.json` next to the config every 30 seconds.
+
+### Fixed
+- Web panel on phones: no sideways scrolling; users are shown as cards.
 
 ## [0.4.6-beta.7] - 2026-09-27
 

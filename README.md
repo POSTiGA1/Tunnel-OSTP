@@ -39,7 +39,12 @@ next to prebuilt `ostp` binaries for Windows, Linux (x86, x64, ARM, MIPS, RISC-V
 
 ## Quick start
 
-**1. On the server**, run the setup wizard and print the connection links:
+**No Linux experience?** Install the desktop app and choose *I have a server* on its first screen (or *Settings → Server management* later).
+Enter the VPS address, the SSH login and the password or private key: the app installs OSTP over SSH, adds the connection to itself,
+and afterwards manages the server: users, traffic, TLS certificate, subscriptions, updates, logs, and the web panel through the same SSH connection.
+The SSH password or key is kept only if you ask, encrypted under a key in the system credential store; the server's host key is pinned on first connect.
+
+**By hand, 1. On the server**, run the setup wizard and print the connection links:
 
 ```bash
 ostp setup           # server mode, port, access keys
