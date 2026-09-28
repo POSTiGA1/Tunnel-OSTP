@@ -16,6 +16,9 @@ The stable 0.4.6: everything from the betas below. In short:
 - A filtering DNS resolver on the server (`ostp dns`) and a new web panel.
 - Wire-compatible with 0.4.5: old clients and servers keep working with new ones.
 
+### Fixed
+- `install.sh -b beta` (and `-b alpha`), which the apps also run to install or update a server, took the first tag the GitHub API listed instead of the newest version: it installed v0.4.6-beta.9 after beta.10 was out. It now picks the highest version of the channel.
+
 ## [0.4.6-beta.10] - 2026-09-28
 
 ### Changed
