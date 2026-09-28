@@ -16,6 +16,9 @@ The stable 0.4.6: everything from the betas below. In short:
 - A filtering DNS resolver on the server (`ostp dns`) and a new web panel.
 - Wire-compatible with 0.4.5: old clients and servers keep working with new ones.
 
+### Changed
+- Release builds: the desktop and Android packages reuse compiled dependencies (a cache warmed on master; a release tag could never read the old per-tag caches), and the Windows app is compiled once for both the installer and the portable zip.
+
 ## [0.4.6-beta.9] - 2026-09-28
 
 ### Changed

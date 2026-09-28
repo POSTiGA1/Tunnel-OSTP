@@ -1,0 +1,192 @@
+name: Cache warm-up
+
+# Why this exists: release.yml runs on tag pushes, and a tag run can only read
+# caches saved by the same tag or by the default branch. Every release is a
+# new tag, so whatever a release saved was never read again: each one compiled
+# all dependencies from scratch (Windows GUI ~15 min, Android ~10 min) and
+# uploaded ~6 GB of cache nobody could use, evicting the rest.
+#
+# This workflow runs on master (the default branch) and builds the GUI and
+# Android packages the same way release.yml does, so their caches live where
+# every tag run can read them. release.yml only restores (save-if: false).
+#
+# KEEP IN STEP WITH release.yml: the toolchain steps, the global env and the
+# build commands must match, or the cache key (rustc version + CARGO_*/RUST*
+# env) or the compiled dependency set will differ and the cache will not help.
+# Nothing here is published.
+
+on:
+  push:
+    branches: [master]
+  # Weekly, so a new Rust stable (every 6 weeks) or dependency drift does not
+  # leave releases cold until the next stable release reaches master.
+  schedule:
+    - cron: "17 3 * * 1"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: cache-warm
+  cancel-in-progress: true
+
+# Same as release.yml: part of the Rust cache key.
+env:
+  CARGO_TERM_COLOR: always
+  CARGO_INCREMENTAL: 0
+  RUST_BACKTRACE: short
+
+jobs:
+  windows-gui:
+    name: Warm Windows GUI - ${{ matrix.arch }}
+    runs-on: windows-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - arch: amd64
+            target: x86_64-pc-windows-msvc
+          - arch: arm64
+            target: aarch64-pc-windows-msvc
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: ${{ matrix.target }}
+      - uses: Swatinem/rust-cache@v2
+        with:
+          shared-key: windows-gui-${{ matrix.target }}
+          workspaces: |
+            . -> target
+            ostp-gui/src-tauri -> target
+      - name: Download wintun
+        shell: pwsh
+        run: |
+          $ProgressPreference = 'SilentlyContinue'
+          New-Item -ItemType Directory -Force -Path "target/${{ matrix.target }}/release"
+          Invoke-WebRequest -Uri "https://www.wintun.net/builds/wintun-0.14.1.zip" -OutFile "target/wt.zip"
+          Expand-Archive "target/wt.zip" -DestinationPath "target/wt_tmp" -Force
+          Get-ChildItem "target/wt_tmp" -Filter "wintun.dll" -Recurse | Where-Object { $_.FullName -match 'bin[\\/]${{ matrix.arch }}[\\/]' } | Copy-Item -Destination "target/${{ matrix.target }}/release/wintun.dll" -Force
+      - name: Build (as release.yml)
+        working-directory: ostp-gui
+        run: npm install && cargo build -p ostp-tun-helper --release --target ${{ matrix.target }} && node stage-sidecar.cjs --release --target ${{ matrix.target }} && npx tauri build --bundles nsis --target ${{ matrix.target }} --config src-tauri/tauri.installer.conf.json
+
+  linux-gui:
+    name: Warm Linux GUI - ${{ matrix.arch }}
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - arch: amd64
+            target: x86_64-unknown-linux-gnu
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: ${{ matrix.target }}
+      - name: Install Linux Dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libwebkit2gtk-4.1-dev libappindicator3-dev librsvg2-dev patchelf
+      - uses: Swatinem/rust-cache@v2
+        with:
+          shared-key: linux-gui-${{ matrix.target }}
+          workspaces: |
+            . -> target
+            ostp-gui/src-tauri -> target
+      - name: Build (as release.yml)
+        working-directory: ostp-gui
+        run: |
+          npm install
+          cargo build -p ostp-tun-helper --release --target ${{ matrix.target }} --manifest-path ../Cargo.toml
+          npx tauri build --no-bundle --target ${{ matrix.target }}
+
+  macos-gui:
+    name: Warm macOS GUI - ${{ matrix.arch }}
+    runs-on: macos-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - arch: amd64
+            target: x86_64-apple-darwin
+          - arch: arm64
+            target: aarch64-apple-darwin
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: ${{ matrix.target }}
+      - uses: Swatinem/rust-cache@v2
+        with:
+          shared-key: macos-gui-${{ matrix.target }}
+          workspaces: |
+            ostp-gui/src-tauri -> target
+      - name: Build (as release.yml)
+        working-directory: ostp-gui
+        run: |
+          npm install
+          npx tauri build --no-bundle --target ${{ matrix.target }}
+
+  android:
+    name: Warm Android - ${{ matrix.arch }}
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - arch: arm64-v8a
+            rust_target: aarch64-linux-android
+            flutter_target: android-arm64
+          - arch: armeabi-v7a
+            rust_target: armv7-linux-androideabi
+            flutter_target: android-arm
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-java@v3
+        with:
+          distribution: 'zulu'
+          java-version: '17'
+      - uses: subosito/flutter-action@v2
+        with:
+          flutter-version: '3.41.6'
+          channel: 'stable'
+          cache: true
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: ${{ matrix.rust_target }}
+      - uses: nttld/setup-ndk@v1
+        with:
+          ndk-version: r26b
+      - uses: Swatinem/rust-cache@v2
+        with:
+          shared-key: android-${{ matrix.arch }}
+      # Writes its cache only here, on the default branch; release.yml reads it.
+      - uses: gradle/actions/setup-gradle@v4
+      - uses: taiki-e/install-action@v2
+        with:
+          tool: cargo-ndk
+      # As release.yml, without the upload keystore: Gradle falls back to the
+      # debug key, which only changes the signature, not what gets compiled
+      # or downloaded. The APK is thrown away.
+      - name: Build (as release.yml)
+        shell: bash
+        working-directory: ostp-flutter
+        run: |
+          set -euo pipefail
+          mkdir -p android/app/src/main/jniLibs/${{ matrix.arch }}
+          cd ../ostp-jni
+          cargo ndk -t ${{ matrix.arch }} -o "../ostp-flutter/android/app/src/main/jniLibs" build --release
+          cd ../ostp-flutter
+          flutter build apk --release --target-platform ${{ matrix.flutter_target }}
