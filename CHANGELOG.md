@@ -8,14 +8,6 @@ Older history is on the [Releases](https://github.com/ospab/ostp/releases) page 
 
 ## [Unreleased]
 
-The stable 0.4.6: everything from the betas below. In short:
-- TLS on port 443, directly or behind nginx, Apache or Caddy, with `ostp cert` for the domain and certificate.
-- Subscriptions in the CLI, the desktop app and Android.
-- Seamless roaming: a network change no longer drops the session.
-- Your own server from the desktop and Android apps: installed and managed over SSH, no Linux knowledge needed.
-- A filtering DNS resolver on the server (`ostp dns`) and a new web panel.
-- Wire-compatible with 0.4.5: old clients and servers keep working with new ones.
-
 ### Changed
 - Server: per-user traffic, the DNS counters and the DNS query log survive restarts and updates. Traffic is read back from `.ostp_stats.json` on start and written on a clean stop too; DNS activity is kept in `.ostp_dns_activity.json` next to the config (root-only; "Clear" in the panel empties it). A restart no longer resets traffic limits.
 - Release builds: the desktop and Android packages reuse compiled dependencies (a cache warmed on master; a release tag could never read the old per-tag caches), and the Windows app is compiled once for both the installer and the portable zip.
