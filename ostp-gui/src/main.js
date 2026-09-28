@@ -1,4 +1,4 @@
-import { initServers, renderServers, mountSshForm } from './servers.js';
+import { initServers, renderServers, mountSshForm, confirmBox } from './servers.js';
 
 // ── Tauri invoke shim ─────────────────────────────────────────────────
 let invoke = () => Promise.resolve(null);
@@ -434,13 +434,15 @@ async function handleToggle() {
 // ── SCREEN NAVIGATION ─────────────────────────────────────────────────
 function showScreen(name) {
   const screens = {
-    home: homeScreen, settings: settingsScreen, prober: $('prober-screen'),
+    home: homeScreen, settings: settingsScreen, more: $('more-screen'), prober: $('prober-screen'),
     welcome: $('welcome-screen'), servers: $('servers-screen'), server: $('server-screen'),
   };
   Object.values(screens).forEach(s => s.classList.remove('active'));
   if (name === 'settings') {
     loadSettingsIntoForm();
     renderSubs();
+  } else if (name === 'more') {
+    loadSettingsIntoForm();
   } else if (name === 'prober') {
     fillProberProfiles();
   } else if (name === 'servers') {
@@ -465,6 +467,51 @@ function welcomeStep(step) {
   });
   $('btn-welcome-back').style.visibility = step === 'choose' ? 'hidden' : 'visible';
   if (step === 'link') $('welcome-link').focus();
+  if (step === 'qr') $('welcome-qr-status').textContent = 'Drop a picture here';
+}
+
+const REPO_URL = 'https://github.com/ospab/ostp';
+
+// A link or a subscription URL, typed, pasted or read from a QR code.
+async function welcomeAdd(raw) {
+  raw = String(raw || '').trim();
+  if (!raw) return false;
+  if (isSubscriptionUrl(raw)) {
+    await addSubscription(raw);
+    if (loadSubs().some(s => s.url === raw)) { finishWelcome(); return true; }
+    return false;
+  }
+  try {
+    parseOstpLink(raw);
+    importLinks([raw], {});
+    showToast('Profile added', 'ok');
+    finishWelcome();
+    return true;
+  } catch (e) {
+    showToast(e.message, 'error');
+    return false;
+  }
+}
+
+// Reads the QR code in a picture (a File or Blob) on the Rust side.
+async function welcomeQrFrom(blob) {
+  const status = $('welcome-qr-status');
+  if (!blob || !/^image\//.test(blob.type || '')) { status.textContent = 'That is not a picture'; return; }
+  status.textContent = 'Reading the code…';
+  try {
+    const b64 = await new Promise((resolve, reject) => {
+      const r = new FileReader();
+      r.onload = () => resolve(String(r.result).split(',')[1] || '');
+      r.onerror = () => reject(r.error);
+      r.readAsDataURL(blob);
+    });
+    const text = await invoke('decode_qr', { imageBase64: b64 });
+    if (!text) throw new Error('QR codes can be read only in the desktop app');
+    status.textContent = 'Found a code';
+    if (!await welcomeAdd(text)) status.textContent = 'The code does not hold an ostp:// link or a subscription URL';
+  } catch (e) {
+    status.textContent = String(e?.message || e);
+  }
 }
 
 function setupWelcome() {
@@ -476,22 +523,33 @@ function setupWelcome() {
     try { $('welcome-link').value = (await navigator.clipboard.readText()).trim(); }
     catch { showToast('Clipboard is not available; paste with Ctrl+V', 'error'); }
   });
-  $('btn-welcome-link').addEventListener('click', async () => {
-    const raw = $('welcome-link').value.trim();
-    if (!raw) { $('welcome-link').focus(); return; }
-    if (isSubscriptionUrl(raw)) {
-      await addSubscription(raw);
-      if (loadSubs().some(s => s.url === raw)) finishWelcome();
-      return;
-    }
-    try {
-      parseOstpLink(raw);
-      importLinks([raw], {});
-      showToast('Profile added', 'ok');
-      finishWelcome();
-    } catch (e) {
-      showToast(e.message, 'error');
-    }
+  $('btn-welcome-link').addEventListener('click', () => {
+    if (!$('welcome-link').value.trim()) { $('welcome-link').focus(); return; }
+    welcomeAdd($('welcome-link').value);
+  });
+  $('btn-welcome-repo').addEventListener('click', () => openUrl(REPO_URL));
+
+  // QR code: a chosen file, a dropped file, or a screenshot pasted with Ctrl+V.
+  const qrOpen = () => $('welcome-screen').classList.contains('active')
+    && document.querySelector('#welcome-screen [data-welcome="qr"]').style.display !== 'none';
+  $('btn-welcome-qr-file').addEventListener('click', () => $('welcome-qr-file').click());
+  $('welcome-qr-file').addEventListener('change', () => {
+    const f = $('welcome-qr-file').files[0];
+    $('welcome-qr-file').value = '';
+    if (f) welcomeQrFrom(f);
+  });
+  const drop = $('welcome-qr-drop');
+  drop.addEventListener('dragover', e => { e.preventDefault(); drop.classList.add('over'); });
+  drop.addEventListener('dragleave', () => drop.classList.remove('over'));
+  drop.addEventListener('drop', e => {
+    e.preventDefault();
+    drop.classList.remove('over');
+    welcomeQrFrom(e.dataTransfer?.files?.[0]);
+  });
+  document.addEventListener('paste', e => {
+    if (!qrOpen()) return;
+    const item = [...(e.clipboardData?.items || [])].find(i => i.type.startsWith('image/'));
+    if (item) { e.preventDefault(); welcomeQrFrom(item.getAsFile()); }
   });
   mountSshForm($('welcome-ssh-form'), { onInstalled: finishWelcome });
   const firstRun = !localStorage.getItem(WELCOMED_KEY) && !profiles.length && !loadSubs().length;
@@ -899,9 +957,9 @@ async function addSubscription(url) {
   }
 }
 
-function removeSubscription(id) {
+async function removeSubscription(id) {
   const sub = loadSubs().find(s => s.id === id);
-  if (!sub || !confirm(`Remove "${sub.name || sub.url}" and its profiles?`)) return;
+  if (!sub || !await confirmBox(`Remove "${sub.name || sub.url}"?`, 'The subscription and its profiles are removed from this app.', 'Remove')) return;
   saveSubs(loadSubs().filter(s => s.id !== id));
   profiles = profiles.filter(p => p.sub_id !== id);
   if (!profiles.some(p => p.id === activeId)) { activeId = profiles[0]?.id || null; saveActiveId(activeId); }
@@ -1316,6 +1374,8 @@ window.addEventListener('DOMContentLoaded', async () => {
   btnConnect.addEventListener('click', handleToggle);
   btnGoSettings.addEventListener('click', () => showScreen('settings'));
   $('btn-go-servers').addEventListener('click', () => showScreen('servers'));
+  $('btn-go-more').addEventListener('click', () => showScreen('more'));
+  $('btn-more-back').addEventListener('click', () => showScreen('settings'));
   initServers({
     invoke, showToast, showScreen, escHtml, importLinks, connectedThrough, showShare,
     // Resolves to the subscription's profile count, 0 when it did not work.

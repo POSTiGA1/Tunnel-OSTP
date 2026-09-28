@@ -98,6 +98,15 @@ void main() {
     await tester.pumpWidget(MaterialApp(theme: ThemeData.dark(useMaterial3: true), home: WelcomeScreen(prefs: await prefs())));
     await tester.pumpAndSettle();
     expect(find.text("Let's get started"), findsOneWidget);
+    // Step 1 is only the choice, in this order; nothing to fill in yet.
+    final order = ['I have a link', 'I have a QR code', 'I have a server', 'The project on GitHub']
+        .map((t) => tester.getTopLeft(find.text(t)).dy)
+        .toList();
+    expect(order, [...order]..sort());
+    expect(find.byType(TextField), findsNothing);
+    await tester.tap(find.text('I have a server'));
+    await tester.pumpAndSettle();
+    expect(find.text('Your server'), findsOneWidget);
     expect(find.text('Install OSTP'), findsOneWidget);
     await tester.scrollUntilVisible(find.text('Install OSTP'), 200, scrollable: find.byType(Scrollable).first);
     await tester.pumpAndSettle();
@@ -117,6 +126,8 @@ void main() {
     await phone(tester);
     final p = await prefs();
     await tester.pumpWidget(MaterialApp(home: WelcomeScreen(prefs: p)));
+    await tester.tap(find.text('I have a link'));
+    await tester.pumpAndSettle();
     await tester.enterText(find.byType(TextField).first, 'ostp://cccccccccccccccccccccccccccccccc@198.51.100.4:50000?type=udp&name=Home');
     await tester.tap(find.text('Add'));
     await tester.pump();

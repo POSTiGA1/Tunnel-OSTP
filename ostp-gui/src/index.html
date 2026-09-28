@@ -170,7 +170,7 @@
         </div>
 
         <!-- Client settings -->
-        <div class="section-divider"><span>Client Settings</span></div>
+        <div class="section-divider"><span>Connection</span></div>
 
         <div class="client-settings-card">
 
@@ -227,6 +227,34 @@
             <input id="in-socks" class="field-input compact" type="text" placeholder="127.0.0.1:1088" />
           </div>
 
+        </div> <!-- client-settings-card -->
+        
+        <button id="btn-go-more" class="wide-btn" type="button">
+          <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><line x1="4" y1="21" x2="4" y2="14"/><line x1="4" y1="10" x2="4" y2="3"/><line x1="12" y1="21" x2="12" y2="12"/><line x1="12" y1="8" x2="12" y2="3"/><line x1="20" y1="21" x2="20" y2="16"/><line x1="20" y1="12" x2="20" y2="3"/><line x1="1" y1="14" x2="7" y2="14"/><line x1="9" y1="8" x2="15" y2="8"/><line x1="17" y1="16" x2="23" y2="16"/></svg>
+          More settings
+        </button>
+      </div> <!-- settings-body -->
+    </div> <!-- settings-screen -->
+
+    <!-- ── MORE SETTINGS SCREEN ─────────────────────────────── -->
+    <!-- Everything that is not profiles, subscriptions or the connection. -->
+    <div id="more-screen" class="screen">
+      <header class="topbar">
+        <button id="btn-more-back" class="icon-btn" aria-label="Back">
+          <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round">
+            <path d="M19 12H5M12 19l-7-7 7-7"/>
+          </svg>
+        </button>
+        <span class="topbar-title">More settings</span>
+        <span style="width:32px;"></span>
+      </header>
+      <div class="settings-body">
+        <button id="btn-go-servers" class="wide-btn" type="button">
+          <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="2" y="3" width="20" height="7" rx="2"/><rect x="2" y="14" width="20" height="7" rx="2"/><line x1="6" y1="6.5" x2="6.01" y2="6.5"/><line x1="6" y1="17.5" x2="6.01" y2="17.5"/></svg>
+          Server management
+        </button>
+
+        <div class="client-settings-card">
           <div class="section-divider-mini"><span>Exceptions / Routing</span></div>
 
           <div class="field-group" style="padding: 10px 14px; margin-bottom: 0;">
@@ -356,20 +384,14 @@
               <span class="toggle-track"><span class="toggle-thumb"></span></span>
             </label>
           </div>
-
-        </div> <!-- client-settings-card -->
-        
-        <button id="btn-go-servers" class="wide-btn" type="button">
-          <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="2" y="3" width="20" height="7" rx="2"/><rect x="2" y="14" width="20" height="7" rx="2"/><line x1="6" y1="6.5" x2="6.01" y2="6.5"/><line x1="6" y1="17.5" x2="6.01" y2="17.5"/></svg>
-          Server management
-        </button>
+        </div>
 
         <div class="app-version">
           <span id="app-version">OSTP GUI</span>
           <button id="btn-check-updates" class="btn secondary compact-btn" type="button">Check for updates</button>
         </div>
-      </div> <!-- settings-body -->
-    </div> <!-- settings-screen -->
+      </div>
+    </div>
 
     <!-- ── PROBER SCREEN ────────────────────────────────────── -->
     <div id="prober-screen" class="screen">
@@ -417,9 +439,19 @@
             <div class="choice-body"><div class="choice-title">I have a link</div><div class="choice-hint">Someone gave me an ostp:// link or a subscription URL</div></div>
             <svg class="choice-chevron" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><polyline points="9 18 15 12 9 6"/></svg>
           </button>
+          <button type="button" class="choice-card choice-pick" data-go="qr">
+            <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="3" width="7" height="7"/><rect x="14" y="3" width="7" height="7"/><rect x="3" y="14" width="7" height="7"/><path d="M14 14h3v3h-3zM20 14v.01M14 20h.01M17 20h4v-3"/></svg>
+            <div class="choice-body"><div class="choice-title">I have a QR code</div><div class="choice-hint">A picture or a screenshot of the code of a link or a subscription</div></div>
+            <svg class="choice-chevron" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><polyline points="9 18 15 12 9 6"/></svg>
+          </button>
           <button type="button" class="choice-card choice-pick" data-go="server">
             <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="2" y="3" width="20" height="7" rx="2"/><rect x="2" y="14" width="20" height="7" rx="2"/><line x1="6" y1="6.5" x2="6.01" y2="6.5"/><line x1="6" y1="17.5" x2="6.01" y2="17.5"/></svg>
             <div class="choice-body"><div class="choice-title">I have a server</div><div class="choice-hint">A VPS and its SSH login; OSTP is set up for me</div></div>
+            <svg class="choice-chevron" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><polyline points="9 18 15 12 9 6"/></svg>
+          </button>
+          <button type="button" class="choice-card choice-pick" id="btn-welcome-repo">
+            <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="16 18 22 12 16 6"/><polyline points="8 6 2 12 8 18"/></svg>
+            <div class="choice-body"><div class="choice-title">The project on GitHub</div><div class="choice-hint">Source code, documentation, releases</div></div>
             <svg class="choice-chevron" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><polyline points="9 18 15 12 9 6"/></svg>
           </button>
         </div>
@@ -435,7 +467,21 @@
           </div>
         </div>
 
-        <!-- Step 2b: a server -->
+        <!-- Step 2b: a QR code in a picture -->
+        <div data-welcome="qr" style="display:none;">
+          <h1 class="welcome-title">Add from a QR code</h1>
+          <p class="welcome-sub">Choose a picture with the code, or copy a screenshot of it and press Ctrl+V here.</p>
+          <div class="qr-drop" id="welcome-qr-drop">
+            <svg width="28" height="28" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="3" width="18" height="18" rx="2"/><circle cx="8.5" cy="8.5" r="1.5"/><polyline points="21 15 16 10 5 21"/></svg>
+            <span id="welcome-qr-status">Drop a picture here</span>
+          </div>
+          <input type="file" id="welcome-qr-file" accept="image/png,image/jpeg,image/bmp,image/webp" style="display:none;" />
+          <div class="choice-actions">
+            <button id="btn-welcome-qr-file" class="btn primary" type="button">Choose a picture</button>
+          </div>
+        </div>
+
+        <!-- Step 2c: a server -->
         <div data-welcome="server" style="display:none;">
           <h1 class="welcome-title">Your server</h1>
           <p class="welcome-sub">The app signs in over SSH and installs OSTP; no Linux knowledge needed. If OSTP is already there, you choose whether to update it.</p>

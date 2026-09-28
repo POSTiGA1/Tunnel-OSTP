@@ -645,6 +645,28 @@ fn generate_qr(text: String) -> Result<String, String> {
     Ok(svg)
 }
 
+/// Reads a QR code from a picture (a screenshot, a photo, a saved image),
+/// given as base64. Returns the text of the first code that decodes.
+#[tauri::command]
+async fn decode_qr(image_base64: String) -> Result<String, String> {
+    use base64::Engine;
+    tauri::async_runtime::spawn_blocking(move || {
+        let bytes = base64::engine::general_purpose::STANDARD
+            .decode(image_base64.trim())
+            .map_err(|_| "this is not an image".to_string())?;
+        let img = image::load_from_memory(&bytes).map_err(|e| format!("cannot read the image: {e}"))?.to_luma8();
+        let (w, h) = img.dimensions();
+        let mut prepared = rqrr::PreparedImage::prepare_from_greyscale(w as usize, h as usize, |x, y| img.get_pixel(x as u32, y as u32).0[0]);
+        prepared
+            .detect_grids()
+            .into_iter()
+            .find_map(|g| g.decode().ok().map(|(_, text)| text))
+            .ok_or_else(|| "no QR code found in the image".to_string())
+    })
+    .await
+    .map_err(|e| e.to_string())?
+}
+
 /// Runs a network job on its own thread and runtime (as the Android bridge
 /// does), so the probes never need to be `Send` or share the UI runtime.
 async fn off_thread<F, Fut>(job: F) -> Result<serde_json::Value, String>
@@ -1408,7 +1430,48 @@ pub fn run() {
             }
             _ => {}
         })
-        .invoke_handler(tauri::generate_handler![start_tunnel, stop_tunnel, reload_tunnel, get_tunnel_status, get_metrics, get_config, save_config, get_wintun_install_path, set_autostart, get_autostart, list_running_processes, generate_qr, fetch_subscription, run_prober_matrix, run_prober_ttl, run_dpi_battery, app_build_tag, check_updates, servers::servers_list, servers::server_add, servers::server_rename, servers::server_remove, servers::server_probe, servers::server_install, servers::server_manage, servers::server_action, servers::server_open_panel])
+        .invoke_handler(tauri::generate_handler![start_tunnel, stop_tunnel, reload_tunnel, get_tunnel_status, get_metrics, get_config, save_config, get_wintun_install_path, set_autostart, get_autostart, list_running_processes, generate_qr, decode_qr, fetch_subscription, run_prober_matrix, run_prober_ttl, run_dpi_battery, app_build_tag, check_updates, servers::servers_list, servers::server_add, servers::server_rename, servers::server_remove, servers::server_probe, servers::server_install, servers::server_manage, servers::server_action, servers::server_open_panel])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");
+}
+
+#[cfg(test)]
+mod qr_tests {
+    use super::*;
+
+    /// A QR code rendered to a PNG, as a screenshot of one would be.
+    fn png_of(text: &str) -> String {
+        use base64::Engine;
+        let code = qrcode::QrCode::new(text.as_bytes()).unwrap();
+        let w = code.width();
+        let (scale, quiet) = (6u32, 4u32);
+        let side = (w as u32 + 2 * quiet) * scale;
+        let colors = code.to_colors();
+        let img = image::GrayImage::from_fn(side, side, |x, y| {
+            let (mx, my) = ((x / scale) as i64 - quiet as i64, (y / scale) as i64 - quiet as i64);
+            let dark = mx >= 0 && my >= 0 && (mx as usize) < w && (my as usize) < w
+                && colors[my as usize * w + mx as usize] == qrcode::Color::Dark;
+            image::Luma([if dark { 0 } else { 255 }])
+        });
+        let mut png = Vec::new();
+        img.write_to(&mut std::io::Cursor::new(&mut png), image::ImageFormat::Png).unwrap();
+        base64::engine::general_purpose::STANDARD.encode(png)
+    }
+
+    #[tokio::test]
+    async fn a_link_comes_back_out_of_its_qr_picture() {
+        let link = "ostp://cccccccccccccccccccccccccccccccc@198.51.100.4:50000?type=udp&name=Home";
+        assert_eq!(decode_qr(png_of(link)).await.unwrap(), link);
+    }
+
+    #[tokio::test]
+    async fn pictures_without_a_code_and_non_images_are_refused() {
+        use base64::Engine;
+        let mut blank = Vec::new();
+        image::GrayImage::from_pixel(64, 64, image::Luma([255])).write_to(&mut std::io::Cursor::new(&mut blank), image::ImageFormat::Png).unwrap();
+        let blank = base64::engine::general_purpose::STANDARD.encode(blank);
+        assert!(decode_qr(blank).await.unwrap_err().contains("no QR code"));
+        assert!(decode_qr("%%%".into()).await.is_err());
+        assert!(decode_qr(base64::engine::general_purpose::STANDARD.encode(b"plain text")).await.unwrap_err().contains("cannot read"));
+    }
 }

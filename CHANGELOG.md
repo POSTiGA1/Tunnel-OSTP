@@ -9,8 +9,9 @@ Older history is on the [Releases](https://github.com/ospab/ostp/releases) page 
 ## [Unreleased]
 
 ### Changed
+- Desktop and Android: the settings screen keeps profiles, subscriptions and the connection; exclusions, app options, obfuscation (desktop), logs (Android), server management and updates moved to "More settings".
+- First-run screen, desktop and Android: four choices — a link, a QR code, your own server, the project on GitHub. On the desktop the QR code is read from a picture: choose a file, drop it on the window or paste a screenshot with Ctrl+V.
 - Web panel: the DNS query log shows the newest 25 entries instead of 150; "Show more" loads 50 more at a time.
-- First-run screen: first a choice (a link or your own server), then a page for just that.
 - Adding a server that already runs OSTP no longer updates it on its own: the app asks whether to add it as it is or to update it.
 - Adding a user to the app from Server management asks how: as a subscription (follows the server's changes) or as fixed profiles. Right after a user is created the app offers the same, with "Not now" for users meant for someone else.
 

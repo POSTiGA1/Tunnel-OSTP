@@ -1,6 +1,7 @@
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:shared_preferences/shared_preferences.dart';
+import 'package:url_launcher/url_launcher.dart';
 
 import '../models/ostp_profile.dart';
 import '../models/share_link.dart';
@@ -17,8 +18,8 @@ bool needsWelcome(SharedPreferences prefs) =>
     decodeProfiles(prefs.getString('profiles_json')).isEmpty &&
     SubscriptionStore(prefs).load().isEmpty;
 
-/// First run: a link or subscription someone gave you, or your own server
-/// set up over SSH.
+/// First run: first a choice (a link, a QR code, your own server, or the
+/// project's repository), then a page for just that choice.
 class WelcomeScreen extends StatefulWidget {
   final SharedPreferences prefs;
   const WelcomeScreen({super.key, required this.prefs});
@@ -27,9 +28,14 @@ class WelcomeScreen extends StatefulWidget {
   State<WelcomeScreen> createState() => _WelcomeScreenState();
 }
 
+const repoUrl = 'https://github.com/ospab/ostp';
+
+enum _Step { choose, link, server }
+
 class _WelcomeScreenState extends State<WelcomeScreen> {
   final _link = TextEditingController();
   bool _busy = false;
+  _Step _step = _Step.choose;
 
   @override
   void dispose() {
@@ -77,14 +83,30 @@ class _WelcomeScreenState extends State<WelcomeScreen> {
     }
   }
 
-  Widget _card({required IconData icon, required String title, required String hint, required Widget child}) => Card(
-        margin: const EdgeInsets.only(bottom: 16),
-        child: Padding(
-          padding: const EdgeInsets.all(16),
-          child: Column(crossAxisAlignment: CrossAxisAlignment.stretch, children: [
-            Row(children: [
+  Future<void> _scanQr() async {
+    final v = await Navigator.push<String>(context, MaterialPageRoute(builder: (_) => const QRScannerScreen()));
+    if (v != null && v.isNotEmpty) {
+      _link.text = v;
+      await _addLink(v);
+    }
+  }
+
+  Future<void> _openRepo() async {
+    if (!await launchUrl(Uri.parse(repoUrl), mode: LaunchMode.externalApplication) && mounted) {
+      ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('No browser to open $repoUrl')));
+    }
+  }
+
+  Widget _choice(IconData icon, String title, String hint, VoidCallback onTap) => Card(
+        margin: const EdgeInsets.only(bottom: 12),
+        child: InkWell(
+          borderRadius: BorderRadius.circular(12),
+          onTap: onTap,
+          child: Padding(
+            padding: const EdgeInsets.all(16),
+            child: Row(children: [
               Icon(icon, size: 22),
-              const SizedBox(width: 12),
+              const SizedBox(width: 14),
               Expanded(
                 child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
                   Text(title, style: const TextStyle(fontSize: 16, fontWeight: FontWeight.w700)),
@@ -92,79 +114,97 @@ class _WelcomeScreenState extends State<WelcomeScreen> {
                   Text(hint, style: const TextStyle(color: Colors.white54, fontSize: 12)),
                 ]),
               ),
+              const Icon(Icons.chevron_right, color: Colors.white54),
             ]),
-            const SizedBox(height: 14),
-            child,
-          ]),
+          ),
         ),
       );
 
+  List<Widget> _chooseStep() => [
+        const Text("Let's get started", style: TextStyle(fontSize: 26, fontWeight: FontWeight.w800)),
+        const SizedBox(height: 8),
+        const Text('How will you connect?', style: TextStyle(color: Colors.white54, height: 1.4)),
+        const SizedBox(height: 20),
+        _choice(Icons.link, 'I have a link', 'Someone gave me an ostp:// link or a subscription URL',
+            () => setState(() => _step = _Step.link)),
+        _choice(Icons.qr_code_scanner, 'I have a QR code', 'Scan the code of a link or a subscription', _scanQr),
+        _choice(Icons.dns_outlined, 'I have a server', 'A VPS and its SSH login; OSTP is set up for me',
+            () => setState(() => _step = _Step.server)),
+        _choice(Icons.code, 'The project on GitHub', 'Source code, documentation, releases', _openRepo),
+      ];
+
+  List<Widget> _linkStep() => [
+        const Text('Add a link', style: TextStyle(fontSize: 26, fontWeight: FontWeight.w800)),
+        const SizedBox(height: 8),
+        const Text('Paste the ostp:// link or the subscription URL (https://…/sub/…) you were given.',
+            style: TextStyle(color: Colors.white54, height: 1.4)),
+        const SizedBox(height: 20),
+        TextField(
+          controller: _link,
+          maxLines: 4,
+          minLines: 2,
+          autocorrect: false,
+          autofocus: true,
+          style: const TextStyle(fontFamily: 'monospace', fontSize: 13),
+          decoration: InputDecoration(
+            hintText: 'ostp://… or https://…/sub/…',
+            hintStyle: const TextStyle(color: Colors.white24),
+            filled: true,
+            fillColor: Theme.of(context).colorScheme.surface,
+            border: OutlineInputBorder(borderRadius: BorderRadius.circular(12), borderSide: BorderSide.none),
+          ),
+        ),
+        const SizedBox(height: 12),
+        Row(children: [
+          OutlinedButton.icon(
+            icon: const Icon(Icons.content_paste, size: 18),
+            label: const Text('Paste'),
+            onPressed: () async {
+              final d = await Clipboard.getData(Clipboard.kTextPlain);
+              if (d?.text != null) _link.text = d!.text!.trim();
+            },
+          ),
+          const Spacer(),
+          FilledButton(onPressed: _busy ? null : () => _addLink(), child: const Text('Add')),
+        ]),
+      ];
+
+  List<Widget> _serverStep() => [
+        const Text('Your server', style: TextStyle(fontSize: 26, fontWeight: FontWeight.w800)),
+        const SizedBox(height: 8),
+        const Text('The app signs in over SSH and installs OSTP; no Linux knowledge needed. '
+            'If OSTP is already there, you choose whether to update it.',
+            style: TextStyle(color: Colors.white54, height: 1.4)),
+        const SizedBox(height: 20),
+        SshSetupForm(prefs: widget.prefs, onInstalled: (_) => _finish()),
+      ];
+
   @override
   Widget build(BuildContext context) {
-    return Scaffold(
-      appBar: AppBar(
-        title: const Text('OSTP', style: TextStyle(fontWeight: FontWeight.w800, letterSpacing: 2.5)),
-        actions: [TextButton(onPressed: _finish, child: const Text('Skip'))],
-      ),
-      body: SafeArea(
-        child: ListView(padding: const EdgeInsets.fromLTRB(20, 8, 20, 24), children: [
-          const Text("Let's get started", style: TextStyle(fontSize: 26, fontWeight: FontWeight.w800)),
-          const SizedBox(height: 8),
-          const Text('Connect with a link you were given, or set up your own server: all it takes is a VPS and its SSH login.',
-              style: TextStyle(color: Colors.white54, height: 1.4)),
-          const SizedBox(height: 20),
-          _card(
-            icon: Icons.link,
-            title: 'I have a link',
-            hint: 'An ostp:// link or a subscription URL',
-            child: Column(crossAxisAlignment: CrossAxisAlignment.stretch, children: [
-              TextField(
-                controller: _link,
-                maxLines: 3,
-                minLines: 1,
-                autocorrect: false,
-                style: const TextStyle(fontFamily: 'monospace', fontSize: 13),
-                decoration: InputDecoration(
-                  hintText: 'ostp://… or https://…/sub/…',
-                  hintStyle: const TextStyle(color: Colors.white24),
-                  filled: true,
-                  fillColor: Theme.of(context).colorScheme.surface,
-                  border: OutlineInputBorder(borderRadius: BorderRadius.circular(12), borderSide: BorderSide.none),
-                ),
-              ),
-              const SizedBox(height: 10),
-              Row(children: [
-                IconButton(
-                  tooltip: 'Paste',
-                  icon: const Icon(Icons.content_paste),
-                  onPressed: () async {
-                    final d = await Clipboard.getData(Clipboard.kTextPlain);
-                    if (d?.text != null) _link.text = d!.text!.trim();
-                  },
-                ),
-                IconButton(
-                  tooltip: 'Scan a QR code',
-                  icon: const Icon(Icons.qr_code_scanner),
-                  onPressed: () async {
-                    final v = await Navigator.push<String>(context, MaterialPageRoute(builder: (_) => const QRScannerScreen()));
-                    if (v != null && v.isNotEmpty) {
-                      _link.text = v;
-                      _addLink(v);
-                    }
-                  },
-                ),
-                const Spacer(),
-                FilledButton(onPressed: _busy ? null : () => _addLink(), child: const Text('Add')),
-              ]),
-            ]),
+    final onChoose = _step == _Step.choose;
+    return PopScope(
+      // Back from a step returns to the choice, not out of the app.
+      canPop: onChoose,
+      onPopInvokedWithResult: (didPop, _) {
+        if (!didPop) setState(() => _step = _Step.choose);
+      },
+      child: Scaffold(
+        appBar: AppBar(
+          leading: onChoose ? null : IconButton(icon: const Icon(Icons.arrow_back), onPressed: () => setState(() => _step = _Step.choose)),
+          automaticallyImplyLeading: false,
+          title: const Text('OSTP', style: TextStyle(fontWeight: FontWeight.w800, letterSpacing: 2.5)),
+          actions: [TextButton(onPressed: _finish, child: const Text('Skip'))],
+        ),
+        body: SafeArea(
+          child: ListView(
+            padding: const EdgeInsets.fromLTRB(20, 8, 20, 24),
+            children: switch (_step) {
+              _Step.choose => _chooseStep(),
+              _Step.link => _linkStep(),
+              _Step.server => _serverStep(),
+            },
           ),
-          _card(
-            icon: Icons.dns_outlined,
-            title: 'I have a server',
-            hint: 'OSTP is installed over SSH; no Linux knowledge needed',
-            child: SshSetupForm(prefs: widget.prefs, onInstalled: (_) => _finish()),
-          ),
-        ]),
+        ),
       ),
     );
   }

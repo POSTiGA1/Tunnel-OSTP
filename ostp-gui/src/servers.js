@@ -19,7 +19,7 @@ export function initServers(helpers) {
     if (lineSink && e.payload?.id === lineSink.id) lineSink.fn(e.payload.line);
   });
 
-  $('btn-servers-back').addEventListener('click', () => app.showScreen('settings'));
+  $('btn-servers-back').addEventListener('click', () => app.showScreen('more'));
   $('btn-servers-add').addEventListener('click', openAddModal);
   $('btn-server-back').addEventListener('click', () => { currentId = null; app.showScreen('servers'); });
   $('btn-server-refresh').addEventListener('click', () => renderTab());
@@ -35,7 +35,9 @@ export function initServers(helpers) {
 const esc = s => app.escHtml(s == null ? '' : String(s));
 
 // ── Small dialogs ──────────────────────────────────────────────────────
-function confirmBox(title, text, okLabel = 'OK', danger = true) {
+// The app's own dialog: never window.confirm, whose native box is titled
+// "tauri.localhost".
+export function confirmBox(title, text, okLabel = 'OK', danger = true) {
   return new Promise(resolve => {
     $('confirm-title').textContent = title;
     $('confirm-text').textContent = text;

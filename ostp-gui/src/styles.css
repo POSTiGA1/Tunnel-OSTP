@@ -953,6 +953,13 @@ textarea.field-input {
 .choice-pick > svg:first-child { flex-shrink: 0; }
 .choice-body { flex: 1; min-width: 0; }
 .choice-chevron { flex-shrink: 0; color: var(--c-txt-2); }
+.qr-drop {
+  display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 10px;
+  min-height: 150px; padding: 16px; text-align: center;
+  border: 1.5px dashed var(--c-card-border); border-radius: var(--r-lg);
+  color: var(--c-txt-2); font-size: 0.8rem;
+}
+.qr-drop.over { border-color: var(--c-txt-2); color: var(--c-txt-1); }
 .choice-options { display: flex; flex-direction: column; margin-top: 12px; }
 .choice-options .choice-pick { padding: 12px; margin-bottom: 8px; }
 textarea.field-input { resize: vertical; min-height: 38px; line-height: 1.4; padding-top: 9px; padding-bottom: 9px; }

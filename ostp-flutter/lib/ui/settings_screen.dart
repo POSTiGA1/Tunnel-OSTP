@@ -1,15 +1,12 @@
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:shared_preferences/shared_preferences.dart';
-import 'app_routing_screen.dart';
-import 'logs_screen.dart';
+import 'more_settings_screen.dart';
 import 'qr_scanner_screen.dart';
-import 'servers_screen.dart';
 import 'package:qr_flutter/qr_flutter.dart';
 import '../models/ostp_profile.dart';
 import '../models/share_link.dart';
 import '../models/subscription.dart';
-import '../services/updates.dart' as updates;
 
 /// Picks readable black/white text for a given (opaque) background color.
 /// The monochrome theme's `primary` is pure white — hardcoded white text on
@@ -30,16 +27,9 @@ class _SettingsScreenState extends State<SettingsScreen> {
   late TextEditingController _localBindCtrl;
   late TextEditingController _dnsCtrl;
   late TextEditingController _mtuCtrl;
-  late TextEditingController _domainsCtrl;
-  late TextEditingController _ipsCtrl;
   late TextEditingController _muxSessionsCtrl;
 
-  bool _debugMode = false;
   bool _muxEnabled = false;
-  bool _isCheckingUpdates = false;
-  bool _showSpeed = true;
-  bool _showRtt = true;
-  bool _autoUpdateCheck = true;
 
   List<OstpProfile> _profiles = [];
   List<OstpSubscription> _subs = [];
@@ -55,16 +45,10 @@ class _SettingsScreenState extends State<SettingsScreen> {
     _localBindCtrl = TextEditingController(text: widget.prefs.getString('local_bind') ?? '127.0.0.1:1088');
     _dnsCtrl = TextEditingController(text: widget.prefs.getString('dns_server') ?? '1.1.1.1');
     _mtuCtrl = TextEditingController(text: widget.prefs.getString('mtu') ?? '1140');
-    _domainsCtrl = TextEditingController(text: widget.prefs.getString('ex_domains') ?? '');
-    _ipsCtrl = TextEditingController(text: widget.prefs.getString('ex_ips') ?? '');
-    // No "Bypass Processes" field on mobile — Android per-app selection
-    // (Configure Split Tunneling) already covers this; a process-name field
-    // doesn't map to anything meaningful on Android the way it does on desktop.
-    _debugMode = widget.prefs.getBool('debug_mode') ?? false;
+    // Exclusions, app options, logs, server management and updates live on
+    // MoreSettingsScreen; this screen only saves what it shows, so it never
+    // writes back stale copies of those.
     _muxEnabled = widget.prefs.getBool('mux_enabled') ?? false;
-    _showSpeed = widget.prefs.getBool('show_speed') ?? true;
-    _showRtt = widget.prefs.getBool('show_rtt') ?? true;
-    _autoUpdateCheck = widget.prefs.getBool(updates.autoUpdateCheckKey) ?? true;
     _muxSessionsCtrl = TextEditingController(text: widget.prefs.getString('mux_sessions') ?? '2');
     _profiles = decodeProfiles(widget.prefs.getString('profiles_json'));
     _subs = SubscriptionStore(widget.prefs).load();
@@ -227,8 +211,6 @@ class _SettingsScreenState extends State<SettingsScreen> {
     _localBindCtrl.dispose();
     _dnsCtrl.dispose();
     _mtuCtrl.dispose();
-    _domainsCtrl.dispose();
-    _ipsCtrl.dispose();
     _muxSessionsCtrl.dispose();
     super.dispose();
   }
@@ -237,13 +219,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
     widget.prefs.setString('local_bind', _localBindCtrl.text.trim());
     widget.prefs.setString('dns_server', _dnsCtrl.text.trim());
     widget.prefs.setString('mtu', _mtuCtrl.text.trim());
-    widget.prefs.setString('ex_domains', _domainsCtrl.text.trim());
-    widget.prefs.setString('ex_ips', _ipsCtrl.text.trim());
-    widget.prefs.setBool('debug_mode', _debugMode);
     widget.prefs.setBool('mux_enabled', _muxEnabled);
-    widget.prefs.setBool('show_speed', _showSpeed);
-    widget.prefs.setBool('show_rtt', _showRtt);
-    widget.prefs.setBool(updates.autoUpdateCheckKey, _autoUpdateCheck);
     widget.prefs.setString('mux_sessions', _muxSessionsCtrl.text.trim());
     widget.prefs.setString('profiles_json', encodeProfiles(_profiles));
   }
@@ -996,15 +972,15 @@ class _SettingsScreenState extends State<SettingsScreen> {
                 ..._buildProfileCards(_profiles.where((p) => p.subId.isEmpty).toList()),
 
           const SizedBox(height: 32),
-          const Text('CLIENT SETTINGS', style: TextStyle(color: Colors.white54, fontSize: 13, fontWeight: FontWeight.bold, letterSpacing: 1.0)),
+          const Text('CONNECTION', style: TextStyle(color: Colors.white54, fontSize: 13, fontWeight: FontWeight.bold, letterSpacing: 1.0)),
           const SizedBox(height: 16),
 
           Container(
             padding: const EdgeInsets.all(24),
             decoration: BoxDecoration(
-              color: Colors.white.withOpacity(0.02),
+              color: Colors.white.withValues(alpha: 0.02),
               borderRadius: BorderRadius.circular(24),
-              border: Border.all(color: Colors.white.withOpacity(0.05)),
+              border: Border.all(color: Colors.white.withValues(alpha: 0.05)),
             ),
             child: Column(
               crossAxisAlignment: CrossAxisAlignment.start,
@@ -1012,64 +988,9 @@ class _SettingsScreenState extends State<SettingsScreen> {
                 _buildToggle('MUX (Multiplexing)', 'Multiple sessions over single connection', _muxEnabled, (v) => _muxEnabled = v),
                 if (_muxEnabled)
                   _buildTextField('MUX Sessions', _muxSessionsCtrl, hint: 'e.g. 2, 4, 8'),
-
-                _buildToggle('Check for updates', 'When the app opens: stable and beta releases', _autoUpdateCheck, (v) => _autoUpdateCheck = v),
-                _buildToggle('Debug Mode', 'Verbose logging', _debugMode, (v) => _debugMode = v),
-                _buildToggle('Show Speed', 'Live download/upload speed on the home screen', _showSpeed, (v) => _showSpeed = v),
-                _buildToggle('Show RTT', 'Live server ping on the home screen', _showRtt, (v) => _showRtt = v),
-
                 _buildTextField('Local Proxy Bind', _localBindCtrl, hint: '127.0.0.1:1088'),
                 _buildTextField('Custom DNS Server', _dnsCtrl, hint: '1.1.1.1 (e.g. 8.8.8.8)'),
                 _buildTextField('MTU (Packet Size)', _mtuCtrl, hint: '1140 (decrease if connection drops)'),
-
-                const Padding(
-                  padding: EdgeInsets.only(bottom: 16),
-                  child: Row(
-                    children: [
-                      Text('Exclusions', style: TextStyle(fontSize: 18, fontWeight: FontWeight.bold)),
-                      SizedBox(width: 10),
-                      Text('one per line', style: TextStyle(fontSize: 13, color: Colors.white30)),
-                    ],
-                  ),
-                ),
-                _buildTextField('Bypass Domains', _domainsCtrl, hint: 'example.com\n*.google.com', maxLines: 3),
-                _buildTextField('Bypass IPs / CIDR', _ipsCtrl, hint: '192.168.1.0/24\n10.0.0.1', maxLines: 3),
-
-                const SizedBox(height: 8),
-                SizedBox(
-                  width: double.infinity,
-                  child: ElevatedButton.icon(
-                    icon: const Icon(Icons.route),
-                    label: const Text('Configure Split Tunneling'),
-                    onPressed: () {
-                      Navigator.push(context, MaterialPageRoute(builder: (context) => AppRoutingScreen(prefs: widget.prefs)));
-                    },
-                  ),
-                ),
-                const SizedBox(height: 16),
-                SizedBox(
-                  width: double.infinity,
-                  child: ElevatedButton.icon(
-                    icon: const Icon(Icons.article),
-                    label: const Text('View Logs'),
-                    onPressed: () {
-                      Navigator.push(context, MaterialPageRoute(builder: (context) => const LogsScreen()));
-                    },
-                  ),
-                ),
-                const SizedBox(height: 16),
-                SizedBox(
-                  width: double.infinity,
-                  child: ElevatedButton.icon(
-                    icon: const Icon(Icons.dns),
-                    label: const Text('Server Management'),
-                    onPressed: () async {
-                      await Navigator.push(context, MaterialPageRoute(builder: (context) => ServersScreen(prefs: widget.prefs)));
-                      // Users added to the app from a server become profiles.
-                      _reloadProfilesAndSubs();
-                    },
-                  ),
-                ),
               ],
             ),
           ),
@@ -1077,35 +998,35 @@ class _SettingsScreenState extends State<SettingsScreen> {
           const SizedBox(height: 16),
 
           InkWell(
-            onTap: _isCheckingUpdates ? null : _checkForUpdates,
+            borderRadius: BorderRadius.circular(16),
+            onTap: () async {
+              _saveSettings();
+              await Navigator.push(context, MaterialPageRoute(builder: (_) => MoreSettingsScreen(prefs: widget.prefs)));
+              // Users added to the app from Server management become profiles.
+              _reloadProfilesAndSubs();
+            },
             child: Container(
               padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 16),
               decoration: BoxDecoration(
-                color: Colors.white.withOpacity(0.02),
+                color: Colors.white.withValues(alpha: 0.02),
                 borderRadius: BorderRadius.circular(16),
-                border: Border.all(color: Colors.white.withOpacity(0.05)),
+                border: Border.all(color: Colors.white.withValues(alpha: 0.05)),
               ),
-              child: Row(
+              child: const Row(
                 children: [
-                  const Icon(Icons.system_update_rounded, color: Colors.white70, size: 24),
-                  const SizedBox(width: 16),
+                  Icon(Icons.tune_rounded, color: Colors.white70, size: 24),
+                  SizedBox(width: 16),
                   Expanded(
                     child: Column(
                       crossAxisAlignment: CrossAxisAlignment.start,
                       children: [
-                        const Text('Check for Updates', style: TextStyle(fontWeight: FontWeight.bold, fontSize: 16, color: Colors.white)),
-                        const SizedBox(height: 4),
-                        Text(
-                          _isCheckingUpdates ? 'Checking...' : 'Stable and beta releases on GitHub',
-                          style: const TextStyle(fontSize: 13, color: Colors.white54),
-                        ),
+                        Text('More settings', style: TextStyle(fontWeight: FontWeight.bold, fontSize: 16, color: Colors.white)),
+                        SizedBox(height: 4),
+                        Text('Server management, exclusions, app options, logs, updates', style: TextStyle(fontSize: 13, color: Colors.white54)),
                       ],
                     ),
                   ),
-                  if (_isCheckingUpdates)
-                    const SizedBox(width: 16, height: 16, child: CircularProgressIndicator(strokeWidth: 2, color: Colors.white54))
-                  else
-                    const Icon(Icons.arrow_forward_ios_rounded, color: Colors.white54, size: 16),
+                  Icon(Icons.arrow_forward_ios_rounded, color: Colors.white54, size: 16),
                 ],
               ),
             ),
@@ -1119,13 +1040,4 @@ class _SettingsScreenState extends State<SettingsScreen> {
     );
   }
 
-  Future<void> _checkForUpdates() async {
-    if (_isCheckingUpdates) return;
-    setState(() { _isCheckingUpdates = true; });
-    try {
-      await updates.checkForUpdates(context, widget.prefs, manual: true);
-    } finally {
-      if (mounted) setState(() { _isCheckingUpdates = false; });
-    }
-  }
 }
