@@ -8,14 +8,6 @@ Older history is on the [Releases](https://github.com/ospab/ostp/releases) page 
 
 ## [Unreleased]
 
-The stable 0.4.6: everything from the betas below. In short:
-- TLS on port 443, directly or behind nginx, Apache or Caddy, with `ostp cert` for the domain and certificate.
-- Subscriptions in the CLI, the desktop app and Android.
-- Seamless roaming: a network change no longer drops the session.
-- Your own server from the desktop and Android apps: installed and managed over SSH, no Linux knowledge needed.
-- A filtering DNS resolver on the server (`ostp dns`) and a new web panel.
-- Wire-compatible with 0.4.5: old clients and servers keep working with new ones.
-
 ### Changed
 - First-run screen: first a choice (a link or your own server), then a page for just that.
 - Adding a server that already runs OSTP no longer updates it on its own: the app asks whether to add it as it is or to update it.
