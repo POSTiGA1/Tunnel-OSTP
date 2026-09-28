@@ -119,14 +119,18 @@ else
         # There is no floating "alpha"/"beta" GitHub Release - gha.ps1 cuts a
         # fresh versioned tag every time (v0.4.2-beta.4, v0.4.2-alpha.7, ...).
         # /releases/latest only ever returns the newest NON-prerelease
-        # (stable) tag, so it can't find these. Query the full releases list
-        # (newest first) and take the first tag_name containing "-$TARGET_BRANCH".
+        # (stable) tag, so it can't find these. Query the releases list and
+        # take the highest version among the tags containing "-$TARGET_BRANCH".
+        # Not the first one listed: the API does not order by version
+        # (it listed v0.4.6-beta.9 before v0.4.6-beta.10).
         echo "Fetching latest ${TARGET_BRANCH} release..."
-        LATEST_RELEASE=$(curl -s "https://api.github.com/repos/${GITHUB_REPO}/releases" \
+        CHANNEL_TAGS=$(curl -s "https://api.github.com/repos/${GITHUB_REPO}/releases?per_page=100" \
             | grep '"tag_name":' \
-            | grep -- "-${TARGET_BRANCH}" \
-            | head -1 \
+            | grep -- "-${TARGET_BRANCH}\." \
             | sed -E 's/.*"tag_name": *"([^"]+)".*/\1/')
+        LATEST_RELEASE=$(printf '%s\n' "$CHANNEL_TAGS" | sort -V 2>/dev/null | tail -1)
+        # sort without -V (a minimal system): the API's own order, as before.
+        [ -n "$LATEST_RELEASE" ] || LATEST_RELEASE=$(printf '%s\n' "$CHANNEL_TAGS" | head -1)
     else
         echo "Fetching latest stable release..."
         LATEST_RELEASE=$(curl -s "https://api.github.com/repos/${GITHUB_REPO}/releases/latest" | grep '"tag_name":' | sed -E 's/.*"([^"]+)".*/\1/')
