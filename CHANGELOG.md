@@ -8,6 +8,8 @@ Older history is on the [Releases](https://github.com/ospab/ostp/releases) page 
 
 ## [Unreleased]
 
+## [0.4.6-beta.9] - 2026-09-28
+
 ### Changed
 - Desktop and Android: the settings screen keeps profiles, subscriptions and the connection; exclusions, app options, obfuscation (desktop), logs (Android), server management and updates moved to "More settings".
 - First-run screen, desktop and Android: four choices — a link, a QR code, your own server, the project on GitHub. On the desktop the QR code is read from a picture: choose a file, drop it on the window or paste a screenshot with Ctrl+V.
