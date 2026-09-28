@@ -348,6 +348,19 @@ impl Bridge {
                 biased;
                 _ = shutdown.changed() => {
                     if *shutdown.borrow() {
+                        // Tell the server the session is over, so it frees it now
+                        // instead of holding it for its idle timeout (10 minutes):
+                        // otherwise every reconnect in that window counts as one
+                        // more live session of this user. Best effort, bounded so
+                        // a dead TCP path cannot hold up the stop.
+                        if let Some(sessions) = sessions_opt.as_mut() {
+                            for session in sessions.iter_mut() {
+                                if let Ok(ProtocolAction::SendDatagram(frame)) = session.machine.on_event(OstpEvent::Close) {
+                                    let send = send_datagram(&session.socket, &frame, self.transport_mode == "udp");
+                                    let _ = tokio::time::timeout(Duration::from_millis(300), send).await;
+                                }
+                            }
+                        }
                         self.running = false;
                         self.metrics.connection_state.store(0, Ordering::Relaxed);
                         #[allow(unused_assignments)]

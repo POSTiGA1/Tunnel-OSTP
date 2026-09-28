@@ -388,6 +388,7 @@ tr:last-child td { border-bottom: 0; }
           <div class="row"><input class="input" id="dns-log-q" style="max-width:220px" data-tp="dns_filter" placeholder="domain or client" /><button class="btn danger sm" id="btn-dns-clear" data-t="clear">Clear</button></div>
         </div>
         <div class="table-wrap"><table><thead><tr><th data-t="dns_time">Time</th><th data-t="dns_client">Client</th><th data-t="dns_domain">Domain</th><th data-t="dns_result">Result</th><th></th></tr></thead><tbody id="dns-log"></tbody></table></div>
+        <div class="row" id="dns-log-more-row" style="justify-content:center;margin-top:10px;display:none"><button class="btn sm" id="btn-dns-more" data-t="dns_more">Show more</button></div>
       </div>
       <div class="grid two" style="margin-top:14px">
         <div class="card">
@@ -538,7 +539,7 @@ const I18N = {
     dns_sub: 'Filtering resolver for connected clients: ads and trackers blocked, your own names answered. Not reachable from the internet.',
     dns_update: 'Update lists', dns_queries: 'Queries', dns_blocked: 'Blocked', dns_rules: 'Rules', dns_upstream: 'Upstream',
     dns_top_blocked: 'Most blocked', dns_top_domains: 'Most queried', dns_test: 'Check a domain', dns_check: 'Check',
-    dns_log: 'Query log', dns_filter: 'domain or client', dns_time: 'Time', dns_client: 'Client', dns_domain: 'Domain', dns_result: 'Result',
+    dns_log: 'Query log', dns_more: 'Show more', dns_filter: 'domain or client', dns_time: 'Time', dns_client: 'Client', dns_domain: 'Domain', dns_result: 'Result',
     dns_upstreams: 'Upstream resolvers', dns_upstreams_help: 'One per line: https://…/dns-query, tls://host, tcp://ip, udp://ip or an IP.',
     dns_mode: 'Mode', dns_fallback: 'In order', dns_parallel: 'Parallel, fastest wins', dns_options: 'Options',
     dns_safe: 'Safe search (Google, YouTube, Bing, DuckDuckGo, Yandex)', dns_doh: "Stop browsers' own DNS over HTTPS/TLS",
@@ -592,7 +593,7 @@ const I18N = {
     dns_sub: 'Фильтрующий резолвер для подключённых клиентов: блокирует рекламу и трекеры, отвечает вашими именами. Из интернета недоступен.',
     dns_update: 'Обновить списки', dns_queries: 'Запросов', dns_blocked: 'Заблокировано', dns_rules: 'Правил', dns_upstream: 'Вышестоящий',
     dns_top_blocked: 'Чаще всего блокируется', dns_top_domains: 'Чаще всего запрашивается', dns_test: 'Проверить домен', dns_check: 'Проверить',
-    dns_log: 'Журнал запросов', dns_filter: 'домен или клиент', dns_time: 'Время', dns_client: 'Клиент', dns_domain: 'Домен', dns_result: 'Итог',
+    dns_log: 'Журнал запросов', dns_more: 'Показать ещё', dns_filter: 'домен или клиент', dns_time: 'Время', dns_client: 'Клиент', dns_domain: 'Домен', dns_result: 'Итог',
     dns_upstreams: 'Вышестоящие серверы', dns_upstreams_help: 'По одному в строке: https://…/dns-query, tls://хост, tcp://ip, udp://ip или IP.',
     dns_mode: 'Режим', dns_fallback: 'По очереди', dns_parallel: 'Параллельно, кто быстрее', dns_options: 'Настройки',
     dns_safe: 'Безопасный поиск (Google, YouTube, Bing, DuckDuckGo, Яндекс)', dns_doh: 'Не давать браузерам свой DNS over HTTPS/TLS',
@@ -1039,8 +1040,14 @@ function renderDnsStats(st) {
 }
 let dnsListStats = [];
 
+// The query log shows the newest few; "Show more" asks the server for more.
+const DNS_LOG_STEP = 25;
+let dnsLogLimit = DNS_LOG_STEP;
+
 function renderDnsLog(entries) {
   const body = $('dns-log');
+  // A full page means the server may have older entries.
+  $('dns-log-more-row').style.display = entries.length >= dnsLogLimit && dnsLogLimit < 2000 ? '' : 'none';
   if (!entries.length) { body.innerHTML = `<tr><td colspan="5" class="empty">${esc(t('dns_empty'))}</td></tr>`; return; }
   body.innerHTML = entries.map(e => {
     const time = new Date(e.time).toLocaleTimeString();
@@ -1102,7 +1109,7 @@ async function saveDns(note = true) {
 
 async function loadDns(withSettings) {
   try {
-    const [st, log] = await Promise.all([api('dns/stats'), api('dns/log?limit=150&q=' + encodeURIComponent($('dns-log-q').value.trim()))]);
+    const [st, log] = await Promise.all([api('dns/stats'), api('dns/log?limit=' + dnsLogLimit + '&q=' + encodeURIComponent($('dns-log-q').value.trim()))]);
     renderDnsStats(st);
     renderDnsLog(log);
     if (withSettings) {
@@ -1131,7 +1138,8 @@ $('btn-dns-test').addEventListener('click', async () => {
   } catch (err) { $('dns-test-result').textContent = t('err', { err: err.message }); }
 });
 $('dns-test-name').addEventListener('keydown', e => { if (e.key === 'Enter') $('btn-dns-test').click(); });
-$('dns-log-q').addEventListener('input', () => loadDns(false));
+$('dns-log-q').addEventListener('input', () => { dnsLogLimit = DNS_LOG_STEP; loadDns(false); });
+$('btn-dns-more').addEventListener('click', () => { dnsLogLimit = Math.min(2000, dnsLogLimit + 50); loadDns(false); });
 $('btn-dns-clear').addEventListener('click', async () => { try { await api('dns/log', { method: 'DELETE' }); loadDns(false); } catch (err) { toast(t('err', { err: err.message }), true); } });
 $('dns-log').addEventListener('click', e => {
   const b = e.target.closest('[data-dns-act]'); if (!b || !dnsSettings) return;

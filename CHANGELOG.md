@@ -9,11 +9,13 @@ Older history is on the [Releases](https://github.com/ospab/ostp/releases) page 
 ## [Unreleased]
 
 ### Changed
+- Web panel: the DNS query log shows the newest 25 entries instead of 150; "Show more" loads 50 more at a time.
 - First-run screen: first a choice (a link or your own server), then a page for just that.
 - Adding a server that already runs OSTP no longer updates it on its own: the app asks whether to add it as it is or to update it.
 - Adding a user to the app from Server management asks how: as a subscription (follows the server's changes) or as fixed profiles. Right after a user is created the app offers the same, with "Not now" for users meant for someone else.
 
 ### Fixed
+- Web panel and API: a user's "Sessions" counted every connection since the server started (69 for one person) and a user counted as online forever after the first one. It is now the sessions alive right now. The client tells the server when it disconnects, so the server frees the session at once instead of after 10 idle minutes; with an older client the session still closes on that timeout.
 - Desktop app: Server management failed with "Command servers_list not allowed by ACL"; the server commands were missing from the app's permissions.
 - The same SSH login added twice (a retried install, the first-run screen after "Add server") no longer shows up twice in the servers list; a changed host key is refused instead of being saved over the old one.
 - A subscription added for a server whose profiles were already in the app no longer leaves duplicates: the hand-added profiles it covers are replaced by the subscription's.

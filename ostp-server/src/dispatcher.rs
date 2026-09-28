@@ -1,6 +1,6 @@
 use anyhow::Result;
 use bytes::Bytes;
-use ostp_core::{OstpEvent, ProtocolAction, ProtocolConfig, ProtocolMachine};
+use ostp_core::{OstpEvent, OstpState, ProtocolAction, ProtocolConfig, ProtocolMachine};
 use std::collections::HashMap;
 use std::net::SocketAddr;
 use std::sync::{Arc, RwLock};
@@ -31,6 +31,8 @@ pub enum DispatchOutcome {
 pub struct UserStats {
     pub bytes_up: AtomicU64,
     pub bytes_down: AtomicU64,
+    /// Sessions of this user alive right now (not a running total): up on a
+    /// handshake, down when the session is dropped.
     pub connections: AtomicU64,
     pub limit_bytes: Option<u64>,
     pub created_at: std::time::SystemTime,
@@ -543,9 +545,7 @@ impl Dispatcher {
 
                             machine.set_session_keys(candidate_session_id, secrets.obfuscation_key);
 
-                            // Track per-user connection count
                             let user_stats = self.get_or_create_user_stats(&candidate_key);
-                            user_stats.connections.fetch_add(1, Ordering::Relaxed);
 
                             // Check traffic limit before accepting
                             if user_stats.is_over_limit() {
@@ -561,6 +561,7 @@ impl Dispatcher {
                                 access_key: candidate_key.clone(),
                             });
                             self.addr_to_session.insert(peer, candidate_session_id);
+                            user_stats.connections.fetch_add(1, Ordering::Relaxed);
 
                             tracing::info!("New session authenticated: sid={} peer={} (active_sessions={}, replay_cache={})",
                                 candidate_session_id, peer, self.peer_machines.len(), self.replay_cache.len()
@@ -624,7 +625,8 @@ impl Dispatcher {
         for (&sid, peer_state) in &self.peer_machines {
             let key_valid = self.access_keys.read().unwrap_or_else(|e| e.into_inner()).contains_key(&peer_state.access_key);
             let user_stats = self.get_or_create_user_stats(&peer_state.access_key);
-            if now.duration_since(peer_state.last_seen) > timeout_dur || !key_valid || user_stats.is_over_limit() {
+            let closed = peer_state.machine.state() == OstpState::Closed;
+            if closed || now.duration_since(peer_state.last_seen) > timeout_dur || !key_valid || user_stats.is_over_limit() {
                 expired.push(sid);
             }
         }
@@ -635,8 +637,10 @@ impl Dispatcher {
             let reason = if let Some(ps) = peer_state_opt {
                 let key_valid = self.access_keys.read().unwrap_or_else(|e| e.into_inner()).contains_key(&ps.access_key);
                 let user_stats = self.get_or_create_user_stats(&ps.access_key);
-                if now.duration_since(ps.last_seen) > timeout_dur {
-                    "inactive >5min"
+                if ps.machine.state() == OstpState::Closed {
+                    "closed by the client"
+                } else if now.duration_since(ps.last_seen) > timeout_dur {
+                    "inactive >10min"
                 } else if !key_valid {
                     "key deleted"
                 } else if user_stats.is_over_limit() {
@@ -683,6 +687,8 @@ impl Dispatcher {
     pub fn drop_session(&mut self, session_id: u32) {
         if let Some(state) = self.peer_machines.remove(&session_id) {
             self.addr_to_session.remove(&state.last_addr);
+            let stats = self.get_or_create_user_stats(&state.access_key);
+            let _ = stats.connections.fetch_update(Ordering::Relaxed, Ordering::Relaxed, |n| Some(n.saturating_sub(1)));
         }
     }
 }
@@ -879,5 +885,27 @@ mod roaming_tests {
         assert_eq!(dispatcher.peer_machines[&SID].last_addr, roamed);
         assert_eq!(dispatcher.addr_to_session.get(&roamed), Some(&SID));
         assert_eq!(dispatcher.addr_to_session.get(&home), None);
+    }
+
+    fn live_sessions(dispatcher: &Dispatcher) -> u64 {
+        dispatcher.user_stats.read().unwrap()[KEY].connections.load(Ordering::Relaxed)
+    }
+
+    #[test]
+    fn sessions_count_live_ones_and_a_client_close_frees_its_session() {
+        let home = addr("198.51.100.1:40000");
+        let (mut dispatcher, mut client) = established(home);
+        assert_eq!(live_sessions(&dispatcher), 1);
+
+        let close = first_datagram(client.on_event(OstpEvent::Close).unwrap());
+        dispatcher.on_datagram(home, close).unwrap();
+        let (_, dropped) = dispatcher.on_tick();
+        assert_eq!(dropped, vec![SID], "a closed session is freed on the next tick");
+        assert_eq!(live_sessions(&dispatcher), 0);
+        assert_eq!(dispatcher.active_sessions(), 0);
+
+        // Dropping again (or a session that is already gone) never goes below zero.
+        dispatcher.drop_session(SID);
+        assert_eq!(live_sessions(&dispatcher), 0);
     }
 }
