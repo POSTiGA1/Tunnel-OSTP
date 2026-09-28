@@ -51,6 +51,7 @@ Run by CI or by the developer before the manual run.
 | S-09a | `install.sh -y -b beta` on a clean VPS as root | installs without questions, the last line is JSON with one user and its links, the service is active, the port is open in ufw/firewalld if one is on | P1 |
 | S-09b | `ostp manage status`, `users`, `user-add phone`, `user-rename 2 tablet`, `user-remove tablet`, `logs -n 20` | each prints one JSON object; the added user connects within ~5 s without a restart; removing the last user is refused with `{"error": ...}` | P1 |
 | S-09c | `.ostp_stats.json` next to the config after a client moved traffic for a minute | exists, mode 600, the user's bytes grow; `ostp manage users` shows them | P2 |
+| S-09d | Move traffic and make DNS queries, then `systemctl restart ostp` (and an update) | the panel shows the same traffic per user and the same DNS counters and query log as before; a user over the limit stays over it; "Clear" in the DNS log survives a restart as empty | P1 |
 
 ### 2.2 Carriers
 

@@ -150,6 +150,18 @@ pub async fn run_server(params: ServerParams) -> Result<()> {
 
     let dispatcher = Dispatcher::new(protocol_config, shared_keys.clone());
 
+    // Traffic per user carries over restarts and updates: without this every
+    // restart zeroed the counters, and with them the traffic limits.
+    let stats_file = config_path.as_ref().and_then(|p| p.parent()).map(|d| d.join(STATS_FILE));
+    let process_started = std::time::SystemTime::now();
+    if let Some(path) = &stats_file {
+        let restored = restore_user_traffic(path, &dispatcher.user_stats_ref(), &shared_keys);
+        if restored > 0 {
+            tracing::info!("traffic of {restored} user(s) restored from {}", path.display());
+        }
+    }
+    let traffic = dispatcher.user_stats_ref();
+
     // Background config hot-reloader for access keys
     let shared_keys_clone = shared_keys.clone();
     let user_stats_clone = dispatcher.user_stats_ref();
@@ -452,9 +464,8 @@ pub async fn run_server(params: ServerParams) -> Result<()> {
     let key_count = shared_keys.read().unwrap_or_else(|e| e.into_inner()).len();
     tracing::info!(listeners = bind_addrs.len(), keys = key_count, "server started");
     tracing::info!("ARQ config: max_reorder=16384, reorder_buf=8192, sent_history=32768, rto=100ms");
-    let stats_file = config_path.as_ref().and_then(|p| p.parent()).map(|d| d.join(STATS_FILE));
     tokio::select! {
-        res = run_server_loop(sniff, sockets, dispatcher, ui_cmd_rx, ui_event_tx, shared_keys, router, stats_file) => {
+        res = run_server_loop(sniff, sockets, dispatcher, ui_cmd_rx, ui_event_tx, shared_keys, router, stats_file.clone()) => {
             if let Err(e) = res {
                 tracing::error!("Server error: {e}");
             }
@@ -463,6 +474,16 @@ pub async fn run_server(params: ServerParams) -> Result<()> {
             tracing::info!("Shutdown signal received");
         }
     }
+
+    // A restart or an update stops the service here: keep what was counted
+    // since the last periodic write (up to STATS_INTERVAL of traffic, and the
+    // DNS counters and query log).
+    if let Some(path) = &stats_file {
+        if let Err(e) = write_stats_file(path, &final_stats(&traffic, process_started)) {
+            tracing::warn!("could not save traffic to {}: {e}", path.display());
+        }
+    }
+    dns_server.persist();
 
     Ok(())
 }
@@ -776,9 +797,10 @@ async fn run_server_loop(
     Ok(())
 }
 
-/// Traffic per user, written next to the config every `STATS_INTERVAL` so
-/// that `ostp manage` (what the desktop app runs over SSH) can show it without
-/// the management API. Counters start from zero when the service starts.
+/// Traffic per user, written next to the config every `STATS_INTERVAL` and on
+/// a clean stop, so that `ostp manage` (what the desktop app runs over SSH)
+/// can show it without the management API. Read back on start: the counters
+/// (and the traffic limits that depend on them) survive restarts and updates.
 pub const STATS_FILE: &str = ".ostp_stats.json";
 const STATS_INTERVAL: Duration = Duration::from_secs(30);
 
@@ -788,6 +810,60 @@ pub struct StatsFile {
     pub started_at: u64,
     pub sessions: usize,
     pub users: Vec<dispatcher::UserStatsSnapshot>,
+}
+
+/// Seeds the per-user counters from the stats file of the previous run. Only
+/// users still in the config are restored; live sessions start from zero.
+/// Returns how many users got their traffic back.
+fn restore_user_traffic(
+    path: &std::path::Path,
+    stats: &Arc<RwLock<HashMap<String, Arc<dispatcher::UserStats>>>>,
+    keys: &Arc<RwLock<HashMap<String, api::UserMeta>>>,
+) -> usize {
+    let Ok(body) = std::fs::read(path) else { return 0 };
+    let saved: StatsFile = match serde_json::from_slice(&body) {
+        Ok(s) => s,
+        Err(e) => {
+            tracing::warn!("{} is unreadable, traffic starts from zero: {e}", path.display());
+            return 0;
+        }
+    };
+    let keys = keys.read().unwrap_or_else(|e| e.into_inner());
+    let mut stats = stats.write().unwrap_or_else(|e| e.into_inner());
+    let mut restored = 0;
+    for u in saved.users {
+        let Some(meta) = keys.get(&u.access_key) else { continue };
+        let entry = dispatcher::UserStats::new(meta.limit_bytes);
+        entry.bytes_up.store(u.bytes_up, std::sync::atomic::Ordering::Relaxed);
+        entry.bytes_down.store(u.bytes_down, std::sync::atomic::Ordering::Relaxed);
+        stats.insert(u.access_key, Arc::new(entry));
+        restored += 1;
+    }
+    restored
+}
+
+/// The stats file as the service stops: no sessions are left.
+fn final_stats(stats: &Arc<RwLock<HashMap<String, Arc<dispatcher::UserStats>>>>, started: std::time::SystemTime) -> StatsFile {
+    use std::sync::atomic::Ordering;
+    let stats = stats.read().unwrap_or_else(|e| e.into_inner());
+    StatsFile {
+        written_at: unix_secs(std::time::SystemTime::now()),
+        started_at: unix_secs(started),
+        sessions: 0,
+        users: stats
+            .iter()
+            .map(|(key, us)| dispatcher::UserStatsSnapshot {
+                access_key: key.clone(),
+                name: None,
+                bytes_up: us.bytes_up.load(Ordering::Relaxed),
+                bytes_down: us.bytes_down.load(Ordering::Relaxed),
+                connections: 0,
+                limit_bytes: us.limit_bytes,
+                online: false,
+                last_seen: None,
+            })
+            .collect(),
+    }
 }
 
 fn unix_secs(t: std::time::SystemTime) -> u64 {
@@ -966,4 +1042,59 @@ async fn handle_tick(
         }
     }
     Ok(())
+}
+
+#[cfg(test)]
+mod traffic_tests {
+    use super::*;
+    use std::sync::atomic::Ordering;
+
+    fn meta(limit: Option<u64>) -> api::UserMeta {
+        api::UserMeta { name: None, limit_bytes: limit }
+    }
+
+    #[test]
+    fn traffic_written_on_stop_comes_back_on_start() {
+        let path = std::env::temp_dir().join(format!("ostp-stats-{}.json", rand::random::<u64>()));
+        let stats: Arc<RwLock<HashMap<String, Arc<dispatcher::UserStats>>>> = Arc::new(RwLock::new(HashMap::new()));
+        let alice = dispatcher::UserStats::new(Some(5000));
+        alice.bytes_up.store(100, Ordering::Relaxed);
+        alice.bytes_down.store(4000, Ordering::Relaxed);
+        alice.connections.store(2, Ordering::Relaxed);
+        stats.write().unwrap().insert("key-a".into(), Arc::new(alice));
+        let gone = dispatcher::UserStats::new(None);
+        gone.bytes_down.store(7, Ordering::Relaxed);
+        stats.write().unwrap().insert("key-gone".into(), Arc::new(gone));
+        write_stats_file(&path, &final_stats(&stats, std::time::SystemTime::now())).unwrap();
+
+        // The next start: key-gone was removed from the config meanwhile,
+        // and key-a's limit changed.
+        let keys = Arc::new(RwLock::new(HashMap::from([
+            ("key-a".to_string(), meta(Some(4096))),
+            ("key-b".to_string(), meta(None)),
+        ])));
+        let fresh: Arc<RwLock<HashMap<String, Arc<dispatcher::UserStats>>>> = Arc::new(RwLock::new(HashMap::new()));
+        assert_eq!(restore_user_traffic(&path, &fresh, &keys), 1);
+        let fresh = fresh.read().unwrap();
+        let a = &fresh["key-a"];
+        assert_eq!((a.bytes_up.load(Ordering::Relaxed), a.bytes_down.load(Ordering::Relaxed)), (100, 4000));
+        assert_eq!(a.connections.load(Ordering::Relaxed), 0, "no session survives a restart");
+        assert_eq!(a.limit_bytes, Some(4096), "the limit comes from the config, not the old file");
+        assert!(a.is_over_limit(), "a restart no longer resets the traffic limit");
+        assert!(!fresh.contains_key("key-gone"));
+        std::fs::remove_file(path).unwrap();
+    }
+
+    #[test]
+    fn a_missing_or_broken_file_starts_from_zero() {
+        let keys = Arc::new(RwLock::new(HashMap::from([("k".to_string(), meta(None))])));
+        let stats = Arc::new(RwLock::new(HashMap::new()));
+        let missing = std::env::temp_dir().join(format!("ostp-stats-missing-{}.json", rand::random::<u64>()));
+        assert_eq!(restore_user_traffic(&missing, &stats, &keys), 0);
+        let broken = std::env::temp_dir().join(format!("ostp-stats-broken-{}.json", rand::random::<u64>()));
+        std::fs::write(&broken, b"{not json").unwrap();
+        assert_eq!(restore_user_traffic(&broken, &stats, &keys), 0);
+        assert!(stats.read().unwrap().is_empty());
+        std::fs::remove_file(broken).unwrap();
+    }
 }

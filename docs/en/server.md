@@ -78,7 +78,7 @@ Open the panel on the server at `http://127.0.0.1:9090/<webpath>/`, from elsewhe
 
 ## Traffic statistics and `ostp manage`
 
-Every 30 seconds the server writes per-user traffic to `.ostp_stats.json` next to its config (readable by root only; written to a temporary file and renamed). The counters start from zero when the service starts.
+Every 30 seconds the server writes per-user traffic to `.ostp_stats.json` next to its config (readable by root only; written to a temporary file and renamed). It is also written on a clean stop and read back on start, so traffic, and the traffic limits that depend on it, carry over restarts and updates; users no longer in the config are dropped. The DNS counters and query log are kept the same way in `.ostp_dns_activity.json` (root only, written every minute and on stop; "Clear" in the panel empties it).
 
 `ostp manage` (hidden from `--help`) prints the server's state and applies everyday changes as one JSON object, with `{"error": ...}` and exit code 1 on failure. Nothing asks questions, so it runs without a terminal: this is what the desktop and Android apps run over SSH.
 

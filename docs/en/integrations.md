@@ -26,7 +26,7 @@ Both apps can install OSTP on a VPS and manage it afterwards, for people who hav
 
 **Server management** (*Settings → Server management*), per server:
 - *Status*: service state, version, running time, connected sessions, users, OS, load, memory, disk; restart and update OSTP.
-- *Users*: add, rename, revoke; traffic since the service started and who is online; add a user's links to this app; share as a QR code.
+- *Users*: add, rename, revoke; traffic (kept across restarts and updates) and who is online; add a user's links to this app; share as a QR code.
 - *Connection*: UDP/TCP port, TLS on 443 with the domain and certificate expiry, getting a certificate (`ostp cert issue`), subscriptions on or off.
 - *Management*: the web panel (turn on with a sign-in, open, turn off), the server log, the SSH host key, rename, reboot, uninstall OSTP, forget the server.
 

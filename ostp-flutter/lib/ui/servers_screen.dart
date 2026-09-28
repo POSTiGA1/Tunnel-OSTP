@@ -355,7 +355,7 @@ class _ServerScreenState extends State<ServerScreen> {
       ]),
       const SizedBox(height: 14),
       for (final u in users) _userCard(u),
-      _Note('Traffic is counted since the service last started'
+      _Note('Traffic is kept across restarts and updates'
           '${r['stats_at'] != null ? ', as of ${TimeOfDay.fromDateTime(DateTime.fromMillisecondsSinceEpoch(((r['stats_at'] as num) * 1000).toInt())).format(context)}' : ''}.'),
     ]);
   }

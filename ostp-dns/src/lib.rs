@@ -18,12 +18,13 @@ pub use filter::{Match, Verdict};
 pub use lists::UpdateResult;
 pub use settings::{BlockingMode, DnsSettings, FilterList, Rewrite, UpstreamMode, PRESET_LISTS};
 
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 use simple_dns::rdata::{RData, CNAME};
 use simple_dns::{Name, Packet, PacketFlag, ResourceRecord, CLASS, QTYPE, RCODE};
 use std::collections::{HashMap, VecDeque};
 use std::net::{IpAddr, Ipv4Addr, Ipv6Addr};
 use std::path::PathBuf;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex, RwLock};
 use std::time::{Duration, Instant, SystemTime};
 
@@ -37,7 +38,7 @@ enum Answer {
 }
 
 /// What happened to one query.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum Outcome {
     Allowed,
@@ -51,7 +52,7 @@ pub enum Outcome {
     Failed,
 }
 
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct LogEntry {
     /// Unix time, milliseconds.
     pub time: u64,
@@ -68,7 +69,7 @@ pub struct LogEntry {
     pub elapsed_ms: u64,
 }
 
-#[derive(Default)]
+#[derive(Default, Serialize, Deserialize)]
 struct Counters {
     total: u64,
     blocked: u64,
@@ -83,6 +84,23 @@ struct Counters {
 }
 
 const TOP_CAP: usize = 5000;
+
+/// The counters and the query log, kept next to the config so a restart or
+/// an update does not wipe them. Holds clients' addresses and the names they
+/// looked up, so it is written readable by root only; "Clear" empties it.
+const ACTIVITY_FILE: &str = ".ostp_dns_activity.json";
+
+#[derive(Serialize, Deserialize)]
+struct Activity {
+    /// When counting started (Unix seconds): the first start, or the last clear.
+    since: u64,
+    counters: Counters,
+    log: VecDeque<LogEntry>,
+}
+
+fn unix_now() -> u64 {
+    SystemTime::now().duration_since(SystemTime::UNIX_EPOCH).map(|d| d.as_secs()).unwrap_or(0)
+}
 
 fn bump(map: &mut HashMap<String, u64>, key: &str) {
     if let Some(v) = map.get_mut(key) {
@@ -145,7 +163,10 @@ pub struct Dns {
     log: Mutex<VecDeque<LogEntry>>,
     data_dir: Option<PathBuf>,
     proxy: RwLock<Option<String>>,
-    started: Instant,
+    /// When counting started, Unix seconds (restored from the activity file).
+    since: Mutex<u64>,
+    /// Something changed since the activity file was last written.
+    dirty: AtomicBool,
 }
 
 fn qtype_code(q: QTYPE) -> u16 {
@@ -264,23 +285,43 @@ impl Dns {
                 Upstreams::new(&[], settings.upstream_mode, None).expect("empty upstream list")
             });
         let filter = lists::build_filter(&settings, data_dir.as_deref());
+        let log_size = settings.query_log_size;
+        let activity = data_dir.as_deref().and_then(|d| read_activity(&d.join(ACTIVITY_FILE)));
+        let (since, counters, mut log) = match activity {
+            Some(a) => (a.since, a.counters, a.log),
+            None => (unix_now(), Counters::default(), VecDeque::new()),
+        };
+        while log.len() > log_size {
+            log.pop_front();
+        }
         Arc::new(Self {
             rewrites: RwLock::new(Arc::new(compile_rewrites(&settings))),
             filter: RwLock::new(Arc::new(filter)),
             upstreams: RwLock::new(Arc::new(upstreams)),
             settings: RwLock::new(Arc::new(settings)),
             cache: Mutex::new(HashMap::new()),
-            counters: Mutex::new(Counters::default()),
-            log: Mutex::new(VecDeque::new()),
+            counters: Mutex::new(counters),
+            log: Mutex::new(log),
             data_dir,
             proxy: RwLock::new(None),
-            started: Instant::now(),
+            since: Mutex::new(since),
+            dirty: AtomicBool::new(false),
         })
     }
 
     /// Keeps the lists fresh: downloads missing or outdated ones now and
     /// then every half hour checks again.
     pub fn start(self: &Arc<Self>) {
+        // The activity file, once a minute when something changed. A clean
+        // stop writes it too (`persist`), so at most this much is lost on a crash.
+        let me = self.clone();
+        tokio::spawn(async move {
+            loop {
+                tokio::time::sleep(Duration::from_secs(60)).await;
+                let m = me.clone();
+                let _ = tokio::task::spawn_blocking(move || m.persist()).await;
+            }
+        });
         let me = self.clone();
         tokio::spawn(async move {
             loop {
@@ -394,6 +435,7 @@ impl Dns {
             bump(&mut c.domains, &entry.name);
             bump(&mut c.clients, &entry.client);
         }
+        self.dirty.store(true, Ordering::Relaxed);
         if size > 0 {
             let mut log = self.log.lock().unwrap_or_else(|e| e.into_inner());
             while log.len() >= size {
@@ -408,7 +450,7 @@ impl Dns {
         let f = self.filter.read().unwrap_or_else(|e| e.into_inner()).clone();
         Stats {
             enabled: self.enabled(),
-            since_seconds: self.started.elapsed().as_secs(),
+            since_seconds: unix_now().saturating_sub(*self.since.lock().unwrap_or_else(|e| e.into_inner())),
             total: c.total,
             blocked: c.blocked,
             rewritten: c.rewritten,
@@ -438,6 +480,36 @@ impl Dns {
     pub fn clear_log(&self) {
         self.log.lock().unwrap_or_else(|e| e.into_inner()).clear();
         *self.counters.lock().unwrap_or_else(|e| e.into_inner()) = Counters::default();
+        *self.since.lock().unwrap_or_else(|e| e.into_inner()) = unix_now();
+        // Written now, not in a minute: a cleared log must not linger on disk.
+        self.dirty.store(true, Ordering::Relaxed);
+        self.persist();
+    }
+
+    /// Writes the counters and the query log to the activity file when they
+    /// changed. Without a data directory (tests, no config file) it does nothing.
+    pub fn persist(&self) {
+        let Some(dir) = &self.data_dir else { return };
+        if !self.dirty.swap(false, Ordering::Relaxed) {
+            return;
+        }
+        let body = {
+            let counters = self.counters.lock().unwrap_or_else(|e| e.into_inner());
+            let log = self.log.lock().unwrap_or_else(|e| e.into_inner());
+            #[derive(Serialize)]
+            struct ActivityRef<'a> {
+                since: u64,
+                counters: &'a Counters,
+                log: &'a VecDeque<LogEntry>,
+            }
+            let since = *self.since.lock().unwrap_or_else(|e| e.into_inner());
+            serde_json::to_vec(&ActivityRef { since, counters: &counters, log: &log })
+        };
+        let result = body.map_err(std::io::Error::other).and_then(|b| write_private(&dir.join(ACTIVITY_FILE), &b));
+        if let Err(e) = result {
+            self.dirty.store(true, Ordering::Relaxed);
+            tracing::warn!("DNS: could not save the query log: {e}");
+        }
     }
 
     fn rewrite_for(&self, name: &str) -> Vec<Answer> {
@@ -681,6 +753,28 @@ impl Dns {
     }
 }
 
+fn read_activity(path: &std::path::Path) -> Option<Activity> {
+    let body = std::fs::read(path).ok()?;
+    match serde_json::from_slice(&body) {
+        Ok(a) => Some(a),
+        Err(e) => {
+            tracing::warn!("DNS: {} is unreadable, starting a new log: {e}", path.display());
+            None
+        }
+    }
+}
+
+/// Written to a temporary file and renamed, readable by root only.
+fn write_private(path: &std::path::Path, body: &[u8]) -> std::io::Result<()> {
+    let tmp = path.with_extension("json.tmp");
+    let mut opts = std::fs::OpenOptions::new();
+    opts.write(true).create(true).truncate(true);
+    #[cfg(unix)]
+    std::os::unix::fs::OpenOptionsExt::mode(&mut opts, 0o600);
+    std::io::Write::write_all(&mut opts.open(&tmp)?, body)?;
+    std::fs::rename(&tmp, path)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -828,6 +922,53 @@ mod tests {
         s.block_doh_bypass = false;
         let dns = Dns::new(s, None);
         assert!(!dns.is_dns_bypass("8.8.8.8:443"));
+    }
+
+    fn entry(name: &str, outcome: Outcome) -> LogEntry {
+        LogEntry {
+            time: 1,
+            client: "10.1.0.2".into(),
+            name: name.into(),
+            qtype: "A".into(),
+            outcome,
+            rule: None,
+            source: None,
+            upstream: None,
+            elapsed_ms: 3,
+        }
+    }
+
+    #[test]
+    fn counters_and_log_survive_a_restart_and_clear_empties_the_file() {
+        let dir = std::env::temp_dir().join(format!("ostp-dns-activity-{}", rand::random::<u64>()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let dns = Dns::new(DnsSettings::default(), Some(dir.clone()));
+        dns.record(entry("a.test", Outcome::Allowed), Some(10));
+        dns.record(entry("ads.test", Outcome::Blocked), None);
+        dns.persist();
+
+        // A new process on the same config directory.
+        let again = Dns::new(DnsSettings::default(), Some(dir.clone()));
+        let st = again.stats();
+        assert_eq!((st.total, st.blocked), (2, 1));
+        assert_eq!(st.top_blocked, vec![("ads.test".to_string(), 1)]);
+        let names: Vec<_> = again.query_log(10, None).into_iter().map(|e| e.name).collect();
+        assert_eq!(names, ["ads.test", "a.test"]);
+
+        again.clear_log();
+        let after = Dns::new(DnsSettings::default(), Some(dir.clone()));
+        assert_eq!(after.stats().total, 0);
+        assert!(after.query_log(10, None).is_empty(), "a cleared log does not come back");
+
+        // A smaller log size on restart keeps only the newest entries.
+        for i in 0..5 {
+            after.record(entry(&format!("n{i}.test"), Outcome::Allowed), None);
+        }
+        after.persist();
+        let small = Dns::new(DnsSettings { query_log_size: 2, ..Default::default() }, Some(dir.clone()));
+        let names: Vec<_> = small.query_log(10, None).into_iter().map(|e| e.name).collect();
+        assert_eq!(names, ["n4.test", "n3.test"]);
+        std::fs::remove_dir_all(dir).unwrap();
     }
 
     #[test]

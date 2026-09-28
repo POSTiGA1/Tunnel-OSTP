@@ -463,7 +463,7 @@ async function renderUsers(body, id) {
       <button class="btn primary" id="btn-user-add">Add</button>
     </div>
     <div id="users-list"></div>
-    <p class="card-note">Traffic is counted since the service last started${r.stats_at ? `, as of ${new Date(r.stats_at * 1000).toLocaleTimeString()}` : ''}.</p>`;
+    <p class="card-note">Traffic is kept across restarts and updates${r.stats_at ? `, as of ${new Date(r.stats_at * 1000).toLocaleTimeString()}` : ''}.</p>`;
   const list = $('users-list');
   users.forEach(u => {
     const card = document.createElement('div');
