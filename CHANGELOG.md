@@ -8,6 +8,8 @@ Older history is on the [Releases](https://github.com/ospab/ostp/releases) page 
 
 ## [Unreleased]
 
+## [0.4.6] - 2026-09-29
+
 The stable 0.4.6: everything from the betas below. In short:
 - TLS on port 443, directly or behind nginx, Apache or Caddy, with `ostp cert` for the domain and certificate.
 - Subscriptions in the CLI, the desktop app and Android.
